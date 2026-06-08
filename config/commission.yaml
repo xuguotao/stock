@@ -1,0 +1,24 @@
+# A股费率结构 (2025年)
+# 来源: 券商费率文档、上交所/深交所
+
+fees:
+  stamp_duty:
+    rate: 0.0005          # 0.05% (2023年8月减半征收)
+    side: sell            # 仅卖出收取
+    description: "印花税"
+
+  commission:
+    rate: 0.00025         # 0.025% (网上开户典型费率)
+    min: 5.0              # 每笔最低5元
+    side: both
+    description: "券商佣金"
+
+  transfer_fee:
+    rate: 0.00001         # 0.001%
+    side: both
+    description: "过户费"
+
+  securities_mgmt_fee:
+    rate: 0.0000487       # 0.00487%
+    side: both
+    description: "证管费"

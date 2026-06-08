@@ -1,0 +1,21 @@
+stock_symbol: 601899.SH
+output_dir: reports/zijin_monitor
+commodity_csv:
+  gold: data/monitoring/gold.csv
+  copper: data/monitoring/copper.csv
+production:
+  elapsed_ratio: 0.25
+  items:
+    - name: mined gold
+      annual_target: 105.0
+      actual_ytd: 23.5
+      unit: tonnes
+    - name: mined copper
+      annual_target: 120.0
+      actual_ytd: 25.9
+      unit: 10k tonnes
+    - name: lithium carbonate equivalent
+      annual_target: 12.0
+      actual_ytd: 1.62
+      unit: 10k tonnes
+

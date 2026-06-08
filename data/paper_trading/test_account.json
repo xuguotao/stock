@@ -1,0 +1,70 @@
+{
+  "initial_capital": 1000000.0,
+  "cash": 803938.810073,
+  "positions": {
+    "600519.SH": {
+      "symbol": "600519.SH",
+      "quantity": 100,
+      "available": 0,
+      "avg_cost": 1500.0,
+      "buy_date": "2025-06-04"
+    },
+    "300750.SZ": {
+      "symbol": "300750.SZ",
+      "quantity": 200,
+      "available": 0,
+      "avg_cost": 230.0,
+      "buy_date": "2025-06-04"
+    }
+  },
+  "trade_log": [
+    {
+      "trade_id": "T000001",
+      "symbol": "000001.SZ",
+      "side": "buy",
+      "price": 11.0,
+      "quantity": 100,
+      "amount": 1100.0,
+      "commission": 5.06,
+      "date": "2025-06-03",
+      "realized_pnl": 0.0
+    },
+    {
+      "trade_id": "T000002",
+      "symbol": "000001.SZ",
+      "side": "sell",
+      "price": 11.1,
+      "quantity": 100,
+      "amount": 1110.0,
+      "commission": 5.62,
+      "date": "2025-06-04",
+      "realized_pnl": 10.0
+    },
+    {
+      "trade_id": "T000003",
+      "symbol": "600519.SH",
+      "side": "buy",
+      "price": 1500.0,
+      "quantity": 100,
+      "amount": 150000.0,
+      "commission": 46.3,
+      "date": "2025-06-04",
+      "realized_pnl": 0.0
+    },
+    {
+      "trade_id": "T000004",
+      "symbol": "300750.SZ",
+      "side": "buy",
+      "price": 230.0,
+      "quantity": 200,
+      "amount": 46000.0,
+      "commission": 14.2,
+      "date": "2025-06-04",
+      "realized_pnl": 0.0
+    }
+  ],
+  "trade_counter": 4,
+  "daily_peak": 1000000.0,
+  "max_drawdown": 0.0,
+  "saved_at": "2026-06-07T22:19:20.282923"
+}

@@ -1,0 +1,46 @@
+# A股交易规则配置
+# 来源: 上交所、深交所官方文档
+
+trading_hours:
+  morning:
+    open: "09:30"
+    close: "11:30"
+  afternoon:
+    open: "13:00"
+    close: "15:00"
+
+call_auction:
+  morning:
+    open: "09:15"
+    close: "09:25"
+  afternoon:
+    open: "14:57"
+    close: "15:00"
+
+# 各板块规则
+boards:
+  sh_main:
+    name: "上海主板"
+    code_prefix: ["600", "601", "603", "605"]
+    price_limit_pct: 0.10
+  sz_main:
+    name: "深圳主板"
+    code_prefix: ["000", "001", "002", "003"]
+    price_limit_pct: 0.10
+  chinext:
+    name: "创业板"
+    code_prefix: ["300", "301"]
+    price_limit_pct: 0.20
+  star_market:
+    name: "科创板"
+    code_prefix: ["688", "689"]
+    price_limit_pct: 0.20
+  bse:
+    name: "北交所"
+    code_prefix: ["8", "4", "9"]
+    price_limit_pct: 0.30
+
+# 通用规则
+lot_size: 100                    # 1手=100股
+t_plus_one: true                 # T+1交易制度
+min_commission: 5.0              # 最低佣金(元)
