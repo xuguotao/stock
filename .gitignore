@@ -1,3 +1,7 @@
+# macOS / filesystem
+.DS_Store
+._*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -7,6 +11,9 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+env/
+ENV/
+.python-version
 
 # IDE
 .vscode/
@@ -16,17 +23,40 @@ venv/
 
 # Environment
 .env
+.env.*
 !.env.example
 
-# Data cache (large files)
+# Test / type / coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Data cache and generated datasets
 data/cache/
+data/raw/
+data/processed/
+data/downloads/
 data/*.parquet
 data/*.feather
+data/*.csv
+data/*.xlsx
 
-# Notebooks checkpoints
+# Local paper-trading state and generated reports
+data/paper_trading/
+reports/
+
+# Jupyter
 .ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+notebooks/.virtual_documents/
 
 # Distribution / packaging
 dist/
 build/
 *.egg-info/
+
+# Local app/runtime artifacts
+anaconda_projects/
