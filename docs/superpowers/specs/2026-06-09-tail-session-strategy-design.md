@@ -1,0 +1,225 @@
+# 尾盘获利选股策略设计文档
+
+> 日期：2026-06-09
+> 状态：设计确认
+> 范围：Phase 1（日线突破 + 尾盘确认）+ Phase 2（分钟级实时扫描）
+
+## 1. 概述
+
+**目标**：在 A 股尾盘时段（14:30-15:00）识别强势股，买入后次日早盘卖出，利用 T+1 惯性冲高获利。
+
+**核心逻辑**：
+- 日线突破筛选候选池（趋势确认）
+- 尾盘放量/价格异动确认买入信号（择时）
+- 次日早盘强制平仓（纪律执行）
+
+**用途**：
+- 先回测验证历史表现
+- 后模拟实盘运行（每日自动扫描）
+
+## 2. 选股条件
+
+### 2.1 日线级筛选（Phase 1）
+
+| 条件 | 规则 | 说明 |
+|------|------|------|
+| 突破 | 创 20 日新高 或 MA5 上穿 MA20 | 趋势确认 |
+| 上升斜率 | 近 5 日收盘价线性回归斜率 > 0 | 短期趋势向上 |
+| ST 排除 | `is_st(name) == False` | 排除特殊处理股 |
+| 次新股排除 | 上市天数 ≥ 60 | 排除流动性差的次新股 |
+| 涨停排除 | 当日涨幅 < 10%（主板）/ 20%（创业板） | 涨停无法买入 |
+| 流动性排除 | 近 20 日日均成交额 ≥ 500 万 | 排除僵尸股 |
+
+### 2.2 尾盘择时确认（Phase 1 + Phase 2）
+
+| 条件 | Phase 1（日线近似） | Phase 2（分钟级精确） |
+|------|---------------------|----------------------|
+| 尾盘价格 | 收盘价 > 日内均价 | 14:00-15:00 收阳线 |
+| 尾盘放量 | 当日成交量 > 20 日均量 1.2 倍 | 5 分钟量 > 均量 1.5 倍 |
+| 连续确认 | — | 连续 3 次 5 分钟扫描通过 |
+
+## 3. 仓位管理
+
+| 参数 | 值 | 说明 |
+|------|------|------|
+| 单只上限 | 总资金 20% | 最多持 5 只 |
+| 总仓位上限 | 80% | 留 20% 现金缓冲 |
+| 分配方式 | 等权 | 信号强度不区分权重 |
+| 行业限制 | 单行业 ≤ 40% | 避免行业集中风险 |
+
+## 4. 卖出逻辑
+
+| 条件 | 动作 |
+|------|------|
+| 止盈 | 次日涨幅 ≥ +3% 立即卖出 |
+| 止损 | 次日跌幅 ≥ -2% 立即卖出 |
+| 强制平仓 | 次日 10:00 无论盈亏全部卖出 |
+| 执行优先级 | 止损 > 止盈 > 强制平仓 |
+
+**时间线**：
+```
+T 日 14:50 → 确认信号
+T 日 14:55 → 市价买入
+T+1 日 9:30 → 开盘监控
+T+1 日 9:30-10:00 → 止盈/止损触发或强制平仓
+```
+
+## 5. 架构设计
+
+### 5.1 模块关系
+
+```
+┌─────────────────────────────────────────────────┐
+│                  TailSessionStrategy             │
+│  ┌──────────────┐    ┌────────────────────────┐ │
+│  │ DailyBreakout │───→│  IntradayConfirmation   │ │
+│  │ Filter (P1)   │    │  (P1: 日线 / P2: 分钟)  │ │
+│  └──────────────┘    └────────────────────────┘ │
+│                      ↓                           │
+│               ┌─────────────┐                    │
+│               │ SignalEngine │───→ Buy/Sell      │
+│               └─────────────┘                    │
+└──────────────────────┬──────────────────────────┘
+                       ↓
+         ┌─────────────────────────────┐
+         │     RiskManager             │
+         │  (单只/总仓位/行业/回撤)     │
+         └──────────────┬──────────────┘
+                        ↓
+         ┌─────────────────────────────┐
+         │     SimulatedBroker /       │
+         │     PaperAccount            │
+         └─────────────────────────────┘
+```
+
+### 5.2 新增文件清单
+
+**Phase 1**（基于现有日线数据）：
+
+| 文件 | 说明 | 依赖 |
+|------|------|------|
+| `src/strategy/factors/tail_session.py` | `TailSessionFactor` — 尾盘突破因子 | `Factor` base, `calendar` |
+| `src/strategy/filters.py` | `DailyBreakoutFilter` — 日线筛选器 | 无 |
+| `src/strategy/filters.py` | `StockPoolFilter` — ST/次新/流动性过滤 | `constants.is_st` |
+| `src/strategy/factors/overnight_momentum.py` | `OvernightMomentumFactor` — 次日惯性因子 | `Factor` base |
+| `tests/test_strategy/test_tail_session.py` | 回测测试 | 全部 |
+| `scripts/run_tail_session_backtest.py` | 回测运行脚本 | `BacktestEngine` |
+
+**Phase 2**（需要分钟级数据）：
+
+| 文件 | 说明 | 依赖 |
+|------|------|------|
+| `src/data/intraday_source.py` | 分钟级 K 线数据源 | `SinaSource`, `AKShareSource` |
+| `src/strategy/scanner.py` | `IntradayScanner` — 实时扫描器 | `intraday_source` |
+| `src/strategy/executor.py` | `RealTimeExecutor` — 执行器 | `scanner`, `PaperAccount` |
+| `src/trading/scheduler.py` | 新增 `is_tail_session()` | 已有 `TradingScheduler` |
+| `scripts/run_tail_session_live.py` | 模拟实盘脚本 | 全部 |
+
+### 5.3 与现有代码的集成点
+
+| 现有模块 | 复用方式 | 改动 |
+|----------|----------|------|
+| `BacktestEngine` | 直接复用 | 新增 `TailSessionFactor` 作为因子传入 |
+| `SimulatedBroker` | 直接复用 | 无改动 |
+| `RiskManager` | 直接复用 | 新增止盈止损参数 |
+| `PaperAccount` | 直接复用 | 无改动 |
+| `TradingScheduler` | 扩展 | 新增 `is_tail_session()` 方法 |
+| `FeeCalculator` | 直接复用 | 无改动 |
+| `DataAggregator` | 扩展 | 新增 `get_intraday_bars()` 方法 |
+
+## 6. 回测流程
+
+```python
+# 1. 加载数据
+bars = aggregator.get_bars_batch(symbols, start, end, frequency="daily")
+
+# 2. 构建因子
+factor = TailSessionFactor(
+    breakout_window=20,
+    trend_window=5,
+    volume_ratio_threshold=1.2,
+)
+
+# 3. 运行回测
+engine = BacktestEngine(
+    bars=bars,
+    factors=[factor],
+    top_n=5,
+    rebalance_days=1,  # 每天重新选股
+    initial_capital=100_000,
+    equal_weight=True,
+)
+result = engine.run()
+
+# 4. 查看结果
+print(result.metrics)
+# {
+#   "total_return": 15.3,
+#   "annualized_return": 22.1,
+#   "sharpe_ratio": 1.45,
+#   "max_drawdown": -8.2,
+#   "win_rate": 58.3,
+# }
+```
+
+## 7. 模拟实盘流程
+
+```python
+# 每日定时任务
+scheduler = TradingScheduler()
+scanner = IntradayScanner(aggregator)
+executor = RealTimeExecutor(paper_account, risk_manager)
+
+# 14:30 开始扫描
+if scheduler.is_tail_session() and scheduler.is_trading_day():
+    candidates = scanner.scan()          # 扫描全市场
+    signals = scanner.confirm(candidates) # 确认买入信号
+    executor.execute(signals)             # 执行买入
+
+# 次日 9:30 卖出
+if scheduler.is_market_hours():
+    executor.sell_positions()  # 止盈/止损/强制平仓
+```
+
+## 8. 数据需求
+
+### 8.1 Phase 1（当前可用）
+
+| 数据 | 来源 | 状态 |
+|------|------|------|
+| 日线 OHLCV | Sina/AKShare | ✅ 已有 |
+| 股票列表 | Sina/AKShare | ✅ 已有 |
+| 上市日期 | 需要从 AKShare 获取 | 📋 待补充 |
+
+### 8.2 Phase 2（需要新增）
+
+| 数据 | 来源 | 状态 |
+|------|------|------|
+| 5 分钟 K 线 | Sina (`scale=5`) | 📋 待实现 |
+| 30 分钟 K 线 | Sina (`scale=30`) | 📋 待实现 |
+| 分时均价（VWAP） | 从 5 分钟 K 线计算 | 📋 待实现 |
+
+## 9. 风险与约束
+
+| 风险 | 应对措施 |
+|------|----------|
+| 数据延迟 | 使用 Sina 直连，不受代理影响 |
+| 流动性不足 | 过滤日均成交额 < 500 万的股票 |
+| 滑点 | 回测中加 0.1% 滑点模拟 |
+| 涨跌停无法成交 | 涨停排除 + 回测中检查涨跌停 |
+| 节假日误交易 | 复用 `TradingCalendar` 过滤 |
+| 策略过拟合 | 回测分训练集/测试集，不在测试集上调参 |
+
+## 10. 验收标准
+
+### Phase 1
+- [ ] `TailSessionFactor` 单元测试通过
+- [ ] 回测脚本可运行，输出完整指标
+- [ ] 夏普比率 > 0.8，胜率 > 50%
+- [ ] README 更新使用文档
+
+### Phase 2
+- [ ] 5 分钟 K 线数据获取测试通过
+- [ ] `IntradayScanner` 单元测试通过
+- [ ] 模拟实盘可连续运行 5 个交易日无报错
+- [ ] 每日自动生成交易报告
