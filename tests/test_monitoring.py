@@ -79,10 +79,13 @@ def test_render_markdown_report_includes_monitor_sections() -> None:
 
     report = render_markdown_report(snapshot)
 
-    assert "# Zijin Mining Monitor - 2026-06-08" in report
-    assert "## Price And Commodity Trends" in report
-    assert "## Production Delivery" in report
-    assert "## Triggers" in report
+    assert "# 紫金矿业监控报告 - 2026-06-08" in report
+    assert "## 快照" in report
+    assert "## 价格与商品趋势" in report
+    assert "## 产量兑现" in report
+    assert "## 触发信号" in report
+    assert "股票：" in report
+    assert "趋势预警" in report
 
 
 def test_monitor_script_can_be_invoked_from_project_root() -> None:

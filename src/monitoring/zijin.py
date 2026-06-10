@@ -141,66 +141,66 @@ def evaluate_production(
 def render_markdown_report(snapshot: MonitorSnapshot) -> str:
     """Render a local Markdown report."""
     lines = [
-        f"# Zijin Mining Monitor - {snapshot.date}",
+        f"# 紫金矿业监控报告 - {snapshot.date}",
         "",
-        "## Snapshot",
+        "## 快照",
         "",
-        f"- Stock: `{snapshot.stock_symbol}`",
-        f"- Price: {_fmt_optional(snapshot.stock_price)}",
-        f"- Change: {_fmt_pct(snapshot.stock_change_pct)}",
+        f"- 股票：`{snapshot.stock_symbol}`",
+        f"- 最新价：{_fmt_optional(snapshot.stock_price)}",
+        f"- 涨跌幅：{_fmt_pct(snapshot.stock_change_pct)}",
         "",
-        "## Price And Commodity Trends",
+        "## 价格与商品趋势",
         "",
-        "| Name | Status | Latest | 20D MA | 60D MA | Reason |",
+        "| 名称 | 状态 | 最新值 | 20日均线 | 60日均线 | 判断依据 |",
         "|---|---|---:|---:|---:|---|",
     ]
 
     for trend in snapshot.trends:
         lines.append(
             "| {name} | {status} | {latest:.2f} | {short} | {long} | {reason} |".format(
-                name=trend.name,
-                status=trend.status,
+                name=_display_name(trend.name),
+                status=_display_status(trend.status),
                 latest=trend.latest_close,
                 short=_fmt_optional(trend.short_ma),
                 long=_fmt_optional(trend.long_ma),
-                reason=trend.reason,
+                reason=_display_reason(trend.reason),
             )
         )
 
     lines.extend(
         [
             "",
-            "## Production Delivery",
+            "## 产量兑现",
             "",
-            "| Item | Status | Actual YTD | Annual Target | Actual Progress | Expected Progress | Reason |",
+            "| 项目 | 状态 | 年初至今产量 | 年度目标 | 实际进度 | 时间进度 | 判断依据 |",
             "|---|---|---:|---:|---:|---:|---|",
         ]
     )
     for item in snapshot.production:
         lines.append(
             "| {name} | {status} | {actual:.2f} {unit} | {target:.2f} {unit} | {actual_ratio} | {expected_ratio} | {reason} |".format(
-                name=item.name,
-                status=item.status,
+                name=_display_name(item.name),
+                status=_display_status(item.status),
                 actual=item.actual_ytd,
-                unit=item.unit,
+                unit=_display_unit(item.unit),
                 target=item.annual_target,
                 actual_ratio=_fmt_pct(item.actual_ratio * 100),
                 expected_ratio=_fmt_pct(item.expected_ratio * 100),
-                reason=item.reason,
+                reason=_display_reason(item.reason),
             )
         )
 
-    lines.extend(["", "## Triggers", ""])
-    weak_trends = [t.name for t in snapshot.trends if t.status == "weak"]
-    behind_items = [p.name for p in snapshot.production if p.status == "behind"]
+    lines.extend(["", "## 触发信号", ""])
+    weak_trends = [_display_name(t.name) for t in snapshot.trends if t.status == "weak"]
+    behind_items = [_display_name(p.name) for p in snapshot.production if p.status == "behind"]
     if weak_trends:
-        lines.append(f"- Trend warning: {', '.join(weak_trends)} below 60-day average.")
+        lines.append(f"- 趋势预警：{', '.join(weak_trends)}低于60日均线。")
     else:
-        lines.append("- Trend warning: no monitored series is below the 60-day average.")
+        lines.append("- 趋势预警：没有监控项低于60日均线。")
     if behind_items:
-        lines.append(f"- Production warning: {', '.join(behind_items)} materially behind elapsed-year pace.")
+        lines.append(f"- 产量预警：{', '.join(behind_items)}明显落后于时间进度。")
     else:
-        lines.append("- Production warning: no monitored item is materially behind elapsed-year pace.")
+        lines.append("- 产量预警：没有监控项明显落后于时间进度。")
 
     lines.append("")
     return "\n".join(lines)
@@ -223,3 +223,48 @@ def _fmt_pct(value: float | None) -> str:
         return "n/a"
     return f"{value:.2f}%"
 
+
+def _display_name(value: str) -> str:
+    names = {
+        "zijin": "紫金矿业",
+        "gold": "黄金",
+        "copper": "铜",
+        "mined gold": "矿产金",
+        "mined copper": "矿产铜",
+        "lithium carbonate equivalent": "碳酸锂当量",
+    }
+    return names.get(value, value)
+
+
+def _display_status(value: str) -> str:
+    statuses = {
+        "strong": "强",
+        "neutral": "中性",
+        "weak": "弱",
+        "on_track": "达标",
+        "watch": "观察",
+        "behind": "落后",
+    }
+    return statuses.get(value, value)
+
+
+def _display_unit(value: str) -> str:
+    units = {
+        "tonnes": "吨",
+        "10k tonnes": "万吨",
+    }
+    return units.get(value, value)
+
+
+def _display_reason(value: str) -> str:
+    reasons = {
+        "latest close is above both 20-day and 60-day averages": "最新值高于20日和60日均线",
+        "trend is mixed or there is not enough history for full confirmation": "趋势混合，或历史数据不足以完整确认",
+        "actual progress is within 90% of elapsed-year pace": "实际进度达到时间进度的90%以上",
+        "actual progress is between 75% and 90% of elapsed-year pace": "实际进度为时间进度的75%-90%",
+        "actual progress is below 75% of elapsed-year pace": "实际进度低于时间进度的75%",
+    }
+    if value.startswith("latest close is below 60-day average"):
+        suffix = value.removeprefix("latest close is below 60-day average")
+        return f"最新值低于60日均线{suffix}"
+    return reasons.get(value, value)
