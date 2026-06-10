@@ -80,3 +80,31 @@ def test_overnight_momentum_positive_on_gap_up() -> None:
     # Should have NaN for first row (no previous close to compare)
     valid = result["overnight_momentum"].dropna()
     assert len(valid) > 0
+
+
+def test_tail_session_backtest_runs() -> None:
+    from src.strategy.engine.backtest import BacktestEngine
+    from src.strategy.factors.tail_session import TailSessionFactor
+    from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
+    from config.settings import reset_settings
+    reset_settings()
+    bars = _multi_bars(["000001.SZ", "600519.SH", "300750.SZ", "000858.SZ", "601318.SH"])
+
+    factor = TailSessionFactor(breakout_window=20, trend_window=5)
+    engine = BacktestEngine(
+        bars=bars,
+        factors=[factor],
+        top_n=3,
+        rebalance_days=1,
+        initial_capital=100_000,
+        equal_weight=True,
+    )
+
+    result = engine.run()
+    assert result.initial_capital == 100_000
+    assert result.final_value > 0
+    assert len(result.daily_returns) > 0
+    metrics = result.metrics
+    assert "sharpe_ratio" in metrics
+    assert "win_rate" in metrics
+    assert metrics["trading_days"] > 0
