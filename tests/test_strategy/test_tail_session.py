@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import time
 import pandas as pd
 from src.strategy.factors.tail_session import TailSessionFactor
 
@@ -118,3 +119,16 @@ def test_tail_session_backtest_runs() -> None:
     assert "sharpe_ratio" in metrics
     assert "win_rate" in metrics
     assert metrics["trading_days"] > 0
+
+
+def test_tail_session_factor_handles_medium_panel_quickly() -> None:
+    symbols = [f"{i:06d}.SZ" for i in range(1, 13)]
+    bars = _multi_bars(symbols, periods=220)
+    factor = TailSessionFactor(breakout_window=20, trend_window=5)
+
+    start = time.perf_counter()
+    result = factor.compute(bars)
+    elapsed = time.perf_counter() - start
+
+    assert not result.empty
+    assert elapsed < 1.0

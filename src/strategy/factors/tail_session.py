@@ -10,13 +10,12 @@ Usage:
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from src.strategy.base import Factor
-from src.strategy.filters import DailyBreakoutFilter, DailyTrendFilter
 
 
 class TailSessionFactor(Factor):
@@ -46,95 +45,38 @@ class TailSessionFactor(Factor):
         if bars.empty:
             return pd.DataFrame(columns=[self.name])
 
-        dates = bars.index.get_level_values("date").unique().tolist()
+        frame = bars.sort_index().copy()
+        grouped = frame.groupby(level="symbol", group_keys=False)
 
-        results = []
-        for trade_date in dates:
-            try:
-                day_bars = bars.loc[trade_date]
-            except KeyError:
-                continue
+        close = frame["close"]
+        prev_high = grouped["close"].apply(
+            lambda s: s.shift(1).rolling(self.breakout_window, min_periods=self.breakout_window).max()
+        )
+        breakout = close > prev_high
 
-            if isinstance(day_bars, pd.Series):
-                day_bars = day_bars.to_frame().T
-            day_symbols = day_bars.index.tolist()
+        trend = grouped["close"].apply(
+            lambda s: s.rolling(self.trend_window, min_periods=self.trend_window).apply(
+                _linear_slope,
+                raw=True,
+            )
+        ) > 0
 
-            # Get historical bars up to this date
-            hist_mask = bars.index.get_level_values("date") <= trade_date
-            hist_bars = bars[hist_mask]
+        if "volume" in frame.columns:
+            avg_volume = grouped["volume"].apply(
+                lambda s: s.shift(1).rolling(20, min_periods=20).mean()
+            )
+            volume = (frame["volume"] > avg_volume * self.volume_ratio_threshold).fillna(False)
+        else:
+            volume = pd.Series(False, index=frame.index)
 
-            # Apply breakout filter
-            breakout_filter = DailyBreakoutFilter(breakout_window=self.breakout_window)
-            breakout_symbols = set(breakout_filter.filter(hist_bars, trade_date))
+        values = pd.Series(0.0, index=frame.index, name=self.name)
+        values.loc[breakout] = 0.4
+        values.loc[breakout & trend] = 0.7
+        values.loc[breakout & trend & volume] = 1.0
+        return values.to_frame()
 
-            # Apply trend filter
-            trend_filter = DailyTrendFilter(trend_window=self.trend_window)
-            trend_symbols = set(trend_filter.filter(hist_bars, trade_date))
 
-            # Apply volume confirmation
-            volume_symbols = self._volume_confirm(hist_bars, trade_date)
-
-            # Compute factor values
-            for symbol in day_symbols:
-                in_breakout = symbol in breakout_symbols
-                in_trend = symbol in trend_symbols
-                in_volume = symbol in volume_symbols
-
-                if in_breakout and in_trend and in_volume:
-                    value = 1.0
-                elif in_breakout and in_trend:
-                    value = 0.7
-                elif in_breakout:
-                    value = 0.4
-                else:
-                    value = 0.0
-
-                results.append({
-                    "date": trade_date,
-                    "symbol": symbol,
-                    self.name: value,
-                })
-
-        if not results:
-            return pd.DataFrame(columns=["date", "symbol", self.name])
-
-        df = pd.DataFrame(results).set_index(["date", "symbol"])
-        return df[[self.name]]
-
-    def _volume_confirm(
-        self,
-        bars: pd.DataFrame,
-        trade_date: date,
-    ) -> set[str]:
-        """Confirm volume > threshold * 20-day average."""
-        try:
-            day_bars = bars.loc[trade_date]
-        except KeyError:
-            return set()
-
-        if isinstance(day_bars, pd.Series):
-            day_bars = day_bars.to_frame().T
-
-        if "volume" not in day_bars.columns:
-            return set()
-
-        confirmed = set()
-        syms = day_bars.index.tolist() if hasattr(day_bars.index, "tolist") else [day_bars.index[0]]
-
-        for symbol in syms:
-            try:
-                sym_bars = bars.xs(symbol, level="symbol")
-            except KeyError:
-                continue
-
-            volumes = sym_bars["volume"].dropna()
-            if len(volumes) < 21:
-                continue
-
-            today_vol = volumes.iloc[-1]
-            avg_vol = volumes.iloc[-21:-1].mean()
-
-            if avg_vol > 0 and today_vol > avg_vol * self.volume_ratio_threshold:
-                confirmed.add(symbol)
-
-        return confirmed
+def _linear_slope(values: np.ndarray) -> float:
+    x = np.arange(len(values), dtype=float)
+    slope, _ = np.polyfit(x, values, 1)
+    return float(slope)

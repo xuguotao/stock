@@ -12,7 +12,9 @@
 - ✅ Phase 1 code path is implemented and verified: daily filters, stock pool filter, tail-session factor, overnight momentum factor, backtest script, and scheduler tail-session window.
 - ✅ Phase 1 credibility fixes are implemented: filters truncate to `trade_date`, tail-session factors only score symbols present on each date, and overnight momentum preserves first-row `NaN`.
 - ✅ Phase 2 minimum paper-trading loop is implemented and verified: Sina intraday bars via `DataAggregator.get_intraday_bars()`, `IntradayScanner`, `RealTimeExecutor`, daily Markdown reports, and `scripts/run_tail_session_live.py`.
-- ✅ Verification run: `pytest tests/ -q` passes with 140 tests.
+- ✅ Research loop improvements are implemented: vectorized `TailSessionFactor`, progress output, `--limit`, `--offline-cache`, and `--output-json` for `scripts/run_tail_session_backtest.py`.
+- ✅ Verification run: `pytest tests/ -q` passes with 146 tests.
+- 📉 Latest offline-cache sample result (10 liquid symbols, 2024-01-01 to 2025-06-01): total return 2.59%, Sharpe -0.006, win rate 44.54%, max drawdown -13.32%, 1450 trades.
 - 📋 Still market-dependent / not asserted as complete: Sharpe ratio > 0.8, win rate > 50%, and five consecutive real trading days of live paper operation.
 
 ---

@@ -63,6 +63,14 @@ python scripts/run_tail_session_backtest.py --symbols 000001 600519 300750
 
 # 指定日期范围和资金
 python scripts/run_tail_session_backtest.py --start 2023-01-01 --end 2025-06-01 --capital 200000
+
+# 使用本地 parquet 缓存离线评估，并输出 JSON 指标
+python scripts/run_tail_session_backtest.py \
+  --symbols 000001 600519 300750 \
+  --start 2024-01-01 \
+  --end 2025-06-01 \
+  --offline-cache \
+  --output-json reports/tail_session/backtest_sample.json
 ```
 
 ### 6. 运行尾盘模拟扫描
@@ -114,7 +122,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 │       ├── signal_engine.py   # 信号引擎
 │       ├── risk_manager.py    # 风控管理器
 │       └── scheduler.py       # 交易调度器
-├── tests/                     # 测试套件 (140个测试)
+├── tests/                     # 测试套件 (146个测试)
 │   ├── test_data/             # 数据层测试
 │   ├── test_strategy/         # 策略层测试
 │   ├── test_trading/          # 交易层测试
@@ -174,12 +182,12 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 | 模块 | 测试数 |
 |------|--------|
 | Data (models, cache, aggregator) | 19 |
-| Strategy (factors, broker, backtest, tail session) | 64 |
+| Strategy (factors, broker, backtest, tail session) | 70 |
 | Trading (signal, risk, scheduler, paper) | 34 |
 | Research (neutralization, IC, quantile, fund tail) | 14 |
 | Monitoring (紫金) | 6 |
 | Core behaviors | 3 |
-| **总计** | **140** |
+| **总计** | **146** |
 
 ## 数据源说明
 
