@@ -60,3 +60,4 @@ build/
 
 # Local app/runtime artifacts
 anaconda_projects/
+.worktrees/
