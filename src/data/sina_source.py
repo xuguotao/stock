@@ -248,3 +248,14 @@ class SinaSource(DataSourceBase):
     def fetch_financials(self, symbol: str) -> list[FinancialStatement]:
         """Sina doesn't provide financial statements directly."""
         return []
+
+    def fetch_intraday_bars(
+        self,
+        symbol: str,
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        """Fetch intraday bars from Sina Finance."""
+        from src.data.intraday_source import fetch_intraday_bars as _fetch
+        self._wait_for_rate_limit()
+        return _fetch(symbol, trade_date, frequency)
