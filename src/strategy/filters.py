@@ -8,6 +8,8 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import pandas as pd
 
+from src.core.constants import is_st
+
 
 @runtime_checkable
 class Filter(Protocol):
@@ -118,3 +120,79 @@ class DailyTrendFilter:
                 passing.append(symbol)
 
         return passing
+
+
+class StockPoolFilter:
+    """综合股票池过滤：ST、次新股、流动性、涨停。"""
+
+    def __init__(
+        self,
+        min_list_days: int = 60,
+        min_avg_amount: float = 5_000_000,
+        limit_up_pct: float = 0.10,
+    ):
+        self.min_list_days = min_list_days
+        self.min_avg_amount = min_avg_amount
+        self.limit_up_pct = limit_up_pct
+
+    def filter(
+        self,
+        bars: pd.DataFrame,
+        trade_date: date,
+        stock_info: dict | None = None,
+        **kwargs,
+    ) -> list[str]:
+        """Apply all stock pool filters."""
+        if bars.empty:
+            return []
+
+        symbols = bars.index.get_level_values("symbol").unique().tolist()
+        passing = []
+
+        for symbol in symbols:
+            if not self._passes(symbol, bars, trade_date, stock_info):
+                continue
+            passing.append(symbol)
+
+        return passing
+
+    def _passes(
+        self,
+        symbol: str,
+        bars: pd.DataFrame,
+        trade_date: date,
+        stock_info: dict | None,
+    ) -> bool:
+        """Check all conditions for a single symbol."""
+        try:
+            sym_bars = bars.xs(symbol, level="symbol")
+        except KeyError:
+            return False
+
+        # ST check
+        if stock_info and symbol in stock_info:
+            name = stock_info[symbol].get("name", "")
+            if is_st(name):
+                return False
+
+            # New stock check
+            list_date = stock_info[symbol].get("list_date")
+            if list_date and isinstance(list_date, date):
+                days_listed = (trade_date - list_date).days
+                if days_listed < self.min_list_days:
+                    return False
+
+        # Liquidity check (avg daily amount)
+        if "amount" in sym_bars.columns:
+            avg_amount = sym_bars["amount"].tail(20).mean()
+            if avg_amount < self.min_avg_amount:
+                return False
+
+        # Limit-up check (today's change too large)
+        closes = sym_bars["close"].dropna()
+        if len(closes) >= 2:
+            change = (closes.iloc[-1] - closes.iloc[-2]) / closes.iloc[-2]
+            if change >= self.limit_up_pct:
+                return False
+
+        return True

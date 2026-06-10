@@ -59,3 +59,19 @@ def test_filters_return_empty_for_empty_bars() -> None:
     empty_bars = pd.DataFrame()
     assert DailyBreakoutFilter().filter(empty_bars, date(2025, 1, 1)) == []
     assert DailyTrendFilter().filter(empty_bars, date(2025, 1, 1)) == []
+
+
+def test_stocks_pool_excludes_st_stocks() -> None:
+    from src.strategy.filters import StockPoolFilter
+    f = StockPoolFilter(min_list_days=60, min_avg_amount=5_000_000)
+    stock_info = {
+        "000001.SZ": {"name": "平安银行", "list_date": date(1991, 4, 3)},
+        "*ST123.SZ": {"name": "*ST某某", "list_date": date(2020, 1, 1)},
+    }
+    bars = _bars([10.0] * 70, "000001.SZ")
+    bars2 = _bars([5.0] * 70, "*ST123.SZ")
+    all_bars = pd.concat([bars, bars2])
+
+    result = f.filter(all_bars, date(2025, 4, 1), stock_info=stock_info)
+    assert "000001.SZ" in result
+    assert "*ST123.SZ" not in result
