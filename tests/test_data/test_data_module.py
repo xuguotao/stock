@@ -302,3 +302,30 @@ def test_sina_intraday_bars_returns_dataframe() -> None:
     )
 
     assert isinstance(df, pd.DataFrame)
+
+
+def test_data_aggregator_get_intraday_bars_uses_source_method() -> None:
+    from src.data.aggregator import DataAggregator
+
+    class IntradaySource:
+        name = "fake"
+
+        def fetch_intraday_bars(self, symbol, trade_date, frequency="5m"):
+            return pd.DataFrame([{
+                "datetime": pd.Timestamp("2025-06-03 14:30"),
+                "time": pd.Timestamp("2025-06-03 14:30").time(),
+                "symbol": symbol,
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "close": 10.1,
+                "volume": 1000,
+                "amount": 10_100,
+            }])
+
+    agg = DataAggregator([IntradaySource()])
+
+    result = agg.get_intraday_bars("000001.SZ", date(2025, 6, 3), frequency="5m")
+
+    assert not result.empty
+    assert result.iloc[0]["symbol"] == "000001.SZ"

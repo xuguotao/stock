@@ -10,7 +10,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import date
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from config.settings import reset_settings
 from src.core.constants import format_symbol

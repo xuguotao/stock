@@ -65,6 +65,16 @@ python scripts/run_tail_session_backtest.py --symbols 000001 600519 300750
 python scripts/run_tail_session_backtest.py --start 2023-01-01 --end 2025-06-01 --capital 200000
 ```
 
+### 6. 运行尾盘模拟扫描
+
+```bash
+# 交易日 14:30-15:00 窗口内运行
+python scripts/run_tail_session_live.py --symbols 000001 600519
+
+# 手动演练，不检查当前时间窗口
+python scripts/run_tail_session_live.py --symbols 000001 --ignore-session --confirmations 1
+```
+
 ## 项目结构
 
 ```
@@ -81,6 +91,7 @@ python scripts/run_tail_session_backtest.py --start 2023-01-01 --end 2025-06-01 
 │   ├── data/                  # 模块1: 数据获取
 │   │   ├── base.py            # 抽象接口(DataSource Protocol)
 │   │   ├── sina_source.py     # 新浪财经(主数据源, 直连)
+│   │   ├── intraday_source.py # 分钟级K线数据源
 │   │   ├── akshare_source.py  # AKShare(备用数据源)
 │   │   ├── aggregator.py      # 多源聚合+自动降级
 │   │   ├── cache.py           # Parquet缓存(TTL管理)
@@ -88,6 +99,8 @@ python scripts/run_tail_session_backtest.py --start 2023-01-01 --end 2025-06-01 
 │   ├── strategy/              # 模块2: 策略回测
 │   │   ├── base.py            # Factor抽象类 + CompositeFactor
 │   │   ├── factors/           # 因子库: 动量、趋势、均值回复、价值
+│   │   ├── scanner.py         # 尾盘分钟级扫描器
+│   │   ├── executor.py        # 尾盘模拟实盘执行器
 │   │   ├── engine/            # 回测引擎
 │   │   └── execution/         # 模拟经纪商(基于BaseBroker)
 │   ├── research/              # 模块3: 因子研究
@@ -98,7 +111,7 @@ python scripts/run_tail_session_backtest.py --start 2023-01-01 --end 2025-06-01 
 │       ├── signal_engine.py   # 信号引擎
 │       ├── risk_manager.py    # 风控管理器
 │       └── scheduler.py       # 交易调度器
-├── tests/                     # 测试套件 (101个测试)
+├── tests/                     # 测试套件 (138个测试)
 │   ├── test_data/             # 数据层测试
 │   ├── test_strategy/         # 策略层测试
 │   ├── test_trading/          # 交易层测试
@@ -146,24 +159,30 @@ python scripts/run_tail_session_backtest.py --start 2023-01-01 --end 2025-06-01 
 - 尾盘突破因子 (TailSessionFactor)
 - 次日惯性因子 (OvernightMomentumFactor)
 - 回测脚本: `python scripts/run_tail_session_backtest.py`
+- 分钟级K线入口: `DataAggregator.get_intraday_bars()`
+- 尾盘分钟级扫描器 (IntradayScanner)
+- 模拟实盘执行器 (RealTimeExecutor)
+- 模拟扫描脚本: `python scripts/run_tail_session_live.py`
 - 交易调度器扩展 (is_tail_session)
 
 ### 测试覆盖
 
 | 模块 | 测试数 |
 |------|--------|
-| Data (models, cache, aggregator) | 17 |
-| Strategy (factors, broker, backtest) | 42 |
-| Trading (signal, risk, scheduler, paper) | 29 |
-| Research (neutralization, IC, quantile) | 7 |
+| Data (models, cache, aggregator) | 19 |
+| Strategy (factors, broker, backtest, tail session) | 62 |
+| Trading (signal, risk, scheduler, paper) | 34 |
+| Research (neutralization, IC, quantile, fund tail) | 14 |
 | Monitoring (紫金) | 6 |
-| **总计** | **101** |
+| Core behaviors | 3 |
+| **总计** | **138** |
 
 ## 数据源说明
 
 | 数据源 | 用途 | 状态 | 说明 |
 |--------|------|------|------|
 | **Sina Finance** | 日线K线 | ✅ 主数据源 | 直连新浪API，代理环境可用，支持1000条历史K线 |
+| **Sina Finance** | 5/15/30/60分钟K线 | ✅ 已集成 | 用于尾盘扫描和模拟实盘 |
 | **Sina hq** | 实时行情 | ✅ 已集成 | 交易时段返回实时价格，非交易时段返回前收价 |
 | **AKShare** | 股票列表 | ✅ 备用数据源 | 用于获取全量A股列表，AKShare K线在代理下不可用 |
 | **Tushare Pro** | 财务数据 | 📋 待开发 | 需要token，财务数据更准确 |

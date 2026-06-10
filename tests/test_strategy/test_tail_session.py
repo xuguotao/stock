@@ -30,6 +30,15 @@ def test_tail_session_factor_returns_values() -> None:
     assert "tail_session" in result.columns
     assert result.index.names == ["date", "symbol"]
 
+def test_tail_session_factor_only_scores_symbols_present_on_date() -> None:
+    bars = _multi_bars(["000001.SZ", "600519.SH"])
+    last_date = bars.index.get_level_values("date").max()
+    bars = bars.drop(index=(last_date, "600519.SH"))
+
+    result = TailSessionFactor(breakout_window=20, trend_window=5).compute(bars)
+
+    assert "600519.SH" not in result.loc[last_date].index
+
 def test_factor_returns_zero_for_no_breakout() -> None:
     """Flat prices = no breakout = factor 0."""
     dates = pd.bdate_range("2025-01-01", periods=30)
@@ -77,9 +86,10 @@ def test_overnight_momentum_positive_on_gap_up() -> None:
     result = factor.compute(bars)
 
     assert "overnight_momentum" in result.columns
-    # Should have NaN for first row (no previous close to compare)
+    first_value = result["overnight_momentum"].iloc[0]
+    assert pd.isna(first_value)
     valid = result["overnight_momentum"].dropna()
-    assert len(valid) > 0
+    assert (valid > 0).all()
 
 
 def test_tail_session_backtest_runs() -> None:

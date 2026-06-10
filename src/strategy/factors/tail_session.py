@@ -13,7 +13,6 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from src.strategy.base import Factor
@@ -47,7 +46,6 @@ class TailSessionFactor(Factor):
         if bars.empty:
             return pd.DataFrame(columns=[self.name])
 
-        symbols = bars.index.get_level_values("symbol").unique().tolist()
         dates = bars.index.get_level_values("date").unique().tolist()
 
         results = []
@@ -59,6 +57,7 @@ class TailSessionFactor(Factor):
 
             if isinstance(day_bars, pd.Series):
                 day_bars = day_bars.to_frame().T
+            day_symbols = day_bars.index.tolist()
 
             # Get historical bars up to this date
             hist_mask = bars.index.get_level_values("date") <= trade_date
@@ -76,7 +75,7 @@ class TailSessionFactor(Factor):
             volume_symbols = self._volume_confirm(hist_bars, trade_date)
 
             # Compute factor values
-            for symbol in symbols:
+            for symbol in day_symbols:
                 in_breakout = symbol in breakout_symbols
                 in_trend = symbol in trend_symbols
                 in_volume = symbol in volume_symbols

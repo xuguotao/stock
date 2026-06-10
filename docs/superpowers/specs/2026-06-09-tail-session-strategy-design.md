@@ -172,13 +172,13 @@ executor = RealTimeExecutor(paper_account, risk_manager)
 
 # 14:30 开始扫描
 if scheduler.is_tail_session() and scheduler.is_trading_day():
-    candidates = scanner.scan()          # 扫描全市场
+    candidates = scanner.scan(symbols, trade_date)  # 扫描股票池
     signals = scanner.confirm(candidates) # 确认买入信号
-    executor.execute(signals)             # 执行买入
+    executor.execute_buy_signals(signals, prices, trade_date)
 
 # 次日 9:30 卖出
 if scheduler.is_market_hours():
-    executor.sell_positions()  # 止盈/止损/强制平仓
+    executor.sell_positions(prices, trade_date)  # 止盈/止损/强制平仓
 ```
 
 ## 8. 数据需求
@@ -195,9 +195,9 @@ if scheduler.is_market_hours():
 
 | 数据 | 来源 | 状态 |
 |------|------|------|
-| 5 分钟 K 线 | Sina (`scale=5`) | 📋 待实现 |
-| 30 分钟 K 线 | Sina (`scale=30`) | 📋 待实现 |
-| 分时均价（VWAP） | 从 5 分钟 K 线计算 | 📋 待实现 |
+| 5 分钟 K 线 | Sina (`scale=5`) | ✅ 已实现 |
+| 30 分钟 K 线 | Sina (`scale=30`) | ✅ 已实现 |
+| 分时均价（VWAP） | 从 5 分钟 K 线计算 | 📋 待补充 |
 
 ## 9. 风险与约束
 
@@ -213,13 +213,14 @@ if scheduler.is_market_hours():
 ## 10. 验收标准
 
 ### Phase 1
-- [ ] `TailSessionFactor` 单元测试通过
-- [ ] 回测脚本可运行，输出完整指标
+- [x] `TailSessionFactor` 单元测试通过
+- [x] 回测脚本可运行，输出完整指标
 - [ ] 夏普比率 > 0.8，胜率 > 50%
-- [ ] README 更新使用文档
+- [x] README 更新使用文档
 
 ### Phase 2
-- [ ] 5 分钟 K 线数据获取测试通过
-- [ ] `IntradayScanner` 单元测试通过
+- [x] 5 分钟 K 线数据获取测试通过
+- [x] `IntradayScanner` 单元测试通过
+- [x] 模拟实盘单次扫描脚本可运行
 - [ ] 模拟实盘可连续运行 5 个交易日无报错
 - [ ] 每日自动生成交易报告

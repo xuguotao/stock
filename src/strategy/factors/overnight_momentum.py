@@ -39,6 +39,6 @@ class OvernightMomentumFactor(Factor):
             if hasattr(gap.index, "names"):
                 gap.index = close.index
 
-        result = gap.fillna(0).to_frame(name=self.name)
+        result = gap.to_frame(name=self.name)
         result.index.names = ["date", "symbol"]
         return result

@@ -31,6 +31,15 @@ def test_creates_20_day_breakout_signal() -> None:
     result = f.filter(bars, date(2025, 2, 4))  # Day 25
     assert "000001.SZ" in result
 
+def test_breakout_filter_ignores_data_after_trade_date() -> None:
+    closes = [10.0] * 25 + [12.0]
+    bars = _bars(closes)
+    trade_date = bars.index.get_level_values("date")[24].date()
+
+    result = DailyBreakoutFilter(breakout_window=20).filter(bars, trade_date)
+
+    assert "000001.SZ" not in result
+
 def test_trend_filter_passes_rising_prices() -> None:
     from src.strategy.filters import DailyTrendFilter
     closes = [10.0, 10.1, 10.2, 10.3, 10.5]  # rising

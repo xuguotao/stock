@@ -11,6 +11,13 @@ import pandas as pd
 from src.core.constants import is_st
 
 
+def _bars_to_trade_date(bars: pd.DataFrame, trade_date: date) -> pd.DataFrame:
+    """Return bars dated no later than trade_date."""
+    dates = bars.index.get_level_values("date")
+    cutoff = pd.Timestamp(trade_date).normalize()
+    return bars[dates.map(pd.Timestamp).normalize() <= cutoff]
+
+
 @runtime_checkable
 class Filter(Protocol):
     """Protocol for stock pool filters."""
@@ -47,6 +54,10 @@ class DailyBreakoutFilter:
         Args:
             mode: "breakout" (20-day high) or "ma_cross" (MA5 > MA20)
         """
+        if bars.empty:
+            return []
+
+        bars = _bars_to_trade_date(bars, trade_date)
         if bars.empty:
             return []
 
@@ -99,6 +110,10 @@ class DailyTrendFilter:
         if bars.empty:
             return []
 
+        bars = _bars_to_trade_date(bars, trade_date)
+        if bars.empty:
+            return []
+
         symbols = bars.index.get_level_values("symbol").unique().tolist()
         passing = []
 
@@ -143,6 +158,10 @@ class StockPoolFilter:
         **kwargs,
     ) -> list[str]:
         """Apply all stock pool filters."""
+        if bars.empty:
+            return []
+
+        bars = _bars_to_trade_date(bars, trade_date)
         if bars.empty:
             return []
 

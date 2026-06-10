@@ -143,6 +143,27 @@ class DataAggregator:
 
         return pd.DataFrame()
 
+    def get_intraday_bars(
+        self,
+        symbol: str,
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        """Get intraday bars with fallback across configured sources."""
+        for source in self.sources:
+            fetcher = getattr(source, "fetch_intraday_bars", None)
+            if fetcher is None:
+                continue
+            try:
+                df = fetcher(symbol, trade_date, frequency)
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                logger.warning(f"Source {source.name} intraday failed for {symbol}: {e}")
+                continue
+
+        return pd.DataFrame()
+
     def get_symbols_by_board(self, board_prefixes: list[str]) -> list[str]:
         """Filter stock list by board code prefixes."""
         stocks = self.get_stock_list()
