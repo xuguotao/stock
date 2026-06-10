@@ -29,6 +29,7 @@ def evaluate_tail_session_grid(
     rows = []
     for i, config in enumerate(configs, start=1):
         top_n = int(config.get("top_n", 5))
+        min_score = config.get("min_score")
         factor = TailSessionFactor(
             breakout_window=int(config.get("breakout_window", 20)),
             trend_window=int(config.get("trend_window", 5)),
@@ -45,6 +46,7 @@ def evaluate_tail_session_grid(
             rebalance_days=1,
             initial_capital=initial_capital,
             equal_weight=True,
+            min_score=float(min_score) if min_score is not None else None,
         )
         result = engine.run()
         row = dict(config)

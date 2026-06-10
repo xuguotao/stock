@@ -15,9 +15,11 @@
 - ✅ Research loop improvements are implemented: vectorized `TailSessionFactor`, progress output, `--limit`, `--offline-cache`, and `--output-json` for `scripts/run_tail_session_backtest.py`.
 - ✅ Research dataset builder is implemented: `scripts/build_research_dataset.py`, `src/data/research_dataset.py`, and `--bars-dataset` support for backtests. Parquet is the primary research store; MySQL remains optional for metadata/trading records.
 - ✅ Parameter-grid diagnostics are implemented: `scripts/evaluate_tail_session_grid.py` and `src/research/tail_session_analysis.py`.
-- ✅ Verification run: `pytest tests/ -q` passes with 151 tests.
+- ✅ Minimum entry score diagnostics are implemented: `BacktestEngine(min_score=...)`, `scripts/run_tail_session_backtest.py --min-score`, and `scripts/evaluate_tail_session_grid.py --min-scores`.
+- ✅ Verification run: `pytest tests/ -q` passes with 153 tests.
 - 📉 Latest offline-cache sample result (10 liquid symbols, 2024-01-01 to 2025-06-01): total return 2.59%, Sharpe -0.006, win rate 44.54%, max drawdown -13.32%, 1450 trades.
 - 📉 Latest grid smoke result: 10-day breakout did not improve Sharpe (-0.022) versus 20-day breakout (-0.006).
+- 📈 Latest min-score grid result (same 10-symbol sample, 20-day breakout, 5-day trend, volume threshold 1.2, top_n=5): min_score 1.0 produced total return 11.78%, Sharpe 0.788, max drawdown -5.77%, 240 trades.
 - 📋 Still market-dependent / not asserted as complete: Sharpe ratio > 0.8, win rate > 50%, and five consecutive real trading days of live paper operation.
 
 ---

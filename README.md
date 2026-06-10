@@ -66,7 +66,8 @@ python scripts/build_research_dataset.py \
 python scripts/run_tail_session_backtest.py \
   --bars-dataset data/research/daily_bars_sample.parquet \
   --start 2024-01-01 \
-  --end 2025-06-01
+  --end 2025-06-01 \
+  --min-score 1.0
 
 # 离线参数网格评估，输出 CSV
 python scripts/evaluate_tail_session_grid.py \
@@ -76,7 +77,8 @@ python scripts/evaluate_tail_session_grid.py \
   --breakout-windows 10 20 \
   --trend-windows 3 5 \
   --volume-thresholds 1.0 1.2 \
-  --top-n 3 5
+  --top-n 3 5 \
+  --min-scores 0 0.4 0.7 1.0
 
 # 默认回测沪深300前50只
 python scripts/run_tail_session_backtest.py
@@ -146,7 +148,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 │       ├── signal_engine.py   # 信号引擎
 │       ├── risk_manager.py    # 风控管理器
 │       └── scheduler.py       # 交易调度器
-├── tests/                     # 测试套件 (146个测试)
+├── tests/                     # 测试套件 (153个测试)
 │   ├── test_data/             # 数据层测试
 │   ├── test_strategy/         # 策略层测试
 │   ├── test_trading/          # 交易层测试
@@ -199,6 +201,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 - 分钟级K线入口: `DataAggregator.get_intraday_bars()`
 - 离线研究数据集: `python scripts/build_research_dataset.py`
 - 参数网格评估: `python scripts/evaluate_tail_session_grid.py`
+- 最小入场分数门槛: `--min-score` / `--min-scores`
 - 尾盘分钟级扫描器 (IntradayScanner)
 - 模拟实盘执行器 (RealTimeExecutor)
 - 模拟扫描脚本: `python scripts/run_tail_session_live.py`
@@ -210,12 +213,12 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 | 模块 | 测试数 |
 |------|--------|
 | Data (models, cache, aggregator, research dataset) | 21 |
-| Strategy (factors, broker, backtest, tail session) | 71 |
+| Strategy (factors, broker, backtest, tail session) | 72 |
 | Trading (signal, risk, scheduler, paper) | 34 |
-| Research (neutralization, IC, quantile, fund tail, tail grid) | 16 |
+| Research (neutralization, IC, quantile, fund tail, tail grid) | 17 |
 | Monitoring (紫金) | 6 |
 | Core behaviors | 3 |
-| **总计** | **151** |
+| **总计** | **153** |
 
 ## 数据源说明
 

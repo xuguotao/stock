@@ -144,6 +144,7 @@ class BacktestEngine:
         rebalance_days: int = 5,
         initial_capital: float = 1_000_000.0,
         equal_weight: bool = True,
+        min_score: float | None = None,
     ):
         """Initialize backtest engine.
 
@@ -155,6 +156,7 @@ class BacktestEngine:
             rebalance_days: Days between rebalancing.
             initial_capital: Starting cash.
             equal_weight: If True, allocate equally to each position.
+            min_score: Minimum raw factor score required before ranking.
         """
         self.bars = bars.sort_index()
         self.factors = factors
@@ -163,6 +165,7 @@ class BacktestEngine:
         self.rebalance_days = rebalance_days
         self.initial_capital = initial_capital
         self.equal_weight = equal_weight
+        self.min_score = min_score
 
         self.broker = SimulatedBroker(initial_capital=initial_capital)
 
@@ -213,6 +216,7 @@ class BacktestEngine:
                         if isinstance(scores_series, pd.DataFrame):
                             # Multiple columns - take mean across factors
                             scores_series = scores_series.mean(axis=1)
+                        scores_series = scores_series.dropna()
                         ranked = scores_series.rank(ascending=False, pct=False)
                         selected = ranked.nsmallest(self.top_n).index.tolist()
 
@@ -281,6 +285,8 @@ class BacktestEngine:
             try:
                 values = factor.compute(bars_to_date)
                 if not values.empty:
+                    if self.min_score is not None:
+                        values = values.where(values >= self.min_score)
                     ranked = values.groupby(level=0).rank(pct=True)
                     scores.append(ranked * weight)
             except Exception as e:

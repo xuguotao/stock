@@ -5,6 +5,7 @@ Usage:
     python scripts/run_tail_session_backtest.py
     python scripts/run_tail_session_backtest.py --start 2023-01-01 --end 2025-06-01
     python scripts/run_tail_session_backtest.py --capital 200000 --top-n 3
+    python scripts/run_tail_session_backtest.py --bars-dataset data/research/daily_bars_liquid10.parquet --min-score 0.7
 """
 
 from __future__ import annotations
@@ -152,6 +153,7 @@ def main() -> None:
     parser.add_argument("--end", default="2025-06-01", help="End date")
     parser.add_argument("--capital", type=float, default=100_000, help="Initial capital")
     parser.add_argument("--top-n", type=int, default=5, help="Number of stocks to hold")
+    parser.add_argument("--min-score", type=float, default=None, help="Minimum raw factor score required before ranking")
     parser.add_argument("--symbols", nargs="+", help="Specific symbols to test")
     parser.add_argument("--limit", type=int, default=50, help="Default stock-pool size when --symbols is omitted")
     parser.add_argument("--output-json", help="Write metrics to JSON file")
@@ -191,7 +193,7 @@ def main() -> None:
     )
     overnight_factor = OvernightMomentumFactor(smoothing_window=1)
 
-    print(f"Running backtest with capital={args.capital}, top_n={args.top_n}...")
+    print(f"Running backtest with capital={args.capital}, top_n={args.top_n}, min_score={args.min_score}...")
     engine = BacktestEngine(
         bars=bars,
         factors=[tail_factor, overnight_factor],
@@ -200,6 +202,7 @@ def main() -> None:
         rebalance_days=1,
         initial_capital=args.capital,
         equal_weight=True,
+        min_score=args.min_score,
     )
 
     result = engine.run()

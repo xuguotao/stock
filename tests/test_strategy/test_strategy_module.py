@@ -520,6 +520,30 @@ class TestBacktestEngine:
         assert len(result.daily_returns) > 0
         assert len(result.trades) >= 0
 
+    def test_min_score_blocks_weak_signals(self) -> None:
+        from config.settings import reset_settings
+        reset_settings()
+
+        class ConstantFactor(Factor):
+            name = "constant"
+
+            def compute(self, bars: pd.DataFrame, **kwargs):
+                return pd.DataFrame({"constant": 0.0}, index=bars.index)
+
+        bars = _sample_bars()
+        engine = BacktestEngine(
+            bars=bars,
+            factors=[ConstantFactor()],
+            top_n=2,
+            rebalance_days=1,
+            initial_capital=100_000,
+            min_score=0.1,
+        )
+
+        result = engine.run()
+
+        assert len(result.trades) == 0
+
     def test_backtest_metrics(self) -> None:
         from config.settings import reset_settings
         reset_settings()

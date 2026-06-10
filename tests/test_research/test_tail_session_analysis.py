@@ -44,8 +44,8 @@ def test_evaluate_tail_session_grid_returns_metrics_per_config() -> None:
     results = evaluate_tail_session_grid(
         bars=_bars(),
         configs=[
-            {"breakout_window": 10, "trend_window": 3, "volume_ratio_threshold": 1.0, "top_n": 1},
-            {"breakout_window": 20, "trend_window": 5, "volume_ratio_threshold": 1.2, "top_n": 2},
+            {"breakout_window": 10, "trend_window": 3, "volume_ratio_threshold": 1.0, "top_n": 1, "min_score": 0.4},
+            {"breakout_window": 20, "trend_window": 5, "volume_ratio_threshold": 1.2, "top_n": 2, "min_score": 0.7},
         ],
         initial_capital=100_000,
     )
@@ -56,9 +56,25 @@ def test_evaluate_tail_session_grid_returns_metrics_per_config() -> None:
         "trend_window",
         "volume_ratio_threshold",
         "top_n",
+        "min_score",
         "total_return",
         "sharpe_ratio",
         "win_rate",
         "max_drawdown",
         "trade_count",
     }.issubset(results.columns)
+
+
+def test_evaluate_tail_session_grid_min_score_can_block_trades() -> None:
+    results = evaluate_tail_session_grid(
+        bars=_bars(),
+        configs=[
+            {"breakout_window": 10, "trend_window": 3, "volume_ratio_threshold": 1.0, "top_n": 2, "min_score": 0.0},
+            {"breakout_window": 10, "trend_window": 3, "volume_ratio_threshold": 1.0, "top_n": 2, "min_score": 1.1},
+        ],
+        initial_capital=100_000,
+    )
+
+    low_threshold = results.loc[results["min_score"] == 0.0, "trade_count"].iloc[0]
+    high_threshold = results.loc[results["min_score"] == 1.1, "trade_count"].iloc[0]
+    assert high_threshold < low_threshold

@@ -9,6 +9,7 @@ Usage:
       --trend-windows 3 5 \
       --volume-thresholds 1.0 1.2 \
       --top-n 3 5 \
+      --min-scores 0 0.4 0.7 \
       --output reports/tail_session/grid_liquid10.csv
 """
 
@@ -37,6 +38,13 @@ def main() -> None:
     parser.add_argument("--trend-windows", type=int, nargs="+", default=[3, 5])
     parser.add_argument("--volume-thresholds", type=float, nargs="+", default=[1.0, 1.2])
     parser.add_argument("--top-n", type=int, nargs="+", default=[3, 5])
+    parser.add_argument(
+        "--min-scores",
+        type=float,
+        nargs="+",
+        default=[None],
+        help="Minimum raw factor score required before ranking; omit for no gate",
+    )
     parser.add_argument("--capital", type=float, default=100_000)
     parser.add_argument("--output", default="reports/tail_session/grid_results.csv")
     args = parser.parse_args()
@@ -53,6 +61,7 @@ def main() -> None:
         "trend_window": args.trend_windows,
         "volume_ratio_threshold": args.volume_thresholds,
         "top_n": args.top_n,
+        "min_score": args.min_scores,
     })
     print(f"Loaded {len(bars)} bars; evaluating {len(configs)} configs...")
 
