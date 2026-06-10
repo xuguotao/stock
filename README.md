@@ -68,6 +68,16 @@ python scripts/run_tail_session_backtest.py \
   --start 2024-01-01 \
   --end 2025-06-01
 
+# 离线参数网格评估，输出 CSV
+python scripts/evaluate_tail_session_grid.py \
+  --bars-dataset data/research/daily_bars_sample.parquet \
+  --start 2024-01-01 \
+  --end 2025-06-01 \
+  --breakout-windows 10 20 \
+  --trend-windows 3 5 \
+  --volume-thresholds 1.0 1.2 \
+  --top-n 3 5
+
 # 默认回测沪深300前50只
 python scripts/run_tail_session_backtest.py
 
@@ -144,6 +154,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 ├── scripts/
 │   ├── download_history.py    # 数据下载脚本
 │   ├── build_research_dataset.py # 离线研究数据集构建
+│   ├── evaluate_tail_session_grid.py # 尾盘策略参数网格评估
 │   ├── monitor_zijin.py       # 紫金矿业监控
 │   └── test_network.py        # 网络诊断脚本
 └── notebooks/                 # Jupyter研究笔记
@@ -187,6 +198,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 - 回测脚本: `python scripts/run_tail_session_backtest.py`
 - 分钟级K线入口: `DataAggregator.get_intraday_bars()`
 - 离线研究数据集: `python scripts/build_research_dataset.py`
+- 参数网格评估: `python scripts/evaluate_tail_session_grid.py`
 - 尾盘分钟级扫描器 (IntradayScanner)
 - 模拟实盘执行器 (RealTimeExecutor)
 - 模拟扫描脚本: `python scripts/run_tail_session_live.py`
@@ -200,10 +212,10 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 | Data (models, cache, aggregator, research dataset) | 21 |
 | Strategy (factors, broker, backtest, tail session) | 71 |
 | Trading (signal, risk, scheduler, paper) | 34 |
-| Research (neutralization, IC, quantile, fund tail) | 14 |
+| Research (neutralization, IC, quantile, fund tail, tail grid) | 16 |
 | Monitoring (紫金) | 6 |
 | Core behaviors | 3 |
-| **总计** | **149** |
+| **总计** | **151** |
 
 ## 数据源说明
 

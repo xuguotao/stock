@@ -14,8 +14,10 @@
 - ✅ Phase 2 minimum paper-trading loop is implemented and verified: Sina intraday bars via `DataAggregator.get_intraday_bars()`, `IntradayScanner`, `RealTimeExecutor`, daily Markdown reports, and `scripts/run_tail_session_live.py`.
 - ✅ Research loop improvements are implemented: vectorized `TailSessionFactor`, progress output, `--limit`, `--offline-cache`, and `--output-json` for `scripts/run_tail_session_backtest.py`.
 - ✅ Research dataset builder is implemented: `scripts/build_research_dataset.py`, `src/data/research_dataset.py`, and `--bars-dataset` support for backtests. Parquet is the primary research store; MySQL remains optional for metadata/trading records.
-- ✅ Verification run: `pytest tests/ -q` passes with 149 tests.
+- ✅ Parameter-grid diagnostics are implemented: `scripts/evaluate_tail_session_grid.py` and `src/research/tail_session_analysis.py`.
+- ✅ Verification run: `pytest tests/ -q` passes with 151 tests.
 - 📉 Latest offline-cache sample result (10 liquid symbols, 2024-01-01 to 2025-06-01): total return 2.59%, Sharpe -0.006, win rate 44.54%, max drawdown -13.32%, 1450 trades.
+- 📉 Latest grid smoke result: 10-day breakout did not improve Sharpe (-0.022) versus 20-day breakout (-0.006).
 - 📋 Still market-dependent / not asserted as complete: Sharpe ratio > 0.8, win rate > 50%, and five consecutive real trading days of live paper operation.
 
 ---
