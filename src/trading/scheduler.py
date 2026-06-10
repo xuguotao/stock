@@ -99,3 +99,10 @@ class TradingScheduler:
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Scheduler callback error: {e}")
+
+    def is_tail_session(self, current_time: time | None = None) -> bool:
+        """Check if within tail session (14:30-15:00)."""
+        now = current_time or datetime.now().time()
+        tail_start = time(14, 30)
+        tail_end = time(15, 0)
+        return tail_start <= now <= tail_end
