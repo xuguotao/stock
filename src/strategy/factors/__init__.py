@@ -5,6 +5,7 @@ from src.strategy.factors.trend import TrendFactor
 from src.strategy.factors.mean_reversion import MeanReversionFactor
 from src.strategy.factors.value import ValueFactor
 from src.strategy.factors.composite import CompositeFactor
+from src.strategy.factors.tail_session import TailSessionFactor
 
 __all__ = [
     "MomentumFactor",
@@ -12,4 +13,5 @@ __all__ = [
     "MeanReversionFactor",
     "ValueFactor",
     "CompositeFactor",
+    "TailSessionFactor",
 ]
