@@ -6,6 +6,7 @@ from src.strategy.factors.mean_reversion import MeanReversionFactor
 from src.strategy.factors.value import ValueFactor
 from src.strategy.factors.composite import CompositeFactor
 from src.strategy.factors.tail_session import TailSessionFactor
+from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
 
 __all__ = [
     "MomentumFactor",
@@ -14,4 +15,5 @@ __all__ = [
     "ValueFactor",
     "CompositeFactor",
     "TailSessionFactor",
+    "OvernightMomentumFactor",
 ]

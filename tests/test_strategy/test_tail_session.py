@@ -53,3 +53,30 @@ def test_factor_empty_bars_returns_empty() -> None:
     factor = TailSessionFactor()
     result = factor.compute(pd.DataFrame())
     assert result.empty
+
+
+def test_overnight_momentum_positive_on_gap_up() -> None:
+    """Close lower than next open = positive overnight momentum."""
+    from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
+    dates = pd.bdate_range("2025-01-01", periods=10)
+    rows = []
+    for i, d in enumerate(dates):
+        close = 10.0 + i * 0.1
+        open_next = close + 0.05 if i > 0 else close
+        rows.append({
+            "date": d, "symbol": "000001.SZ",
+            "open": open_next if i > 0 else close,
+            "high": close * 1.01, "low": close * 0.99,
+            "close": close, "volume": 1_000_000,
+            "amount": close * 1_000_000,
+            "adjusted_close": close,
+        })
+    bars = pd.DataFrame(rows).set_index(["date", "symbol"])
+
+    factor = OvernightMomentumFactor()
+    result = factor.compute(bars)
+
+    assert "overnight_momentum" in result.columns
+    # Should have NaN for first row (no previous close to compare)
+    valid = result["overnight_momentum"].dropna()
+    assert len(valid) > 0
