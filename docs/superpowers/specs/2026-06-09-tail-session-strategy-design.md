@@ -228,6 +228,12 @@ if scheduler.is_market_hours():
 - [ ] 夏普比率 > 0.8，胜率 > 50%
 - [x] README 更新使用文档
 - [x] 支持本地 parquet 缓存离线回测，避免研究循环依赖实时网络
+- [x] 支持构建稳定研究数据集：`python scripts/build_research_dataset.py`
+
+**存储策略**：
+- Parquet 是研究回测主存储，用于批量读取 K 线面板数据。
+- MySQL 可作为后续元数据、任务状态、实盘信号和交易记录库；不作为 pandas 回测的主读路径。
+- 研究数据集默认输出到 `data/research/*.parquet`，manifest 记录样本范围、股票数、缺失股票和来源缓存文件。
 
 **当前样本结果（2024-01-01 至 2025-06-01，10 只高流动性代表股）**：
 - 总收益：2.59%

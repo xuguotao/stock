@@ -38,6 +38,7 @@ htmlcov/
 data/cache/
 data/raw/
 data/processed/
+data/research/
 data/downloads/
 data/*.parquet
 data/*.feather

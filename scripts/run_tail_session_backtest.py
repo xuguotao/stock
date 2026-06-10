@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
 from config.settings import reset_settings
 from src.core.constants import format_symbol
 from src.data.aggregator import DataAggregator
+from src.data.research_dataset import dataset_symbols, load_research_dataset
 from src.strategy.engine.backtest import BacktestEngine
 from src.strategy.factors.tail_session import TailSessionFactor
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
@@ -115,6 +116,18 @@ def load_bars_from_offline_cache(
     return combined.set_index(["date", "symbol"]).sort_index()
 
 
+def load_bars_from_research_dataset(
+    dataset_path: str | Path,
+    raw_symbols: list[str] | None,
+    start: date,
+    end: date,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Load bars from a consolidated research dataset."""
+    symbols = [format_symbol(s) for s in raw_symbols] if raw_symbols else dataset_symbols(dataset_path)
+    bars = load_research_dataset(dataset_path, symbols=symbols, start=start, end=end)
+    return bars, symbols
+
+
 def write_metrics_json(path: str | Path, result, symbol_count: int) -> Path:
     """Write backtest metrics to JSON."""
     output_path = Path(path)
@@ -145,22 +158,27 @@ def main() -> None:
     parser.add_argument("--fallback-sources", action="store_true", help="Enable fallback data sources beyond Sina")
     parser.add_argument("--offline-cache", action="store_true", help="Read local parquet bars directly and do not fetch network data")
     parser.add_argument("--bars-cache-dir", default="data/cache/bars", help="Directory for --offline-cache parquet files")
+    parser.add_argument("--bars-dataset", help="Consolidated research dataset parquet file")
     args = parser.parse_args()
 
     reset_settings()
     agg = make_aggregator(fallback_sources=args.fallback_sources)
 
-    symbols = resolve_symbols(agg, args.symbols, args.limit)
-
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)
 
-    print(f"Loading data for {len(symbols)} symbols ({start} to {end})...")
-    if args.offline_cache:
-        bars = load_bars_from_offline_cache(args.bars_cache_dir, symbols, start, end)
+    if args.bars_dataset:
+        bars, symbols = load_bars_from_research_dataset(args.bars_dataset, args.symbols, start, end)
+        print(f"Loading data from dataset {args.bars_dataset}...")
+        print(f"Loaded {len(bars)} bars")
     else:
-        bars = load_bars_with_progress(agg, symbols, start, end)
-    print(f"Loaded {len(bars)} bars")
+        symbols = resolve_symbols(agg, args.symbols, args.limit)
+        print(f"Loading data for {len(symbols)} symbols ({start} to {end})...")
+        if args.offline_cache:
+            bars = load_bars_from_offline_cache(args.bars_cache_dir, symbols, start, end)
+        else:
+            bars = load_bars_with_progress(agg, symbols, start, end)
+        print(f"Loaded {len(bars)} bars")
 
     if bars.empty:
         print("No data loaded. Check engine or cache.")

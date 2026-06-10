@@ -6,6 +6,7 @@ import pandas as pd
 
 from scripts.run_tail_session_backtest import (
     load_bars_from_offline_cache,
+    load_bars_from_research_dataset,
     load_bars_with_progress,
     make_aggregator,
     resolve_symbols,
@@ -107,3 +108,21 @@ def test_load_bars_from_offline_cache_uses_covering_parquet_file(tmp_path) -> No
 
     assert len(bars) == 2
     assert bars.index.names == ["date", "symbol"]
+
+
+def test_load_bars_from_research_dataset_uses_all_symbols_when_none_requested(tmp_path) -> None:
+    dataset_path = tmp_path / "daily_bars.parquet"
+    pd.DataFrame([
+        {"date": pd.Timestamp("2024-01-02"), "symbol": "000001.SZ", "open": 10, "high": 10, "low": 10, "close": 10, "volume": 1, "amount": 10, "adjusted_close": 10},
+        {"date": pd.Timestamp("2024-01-02"), "symbol": "600519.SH", "open": 20, "high": 20, "low": 20, "close": 20, "volume": 1, "amount": 20, "adjusted_close": 20},
+    ]).to_parquet(dataset_path, index=False)
+
+    bars, symbols = load_bars_from_research_dataset(
+        dataset_path,
+        raw_symbols=None,
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 2),
+    )
+
+    assert symbols == ["000001.SZ", "600519.SH"]
+    assert len(bars) == 2
