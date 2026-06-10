@@ -21,6 +21,7 @@ from config.settings import reset_settings
 from src.core.constants import format_symbol
 from src.data.aggregator import DataAggregator
 from src.strategy.executor import RealTimeExecutor
+from src.strategy.reports import write_tail_session_report
 from src.strategy.scanner import IntradayScanner
 from src.trading.paper_account import PaperAccount
 from src.trading.risk_manager import RiskManager
@@ -51,6 +52,7 @@ def main() -> None:
     parser.add_argument("--confirmations", type=int, default=3, help="Consecutive confirmations required")
     parser.add_argument("--trade-date", default=None, help="Trade date, YYYY-MM-DD. Defaults to today")
     parser.add_argument("--ignore-session", action="store_true", help="Run even outside 14:30-15:00")
+    parser.add_argument("--report-dir", default="reports/tail_session", help="Directory for Markdown daily reports")
     args = parser.parse_args()
 
     reset_settings()
@@ -81,6 +83,15 @@ def main() -> None:
     executor = RealTimeExecutor(account=account, risk_manager=RiskManager())
     trades = executor.execute_buy_signals(confirmed, prices, trade_date)
     account_path = account.save()
+    report_path = write_tail_session_report(
+        output_dir=args.report_dir,
+        trade_date=trade_date,
+        scanned_count=len(symbols),
+        candidates=candidates,
+        confirmed=confirmed,
+        trades=trades,
+        account_summary=account.summary(),
+    )
 
     print("=" * 50)
     print("Tail Session Paper Scan")
@@ -93,6 +104,7 @@ def main() -> None:
     for trade in trades:
         print(f"  {trade.side.upper()} {trade.symbol} {trade.quantity} @ {trade.price:.2f}")
     print(f"Account saved  : {account_path}")
+    print(f"Report saved   : {report_path}")
 
 
 if __name__ == "__main__":

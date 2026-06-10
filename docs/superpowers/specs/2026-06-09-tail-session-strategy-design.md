@@ -112,6 +112,7 @@ T+1 日 9:30-10:00 → 止盈/止损触发或强制平仓
 | `src/data/intraday_source.py` | 分钟级 K 线数据源 | `SinaSource`, `AKShareSource` |
 | `src/strategy/scanner.py` | `IntradayScanner` — 实时扫描器 | `intraday_source` |
 | `src/strategy/executor.py` | `RealTimeExecutor` — 执行器 | `scanner`, `PaperAccount` |
+| `src/strategy/reports.py` | Markdown 日报生成 | `TailSessionSignal`, `BrokerTrade` |
 | `src/trading/scheduler.py` | 新增 `is_tail_session()` | 已有 `TradingScheduler` |
 | `scripts/run_tail_session_live.py` | 模拟实盘脚本 | 全部 |
 
@@ -174,7 +175,16 @@ executor = RealTimeExecutor(paper_account, risk_manager)
 if scheduler.is_tail_session() and scheduler.is_trading_day():
     candidates = scanner.scan(symbols, trade_date)  # 扫描股票池
     signals = scanner.confirm(candidates) # 确认买入信号
-    executor.execute_buy_signals(signals, prices, trade_date)
+    trades = executor.execute_buy_signals(signals, prices, trade_date)
+    write_tail_session_report(
+        output_dir="reports/tail_session",
+        trade_date=trade_date,
+        scanned_count=len(symbols),
+        candidates=candidates,
+        confirmed=signals,
+        trades=trades,
+        account_summary=paper_account.summary(),
+    )
 
 # 次日 9:30 卖出
 if scheduler.is_market_hours():
@@ -223,4 +233,4 @@ if scheduler.is_market_hours():
 - [x] `IntradayScanner` 单元测试通过
 - [x] 模拟实盘单次扫描脚本可运行
 - [ ] 模拟实盘可连续运行 5 个交易日无报错
-- [ ] 每日自动生成交易报告
+- [x] 每日自动生成交易报告

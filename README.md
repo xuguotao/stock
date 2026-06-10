@@ -73,6 +73,9 @@ python scripts/run_tail_session_live.py --symbols 000001 600519
 
 # 手动演练，不检查当前时间窗口
 python scripts/run_tail_session_live.py --symbols 000001 --ignore-session --confirmations 1
+
+# 指定日报输出目录
+python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/tail_session
 ```
 
 ## 项目结构
@@ -111,7 +114,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --ignore-session --conf
 │       ├── signal_engine.py   # 信号引擎
 │       ├── risk_manager.py    # 风控管理器
 │       └── scheduler.py       # 交易调度器
-├── tests/                     # 测试套件 (138个测试)
+├── tests/                     # 测试套件 (140个测试)
 │   ├── test_data/             # 数据层测试
 │   ├── test_strategy/         # 策略层测试
 │   ├── test_trading/          # 交易层测试
@@ -163,6 +166,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --ignore-session --conf
 - 尾盘分钟级扫描器 (IntradayScanner)
 - 模拟实盘执行器 (RealTimeExecutor)
 - 模拟扫描脚本: `python scripts/run_tail_session_live.py`
+- 每日 Markdown 交易报告: `reports/tail_session/`
 - 交易调度器扩展 (is_tail_session)
 
 ### 测试覆盖
@@ -170,12 +174,12 @@ python scripts/run_tail_session_live.py --symbols 000001 --ignore-session --conf
 | 模块 | 测试数 |
 |------|--------|
 | Data (models, cache, aggregator) | 19 |
-| Strategy (factors, broker, backtest, tail session) | 62 |
+| Strategy (factors, broker, backtest, tail session) | 64 |
 | Trading (signal, risk, scheduler, paper) | 34 |
 | Research (neutralization, IC, quantile, fund tail) | 14 |
 | Monitoring (紫金) | 6 |
 | Core behaviors | 3 |
-| **总计** | **138** |
+| **总计** | **140** |
 
 ## 数据源说明
 

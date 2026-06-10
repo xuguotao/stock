@@ -11,9 +11,9 @@
 **Current execution status (2026-06-10):**
 - ✅ Phase 1 code path is implemented and verified: daily filters, stock pool filter, tail-session factor, overnight momentum factor, backtest script, and scheduler tail-session window.
 - ✅ Phase 1 credibility fixes are implemented: filters truncate to `trade_date`, tail-session factors only score symbols present on each date, and overnight momentum preserves first-row `NaN`.
-- ✅ Phase 2 minimum paper-trading loop is implemented and verified: Sina intraday bars via `DataAggregator.get_intraday_bars()`, `IntradayScanner`, `RealTimeExecutor`, and `scripts/run_tail_session_live.py`.
-- ✅ Verification run: `pytest tests/ -q` passes with 138 tests.
-- 📋 Still market-dependent / not asserted as complete: Sharpe ratio > 0.8, win rate > 50%, five consecutive real trading days of live paper operation, and daily report generation.
+- ✅ Phase 2 minimum paper-trading loop is implemented and verified: Sina intraday bars via `DataAggregator.get_intraday_bars()`, `IntradayScanner`, `RealTimeExecutor`, daily Markdown reports, and `scripts/run_tail_session_live.py`.
+- ✅ Verification run: `pytest tests/ -q` passes with 140 tests.
+- 📋 Still market-dependent / not asserted as complete: Sharpe ratio > 0.8, win rate > 50%, and five consecutive real trading days of live paper operation.
 
 ---
 
