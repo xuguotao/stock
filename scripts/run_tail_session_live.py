@@ -4,6 +4,7 @@
 Usage:
     python scripts/run_tail_session_live.py --symbols 000001 600519
     python scripts/run_tail_session_live.py --limit 20 --confirmations 1
+    python scripts/run_tail_session_live.py --limit 50 --selection-only --output-json reports/tail_session/latest_selection.json
 """
 
 from __future__ import annotations
@@ -21,7 +22,12 @@ from config.settings import reset_settings
 from src.core.constants import format_symbol
 from src.data.aggregator import DataAggregator
 from src.strategy.executor import RealTimeExecutor
-from src.strategy.reports import write_tail_session_report
+from src.strategy.reports import (
+    select_tail_session_signals,
+    write_tail_session_report,
+    write_tail_session_selection_csv,
+    write_tail_session_selection_json,
+)
 from src.strategy.scanner import IntradayScanner
 from src.trading.paper_account import PaperAccount
 from src.trading.risk_manager import RiskManager
@@ -50,6 +56,11 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=20, help="Number of default symbols to scan")
     parser.add_argument("--capital", type=float, default=100_000, help="Paper account initial capital")
     parser.add_argument("--confirmations", type=int, default=3, help="Consecutive confirmations required")
+    parser.add_argument("--top-n", type=int, default=5, help="Maximum final selected symbols")
+    parser.add_argument("--min-strength", type=float, default=None, help="Minimum signal strength for final selection")
+    parser.add_argument("--selection-only", action="store_true", help="Only output selected symbols; do not paper trade")
+    parser.add_argument("--output-json", help="Write final selections to JSON")
+    parser.add_argument("--output-csv", help="Write final selections to CSV")
     parser.add_argument("--trade-date", default=None, help="Trade date, YYYY-MM-DD. Defaults to today")
     parser.add_argument("--ignore-session", action="store_true", help="Run even outside 14:30-15:00")
     parser.add_argument("--report-dir", default="reports/tail_session", help="Directory for Markdown daily reports")
@@ -75,22 +86,37 @@ def main() -> None:
     scanner = IntradayScanner(aggregator, confirmation_count=args.confirmations)
     candidates = scanner.scan(symbols, trade_date)
     confirmed = scanner.confirm(candidates)
+    selected = select_tail_session_signals(
+        confirmed,
+        top_n=args.top_n,
+        min_strength=args.min_strength,
+    )
 
-    quotes = aggregator.get_realtime_quotes([signal.symbol for signal in confirmed]) if confirmed else None
-    prices = _prices_from_quotes(quotes, confirmed)
+    quotes = aggregator.get_realtime_quotes([signal.symbol for signal in selected]) if selected else None
+    prices = _prices_from_quotes(quotes, selected)
 
-    account = PaperAccount(initial_capital=args.capital)
-    executor = RealTimeExecutor(account=account, risk_manager=RiskManager())
-    trades = executor.execute_buy_signals(confirmed, prices, trade_date)
-    account_path = account.save()
+    account_path = None
+    trades = []
+    if args.selection_only:
+        account_summary = {}
+    else:
+        account = PaperAccount(initial_capital=args.capital)
+        executor = RealTimeExecutor(account=account, risk_manager=RiskManager())
+        trades = executor.execute_buy_signals(selected, prices, trade_date)
+        account_path = account.save()
+        account_summary = account.summary()
+
+    json_path = write_tail_session_selection_json(args.output_json, selected) if args.output_json else None
+    csv_path = write_tail_session_selection_csv(args.output_csv, selected) if args.output_csv else None
     report_path = write_tail_session_report(
         output_dir=args.report_dir,
         trade_date=trade_date,
         scanned_count=len(symbols),
         candidates=candidates,
         confirmed=confirmed,
+        selected=selected,
         trades=trades,
-        account_summary=account.summary(),
+        account_summary=account_summary,
     )
 
     print("=" * 50)
@@ -100,10 +126,18 @@ def main() -> None:
     print(f"Scanned symbols: {len(symbols)}")
     print(f"Candidates     : {len(candidates)}")
     print(f"Confirmed      : {len(confirmed)}")
+    print(f"Selected       : {len(selected)}")
+    for signal in selected:
+        print(f"  SELECT {signal.symbol} strength={signal.strength:.3f} price={signal.last_price:.2f}")
     print(f"Trades         : {len(trades)}")
     for trade in trades:
         print(f"  {trade.side.upper()} {trade.symbol} {trade.quantity} @ {trade.price:.2f}")
-    print(f"Account saved  : {account_path}")
+    if account_path is not None:
+        print(f"Account saved  : {account_path}")
+    if json_path is not None:
+        print(f"Selection JSON : {json_path}")
+    if csv_path is not None:
+        print(f"Selection CSV  : {csv_path}")
     print(f"Report saved   : {report_path}")
 
 

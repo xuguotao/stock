@@ -266,3 +266,4 @@ if scheduler.is_market_hours():
 - [x] 模拟实盘单次扫描脚本可运行
 - [ ] 模拟实盘可连续运行 5 个交易日无报错
 - [x] 每日自动生成交易报告
+- [x] 每日尾盘可输出最终选股名单：`--selection-only --output-json --output-csv`

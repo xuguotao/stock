@@ -101,6 +101,15 @@ python scripts/run_tail_session_backtest.py \
 ### 6. 运行尾盘模拟扫描
 
 ```bash
+# 每天尾盘只输出最终选股名单，不模拟下单
+python scripts/run_tail_session_live.py \
+  --limit 50 \
+  --selection-only \
+  --confirmations 1 \
+  --top-n 5 \
+  --output-json reports/tail_session/latest_selection.json \
+  --output-csv reports/tail_session/latest_selection.csv
+
 # 交易日 14:30-15:00 窗口内运行
 python scripts/run_tail_session_live.py --symbols 000001 600519
 
@@ -203,6 +212,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 - 参数网格评估: `python scripts/evaluate_tail_session_grid.py`
 - 最小入场分数门槛: `--min-score` / `--min-scores`
 - 尾盘分钟级扫描器 (IntradayScanner)
+- 最终选股名单输出: `--selection-only`, `--output-json`, `--output-csv`
 - 模拟实盘执行器 (RealTimeExecutor)
 - 模拟扫描脚本: `python scripts/run_tail_session_live.py`
 - 每日 Markdown 交易报告: `reports/tail_session/`
@@ -213,12 +223,12 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 | 模块 | 测试数 |
 |------|--------|
 | Data (models, cache, aggregator, research dataset) | 21 |
-| Strategy (factors, broker, backtest, tail session) | 72 |
+| Strategy (factors, broker, backtest, tail session) | 74 |
 | Trading (signal, risk, scheduler, paper) | 34 |
 | Research (neutralization, IC, quantile, fund tail, tail grid) | 17 |
 | Monitoring (紫金) | 6 |
 | Core behaviors | 3 |
-| **总计** | **153** |
+| **总计** | **155** |
 
 ## 数据源说明
 

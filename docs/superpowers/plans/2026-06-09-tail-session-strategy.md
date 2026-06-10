@@ -8,7 +8,7 @@
 
 **Tech Stack:** pandas, numpy, scipy (线性回归), pytest, existing src/ modules
 
-**Current execution status (2026-06-10):**
+**Current execution status (2026-06-11):**
 - ✅ Phase 1 code path is implemented and verified: daily filters, stock pool filter, tail-session factor, overnight momentum factor, backtest script, and scheduler tail-session window.
 - ✅ Phase 1 credibility fixes are implemented: filters truncate to `trade_date`, tail-session factors only score symbols present on each date, and overnight momentum preserves first-row `NaN`.
 - ✅ Phase 2 minimum paper-trading loop is implemented and verified: Sina intraday bars via `DataAggregator.get_intraday_bars()`, `IntradayScanner`, `RealTimeExecutor`, daily Markdown reports, and `scripts/run_tail_session_live.py`.
@@ -16,7 +16,8 @@
 - ✅ Research dataset builder is implemented: `scripts/build_research_dataset.py`, `src/data/research_dataset.py`, and `--bars-dataset` support for backtests. Parquet is the primary research store; MySQL remains optional for metadata/trading records.
 - ✅ Parameter-grid diagnostics are implemented: `scripts/evaluate_tail_session_grid.py` and `src/research/tail_session_analysis.py`.
 - ✅ Minimum entry score diagnostics are implemented: `BacktestEngine(min_score=...)`, `scripts/run_tail_session_backtest.py --min-score`, and `scripts/evaluate_tail_session_grid.py --min-scores`.
-- ✅ Verification run: `pytest tests/ -q` passes with 153 tests.
+- ✅ Daily tail-session selection output is implemented: `scripts/run_tail_session_live.py --selection-only --output-json --output-csv` writes the final ranked stock list without paper trading.
+- ✅ Verification run: `pytest tests/ -q` passes with 155 tests.
 - 📉 Latest offline-cache sample result (10 liquid symbols, 2024-01-01 to 2025-06-01): total return 2.59%, Sharpe -0.006, win rate 44.54%, max drawdown -13.32%, 1450 trades.
 - 📉 Latest grid smoke result: 10-day breakout did not improve Sharpe (-0.022) versus 20-day breakout (-0.006).
 - 📈 Latest min-score grid result (same 10-symbol sample, 20-day breakout, 5-day trend, volume threshold 1.2, top_n=5): min_score 1.0 produced total return 11.78%, Sharpe 0.788, max drawdown -5.77%, 240 trades.
