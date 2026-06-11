@@ -35,9 +35,10 @@ frontend/               Vue + ECharts 后台控制台
 - `src.web.backend.jobs`：SQLite 任务元数据存储，记录任务参数、状态、结果、错误和时间戳。
 - `src.web.backend.datasets`：扫描本地 research parquet，读取 manifest、parquet metadata 和符号列表，服务数据中心页面。
 - `src.web.backend.backtests`：尾盘回测 API 模型和执行器，复用现有 `BacktestEngine`、`TailSessionFactor` 和 research dataset 读取能力。
-- `frontend/`：Vue 3 + TypeScript + Element Plus + ECharts 控制台，当前包含总览、数据中心、任务中心和尾盘回测页面。
+- `src.web.backend.fund_tail`：基金尾盘 Web 适配层，复用现有基金尾盘研究函数和本地 CSV 输入，提供基金池状态、最新报告读取和建议任务生成。
+- `frontend/`：Vue 3 + TypeScript + Element Plus + ECharts 控制台，当前包含总览、数据中心、任务中心、尾盘回测和基金尾盘页面。
 
-Web 层只做编排、可视化和任务状态管理，不复制策略逻辑。数据中心只读取本地 `data/research/*.parquet` 的摘要和符号列表，不负责联网下载。尾盘回测页面通过 `dataset_id` 选择数据集，由后端在配置的 `dataset_root` 下解析成本地路径，前端不直接依赖文件系统布局。耗时任务通过 job 记录追踪；第一期支持进程内后台任务，后续可替换为独立 worker 或队列。
+Web 层只做编排、可视化和任务状态管理，不复制策略逻辑。数据中心只读取本地 `data/research/*.parquet` 的摘要和符号列表，不负责联网下载。尾盘回测页面通过 `dataset_id` 选择数据集，由后端在配置的 `dataset_root` 下解析成本地路径，前端不直接依赖文件系统布局。基金尾盘页面通过本地 `data/fund_tail/*.csv` 生成报告，不在 Web 请求里执行联网下载。耗时任务通过 job 记录追踪；第一期支持进程内后台任务，后续可替换为独立 worker 或队列。
 
 ## 数据层
 

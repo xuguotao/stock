@@ -174,7 +174,7 @@ npm install
 npm run dev
 ```
 
-默认前端地址为 `http://127.0.0.1:5173`。第一期页面包含总览、数据中心、任务中心和尾盘回测；尾盘回测支持样例数据直接试跑，也可以从数据中心选择本地 research dataset。
+默认前端地址为 `http://127.0.0.1:5173`。第一期页面包含总览、数据中心、任务中心、尾盘回测和基金尾盘；尾盘回测支持样例数据直接试跑，也可以从数据中心选择本地 research dataset。
 
 数据中心会扫描 `data/research/*.parquet`，展示数据集文件、manifest、日期范围、行数、符号数和符号列表。对应 API：
 
@@ -185,6 +185,12 @@ npm run dev
 
 - `sample=true`：使用内置样例数据快速试跑。
 - `sample=false` 且传入 `dataset_id`：后端从 `data/research` 解析对应 parquet 文件，避免前端手填本地路径。
+
+基金尾盘页面复用 `data/fund_tail/*.csv` 和 `reports/fund_tail_*` 本地文件，支持查看基金池数据状态、读取最新建议报告、触发本地 CSV 重新生成建议任务。对应 API：
+
+- `GET /api/fund-tail/universe`
+- `GET /api/fund-tail/report`
+- `POST /api/fund-tail/advice`
 
 ## 项目结构
 

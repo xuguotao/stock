@@ -6,6 +6,7 @@
         <el-menu-item index="dashboard">总览</el-menu-item>
         <el-menu-item index="data">数据中心</el-menu-item>
         <el-menu-item index="backtest">尾盘回测</el-menu-item>
+        <el-menu-item index="fund-tail">基金尾盘</el-menu-item>
         <el-menu-item index="jobs">任务中心</el-menu-item>
       </el-menu>
     </el-aside>
@@ -18,6 +19,7 @@
         <Dashboard v-if="activePage === 'dashboard'" @open-backtest="activePage = 'backtest'" />
         <DataCenter v-else-if="activePage === 'data'" />
         <TailBacktest v-else-if="activePage === 'backtest'" />
+        <FundTail v-else-if="activePage === 'fund-tail'" />
         <Jobs v-else />
       </el-main>
     </el-container>
@@ -28,6 +30,7 @@
 import { ref } from 'vue'
 import DataCenter from './pages/DataCenter.vue'
 import Dashboard from './pages/Dashboard.vue'
+import FundTail from './pages/FundTail.vue'
 import Jobs from './pages/Jobs.vue'
 import TailBacktest from './pages/TailBacktest.vue'
 

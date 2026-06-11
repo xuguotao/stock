@@ -94,6 +94,13 @@ body {
   align-items: start;
 }
 
+.fund-tail-grid {
+  display: grid;
+  grid-template-columns: minmax(520px, 1.1fr) minmax(420px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .panel-title-row {
   margin-bottom: 12px;
 }
@@ -155,8 +162,21 @@ body {
   overflow-wrap: anywhere;
 }
 
+.markdown-preview {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #303640;
+}
+
 @media (max-width: 1080px) {
-  .data-center-grid {
+  .data-center-grid,
+  .fund-tail-grid {
     grid-template-columns: 1fr;
   }
 }
