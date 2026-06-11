@@ -174,6 +174,27 @@ body {
   color: #303640;
 }
 
+.json-preview {
+  margin: 10px 0 18px;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid #e1e5ea;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 12px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.drawer-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 14px 0;
+}
+
 @media (max-width: 1080px) {
   .data-center-grid,
   .fund-tail-grid {
