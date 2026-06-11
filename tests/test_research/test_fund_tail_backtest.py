@@ -172,6 +172,41 @@ def test_assigns_small_probe_for_weak_pullback_with_positive_history():
     assert decision["decision_reason"] == "pullback_with_positive_history"
 
 
+def test_assigns_wait_when_weak_below_trend_continues_for_two_days():
+    signals = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
+            "signal": ["avoid", "avoid"],
+            "reason": ["weak_below_trend", "weak_below_trend"],
+        }
+    )
+    metrics = pd.DataFrame(
+        {
+            "horizon": [5],
+            "count": [60],
+            "avg_return": [0.007],
+            "median_return": [0.006],
+            "win_rate": [0.66],
+            "worst_return": [-0.05],
+            "drawdown_risk": [0.10],
+        }
+    ).set_index("horizon")
+    condition = {
+        "condition_count": 20,
+        "condition_next_up_prob": 0.57,
+        "condition_next_down_prob": 0.43,
+        "condition_next_avg_return": -0.001,
+        "condition_next_median_return": 0.002,
+        "condition_next_down_gt_1pct": 0.2,
+    }
+
+    decision = assign_decision(signals, metrics, condition)
+
+    assert decision["decision_grade"] == "C"
+    assert decision["decision_action"] == "wait_for_stabilization"
+    assert decision["decision_reason"] == "consecutive_weak_needs_confirmation"
+
+
 def test_normalizes_akshare_nav_columns():
     raw = pd.DataFrame(
         {

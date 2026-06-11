@@ -285,6 +285,8 @@ def assign_decision(
         }
 
     latest = signals.sort_values("date").iloc[-1]
+    sorted_signals = signals.sort_values("date")
+    prev_reason = sorted_signals.iloc[-2]["reason"] if len(sorted_signals) >= 2 else None
     eval_horizon = 5 if 5 in metrics.index else metrics.index[-1]
     edge = metrics.loc[eval_horizon]
     avg_return = float(edge["avg_return"])
@@ -311,6 +313,12 @@ def assign_decision(
                 "decision_reason": "similar_history_downside_higher",
             }
         if latest["reason"] == "weak_below_trend":
+            if prev_reason == "weak_below_trend":
+                return {
+                    "decision_grade": "C",
+                    "decision_action": "wait_for_stabilization",
+                    "decision_reason": "consecutive_weak_needs_confirmation",
+                }
             if up_prob >= 0.54 and median_next > 0 and down_gt_1 <= 0.25:
                 return {
                     "decision_grade": "B",
@@ -453,6 +461,7 @@ CHINESE_VALUE_MAP = {
     "similar_history_rebound_slightly_higher": "同类历史反弹概率略高",
     "similar_history_edge_thin": "同类历史优势较薄",
     "similar_history_no_edge": "同类历史无明显优势",
+    "consecutive_weak_needs_confirmation": "连续弱势需要确认",
 }
 
 
