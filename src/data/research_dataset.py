@@ -101,6 +101,61 @@ def dataset_symbols(dataset_path: str | Path) -> list[str]:
     return sorted(df["symbol"].dropna().unique().tolist())
 
 
+def select_liquid_symbols_from_cache(
+    bars_dir: str | Path,
+    start: date,
+    end: date,
+    limit: int,
+    min_bars: int = 120,
+    min_end_date: date | None = None,
+) -> list[dict[str, Any]]:
+    """Rank cached symbols by average traded value over a date range."""
+    rows_by_symbol: dict[str, dict[str, Any]] = {}
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    min_end_ts = pd.Timestamp(min_end_date) if min_end_date else None
+
+    for path in Path(bars_dir).glob("*.parquet"):
+        try:
+            df = pd.read_parquet(path)
+        except Exception:
+            continue
+        if df.empty or not {"date", "symbol", "close", "volume"}.issubset(df.columns):
+            continue
+
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        mask = (df["date"] >= start_ts) & (df["date"] <= end_ts)
+        sample = df[mask]
+        if len(sample) < min_bars:
+            continue
+        if min_end_ts is not None and sample["date"].max() < min_end_ts:
+            continue
+
+        symbol = str(sample["symbol"].iloc[0])
+        traded_value = _traded_value(sample)
+        avg_traded_value = float(traded_value.mean())
+        row = {
+            "symbol": symbol,
+            "avg_traded_value": avg_traded_value,
+            "bar_count": int(len(sample)),
+            "start": sample["date"].min().date().isoformat(),
+            "end": sample["date"].max().date().isoformat(),
+            "source_file": str(path),
+        }
+
+        existing = rows_by_symbol.get(symbol)
+        if existing is None or row["bar_count"] > existing["bar_count"]:
+            rows_by_symbol[symbol] = row
+
+    ranked = sorted(
+        rows_by_symbol.values(),
+        key=lambda row: (row["avg_traded_value"], row["bar_count"], row["symbol"]),
+        reverse=True,
+    )
+    return ranked[:limit]
+
+
 def _load_symbol_from_cache(
     bars_dir: Path,
     symbol: str,
@@ -132,3 +187,13 @@ def _load_symbol_from_cache(
     combined = pd.concat(frames, ignore_index=True)
     combined = combined.drop_duplicates(["date", "symbol"]).sort_values(["date", "symbol"])
     return combined, used_paths[-1]
+
+
+def _traded_value(df: pd.DataFrame) -> pd.Series:
+    if "amount" in df.columns:
+        amount = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+        if (amount > 0).any():
+            return amount
+    close = pd.to_numeric(df["close"], errors="coerce").fillna(0)
+    volume = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
+    return close * volume

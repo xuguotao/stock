@@ -62,6 +62,16 @@ python scripts/build_research_dataset.py \
   --end 2025-06-01 \
   --output data/research/daily_bars_sample.parquet
 
+# 从本地缓存按成交额自动筛选流动性股票池
+python scripts/build_liquid_research_dataset.py \
+  --start 2025-01-01 \
+  --end 2026-06-10 \
+  --limit 30 \
+  --min-bars 250 \
+  --min-end-date 2026-06-01 \
+  --output data/research/daily_bars_recent_liquid30.parquet \
+  --ranking-output reports/tail_session/liquid30_ranking_recent.json
+
 # 使用研究数据集回测，不联网
 python scripts/run_tail_session_backtest.py \
   --bars-dataset data/research/daily_bars_sample.parquet \
@@ -165,6 +175,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 ├── scripts/
 │   ├── download_history.py    # 数据下载脚本
 │   ├── build_research_dataset.py # 离线研究数据集构建
+│   ├── build_liquid_research_dataset.py # 按成交额构建流动性研究池
 │   ├── evaluate_tail_session_grid.py # 尾盘策略参数网格评估
 │   ├── monitor_zijin.py       # 紫金矿业监控
 │   └── test_network.py        # 网络诊断脚本
@@ -209,6 +220,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 - 回测脚本: `python scripts/run_tail_session_backtest.py`
 - 分钟级K线入口: `DataAggregator.get_intraday_bars()`
 - 离线研究数据集: `python scripts/build_research_dataset.py`
+- 流动性研究池构建: `python scripts/build_liquid_research_dataset.py`
 - 参数网格评估: `python scripts/evaluate_tail_session_grid.py`
 - 最小入场分数门槛: `--min-score` / `--min-scores`
 - 尾盘分钟级扫描器 (IntradayScanner)
@@ -222,13 +234,13 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 
 | 模块 | 测试数 |
 |------|--------|
-| Data (models, cache, aggregator, research dataset) | 21 |
+| Data (models, cache, aggregator, research dataset) | 22 |
 | Strategy (factors, broker, backtest, tail session) | 74 |
 | Trading (signal, risk, scheduler, paper) | 34 |
 | Research (neutralization, IC, quantile, fund tail, tail grid) | 17 |
 | Monitoring (紫金) | 6 |
 | Core behaviors | 3 |
-| **总计** | **155** |
+| **总计** | **156** |
 
 ## 数据源说明
 

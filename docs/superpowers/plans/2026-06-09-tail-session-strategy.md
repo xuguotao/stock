@@ -14,11 +14,14 @@
 - ✅ Phase 2 minimum paper-trading loop is implemented and verified: Sina intraday bars via `DataAggregator.get_intraday_bars()`, `IntradayScanner`, `RealTimeExecutor`, daily Markdown reports, and `scripts/run_tail_session_live.py`.
 - ✅ Research loop improvements are implemented: vectorized `TailSessionFactor`, progress output, `--limit`, `--offline-cache`, and `--output-json` for `scripts/run_tail_session_backtest.py`.
 - ✅ Research dataset builder is implemented: `scripts/build_research_dataset.py`, `src/data/research_dataset.py`, and `--bars-dataset` support for backtests. Parquet is the primary research store; MySQL remains optional for metadata/trading records.
+- ✅ Liquid research universe builder is implemented: `scripts/build_liquid_research_dataset.py` ranks cached symbols by average traded value, using `amount` or `close * volume` fallback for Sina data.
 - ✅ Parameter-grid diagnostics are implemented: `scripts/evaluate_tail_session_grid.py` and `src/research/tail_session_analysis.py`.
 - ✅ Minimum entry score diagnostics are implemented: `BacktestEngine(min_score=...)`, `scripts/run_tail_session_backtest.py --min-score`, and `scripts/evaluate_tail_session_grid.py --min-scores`.
 - ✅ Daily tail-session selection output is implemented: `scripts/run_tail_session_live.py --selection-only --output-json --output-csv` writes the final ranked stock list without paper trading.
-- ✅ Verification run: `pytest tests/ -q` passes with 155 tests.
+- ✅ Verification run: `pytest tests/ -q` passes with 156 tests.
 - 📉 Latest offline-cache sample result (10 liquid symbols, 2024-01-01 to 2025-06-01): total return 2.59%, Sharpe -0.006, win rate 44.54%, max drawdown -13.32%, 1450 trades.
+- 📈 Latest recent liquid30 result (auto liquidity-ranked cached universe, 2025-01-01 to 2026-06-10, min_score 1.0, top_n 5): total return 12.22%, Sharpe 0.378, win rate 36.13%, max drawdown -17.6%, 903 trades.
+- 📉 Latest naive recent50 result (main-board first 50, same period/config): total return -28.38%, Sharpe -1.215, max drawdown -38.94%, 1337 trades. This confirms stock-pool construction is a first-order variable.
 - 📉 Latest grid smoke result: 10-day breakout did not improve Sharpe (-0.022) versus 20-day breakout (-0.006).
 - 📈 Latest min-score grid result (same 10-symbol sample, 20-day breakout, 5-day trend, volume threshold 1.2, top_n=5): min_score 1.0 produced total return 11.78%, Sharpe 0.788, max drawdown -5.77%, 240 trades.
 - 📋 Still market-dependent / not asserted as complete: Sharpe ratio > 0.8, win rate > 50%, and five consecutive real trading days of live paper operation.

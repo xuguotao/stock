@@ -5,7 +5,11 @@ import json
 
 import pandas as pd
 
-from src.data.research_dataset import build_research_dataset, load_research_dataset
+from src.data.research_dataset import (
+    build_research_dataset,
+    load_research_dataset,
+    select_liquid_symbols_from_cache,
+)
 
 
 def _write_cache_file(path, symbol: str, start_key: str = "20240101", end_key: str = "20250101") -> None:
@@ -79,3 +83,24 @@ def test_load_research_dataset_filters_symbols_and_dates(tmp_path) -> None:
     assert len(bars) == 1
     assert bars.index.names == ["date", "symbol"]
     assert bars.index.get_level_values("symbol").tolist() == ["600519.SH"]
+
+
+def test_select_liquid_symbols_from_cache_uses_amount_or_close_volume(tmp_path) -> None:
+    cache_dir = tmp_path / "cache" / "bars"
+    cache_dir.mkdir(parents=True)
+    _write_cache_file(cache_dir, "000001.SZ")
+    pd.DataFrame([
+        {"date": pd.Timestamp("2024-01-02"), "symbol": "600519.SH", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 1000, "amount": 0, "adjusted_close": 100},
+        {"date": pd.Timestamp("2024-01-03"), "symbol": "600519.SH", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 1100, "amount": 0, "adjusted_close": 100},
+    ]).to_parquet(cache_dir / "600519_SH_20240101_20250101.parquet", index=False)
+
+    selected = select_liquid_symbols_from_cache(
+        bars_dir=cache_dir,
+        start=date(2024, 1, 1),
+        end=date(2024, 1, 10),
+        limit=1,
+        min_bars=2,
+    )
+
+    assert [row["symbol"] for row in selected] == ["600519.SH"]
+    assert selected[0]["avg_traded_value"] > 100_000
