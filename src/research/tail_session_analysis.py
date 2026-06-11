@@ -34,6 +34,22 @@ def evaluate_tail_session_grid(
             breakout_window=int(config.get("breakout_window", 20)),
             trend_window=int(config.get("trend_window", 5)),
             volume_ratio_threshold=float(config.get("volume_ratio_threshold", 1.2)),
+            min_close_above_ma20=bool(config.get("min_close_above_ma20", False)),
+            max_daily_return=(
+                float(config["max_daily_return"])
+                if config.get("max_daily_return") is not None
+                else None
+            ),
+            min_turnover_value=(
+                float(config["min_turnover_value"])
+                if config.get("min_turnover_value") is not None
+                else None
+            ),
+            min_market_breadth_above_ma20=(
+                float(config["min_market_breadth_above_ma20"])
+                if config.get("min_market_breadth_above_ma20") is not None
+                else None
+            ),
         )
         overnight = OvernightMomentumFactor(
             smoothing_window=int(config.get("overnight_smoothing_window", 1))

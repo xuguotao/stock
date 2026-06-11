@@ -233,6 +233,7 @@ if scheduler.is_market_hours():
 - [x] 支持按成交额构建流动性研究池：`python scripts/build_liquid_research_dataset.py`
 - [x] 支持离线参数网格评估：`python scripts/evaluate_tail_session_grid.py`
 - [x] 支持最小入场分数门槛：`--min-score` / `--min-scores`
+- [x] 支持市场宽度风控门槛：`--min-market-breadth-above-ma20`
 
 **存储策略**：
 - Parquet 是研究回测主存储，用于批量读取 K 线面板数据。
@@ -260,6 +261,12 @@ if scheduler.is_market_hours():
 - 对照：主板前 50 只近似池同配置总收益 -28.38%，夏普 -1.215，最大回撤 -38.94%
 
 该对照说明股票池构建是当前策略效果的一阶变量；每日尾盘选股应优先使用流动性池，而不是 `get_csi300_symbols()` 当前的主板近似列表。
+
+**近期市场宽度风控结果（同一 liquid30，增加 `min_market_breadth_above_ma20=0.6`）**：
+- 总收益 25.69%，年化收益 18.12%，夏普 1.188，最大回撤 -10.22%，交易 558 笔
+- 对照：`max_daily_return=0.08` 明显变差，`min_turnover_value=100000000` 略差，`min_close_above_ma20` 单独使用基本无变化
+
+当前推荐的近期回测配置是 liquid30 + `min_score=1.0` + `min_market_breadth_above_ma20=0.6`。
 
 **历史参数网格 smoke 结果（10/20 日突破窗口，其他参数固定）**：
 - 20 日突破：总收益 2.59%，夏普 -0.006，胜率 44.54%，交易 1450 笔

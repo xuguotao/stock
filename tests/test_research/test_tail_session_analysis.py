@@ -78,3 +78,26 @@ def test_evaluate_tail_session_grid_min_score_can_block_trades() -> None:
     low_threshold = results.loc[results["min_score"] == 0.0, "trade_count"].iloc[0]
     high_threshold = results.loc[results["min_score"] == 1.1, "trade_count"].iloc[0]
     assert high_threshold < low_threshold
+
+
+def test_evaluate_tail_session_grid_quality_filters_are_reported_and_applied() -> None:
+    results = evaluate_tail_session_grid(
+        bars=_bars(),
+        configs=[
+            {"breakout_window": 10, "trend_window": 3, "volume_ratio_threshold": 1.0, "top_n": 2, "min_score": 0.1},
+            {
+                "breakout_window": 10,
+                "trend_window": 3,
+                "volume_ratio_threshold": 1.0,
+                "top_n": 2,
+                "min_score": 0.1,
+                "min_turnover_value": 1_000_000_000,
+            },
+        ],
+        initial_capital=100_000,
+    )
+
+    assert "min_turnover_value" in results.columns
+    baseline = results.loc[results["min_turnover_value"].isna(), "trade_count"].iloc[0]
+    filtered = results.loc[results["min_turnover_value"] == 1_000_000_000, "trade_count"].iloc[0]
+    assert filtered < baseline

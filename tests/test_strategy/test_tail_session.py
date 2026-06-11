@@ -65,6 +65,114 @@ def test_factor_empty_bars_returns_empty() -> None:
     assert result.empty
 
 
+def test_tail_session_factor_blocks_breakout_below_ma20() -> None:
+    dates = pd.bdate_range("2025-01-01", periods=26)
+    closes = [20.0] * 20 + [10.0, 10.2, 10.4, 10.6, 10.8, 11.0]
+    rows = []
+    for i, d in enumerate(dates):
+        rows.append({
+            "date": d,
+            "symbol": "000001.SZ",
+            "open": closes[i] * 0.99,
+            "high": closes[i] * 1.01,
+            "low": closes[i] * 0.98,
+            "close": closes[i],
+            "volume": 5_000_000 if i == len(dates) - 1 else 1_000_000,
+            "amount": closes[i] * (5_000_000 if i == len(dates) - 1 else 1_000_000),
+            "adjusted_close": closes[i],
+        })
+    bars = pd.DataFrame(rows).set_index(["date", "symbol"])
+
+    loose = TailSessionFactor(breakout_window=5, trend_window=3).compute(bars)
+    strict = TailSessionFactor(
+        breakout_window=5,
+        trend_window=3,
+        min_close_above_ma20=True,
+    ).compute(bars)
+
+    last_key = (dates[-1], "000001.SZ")
+    assert loose.loc[last_key, "tail_session"] > 0
+    assert strict.loc[last_key, "tail_session"] == 0
+
+
+def test_tail_session_factor_blocks_overextended_daily_return() -> None:
+    bars = _multi_bars(["000001.SZ"], periods=30).reset_index()
+    last_idx = bars.index[-1]
+    prev_close = float(bars.loc[last_idx - 1, "close"])
+    bars.loc[last_idx, ["open", "high", "low", "close", "adjusted_close"]] = [
+        prev_close * 1.18,
+        prev_close * 1.21,
+        prev_close * 1.16,
+        prev_close * 1.20,
+        prev_close * 1.20,
+    ]
+    bars.loc[last_idx, "volume"] = 5_000_000
+    bars.loc[last_idx, "amount"] = float(bars.loc[last_idx, "close"]) * 5_000_000
+    bars = bars.set_index(["date", "symbol"])
+
+    loose = TailSessionFactor(breakout_window=20, trend_window=5).compute(bars)
+    strict = TailSessionFactor(
+        breakout_window=20,
+        trend_window=5,
+        max_daily_return=0.08,
+    ).compute(bars)
+
+    last_key = (bars.index.get_level_values("date").max(), "000001.SZ")
+    assert loose.loc[last_key, "tail_session"] > 0
+    assert strict.loc[last_key, "tail_session"] == 0
+
+
+def test_tail_session_factor_blocks_low_turnover_value() -> None:
+    bars = _multi_bars(["000001.SZ"], periods=30).copy()
+    bars["amount"] = 0
+    bars["volume"] = 100
+
+    loose = TailSessionFactor(breakout_window=20, trend_window=5).compute(bars)
+    strict = TailSessionFactor(
+        breakout_window=20,
+        trend_window=5,
+        min_turnover_value=10_000_000,
+    ).compute(bars)
+
+    last_key = (bars.index.get_level_values("date").max(), "000001.SZ")
+    assert loose.loc[last_key, "tail_session"] > 0
+    assert strict.loc[last_key, "tail_session"] == 0
+
+
+def test_tail_session_factor_blocks_when_market_breadth_is_weak() -> None:
+    dates = pd.bdate_range("2025-01-01", periods=30)
+    rows = []
+    for symbol, closes in {
+        "000001.SZ": [10.0 + i * 0.1 for i in range(30)],
+        "600519.SH": [20.0 - i * 0.1 for i in range(30)],
+    }.items():
+        for i, d in enumerate(dates):
+            close = closes[i]
+            rows.append({
+                "date": d,
+                "symbol": symbol,
+                "open": close * 0.99,
+                "high": close * 1.01,
+                "low": close * 0.98,
+                "close": close,
+                "volume": 5_000_000 if i == len(dates) - 1 else 1_000_000,
+                "amount": close * (5_000_000 if i == len(dates) - 1 else 1_000_000),
+                "adjusted_close": close,
+            })
+    bars = pd.DataFrame(rows).set_index(["date", "symbol"])
+
+    loose = TailSessionFactor(breakout_window=20, trend_window=5).compute(bars)
+    strict = TailSessionFactor(
+        breakout_window=20,
+        trend_window=5,
+        min_market_breadth_above_ma20=0.75,
+    ).compute(bars)
+
+    last_key = (dates[-1], "000001.SZ")
+    assert loose.loc[last_key, "tail_session"] > 0
+    assert strict.loc[last_key, "tail_session"] == 0
+
+
 def test_overnight_momentum_positive_on_gap_up() -> None:
     """Close lower than next open = positive overnight momentum."""
     from src.strategy.factors.overnight_momentum import OvernightMomentumFactor

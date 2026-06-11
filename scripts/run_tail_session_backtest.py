@@ -154,6 +154,10 @@ def main() -> None:
     parser.add_argument("--capital", type=float, default=100_000, help="Initial capital")
     parser.add_argument("--top-n", type=int, default=5, help="Number of stocks to hold")
     parser.add_argument("--min-score", type=float, default=None, help="Minimum raw factor score required before ranking")
+    parser.add_argument("--min-close-above-ma20", action="store_true", help="Require close above MA20 before tail-session scoring")
+    parser.add_argument("--max-daily-return", type=float, default=None, help="Reject signals with same-day close return above this decimal threshold")
+    parser.add_argument("--min-turnover-value", type=float, default=None, help="Reject signals below this traded value; falls back to close*volume when amount is missing")
+    parser.add_argument("--min-market-breadth-above-ma20", type=float, default=None, help="Only score signals when this fraction of the universe is above MA20")
     parser.add_argument("--symbols", nargs="+", help="Specific symbols to test")
     parser.add_argument("--limit", type=int, default=50, help="Default stock-pool size when --symbols is omitted")
     parser.add_argument("--output-json", help="Write metrics to JSON file")
@@ -190,6 +194,10 @@ def main() -> None:
         breakout_window=20,
         trend_window=5,
         volume_ratio_threshold=1.2,
+        min_close_above_ma20=args.min_close_above_ma20,
+        max_daily_return=args.max_daily_return,
+        min_turnover_value=args.min_turnover_value,
+        min_market_breadth_above_ma20=args.min_market_breadth_above_ma20,
     )
     overnight_factor = OvernightMomentumFactor(smoothing_window=1)
 
