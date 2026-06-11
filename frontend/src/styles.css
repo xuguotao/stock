@@ -78,6 +78,12 @@ body {
   padding: 16px;
 }
 
+.panel .el-date-editor,
+.panel .el-select,
+.panel .el-input-number {
+  width: 100%;
+}
+
 .compact-panel {
   padding: 12px 16px;
 }
