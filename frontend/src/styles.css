@@ -93,6 +93,10 @@ body {
   height: 320px;
 }
 
+.small-chart {
+  height: 260px;
+}
+
 .data-center-grid {
   display: grid;
   grid-template-columns: minmax(520px, 1.4fr) minmax(360px, 0.9fr);
@@ -145,6 +149,17 @@ body {
   gap: 8px;
   max-height: 220px;
   overflow: auto;
+}
+
+.factor-tags,
+.assumption-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assumption-list {
+  margin-top: 12px;
 }
 
 .dataset-option {

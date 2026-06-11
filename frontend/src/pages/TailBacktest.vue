@@ -112,13 +112,39 @@
       </div>
     </div>
 
+    <div v-if="experiment" class="panel">
+      <div class="page-header panel-title-row">
+        <h2 class="page-title">实验设定</h2>
+        <el-tag type="warning" effect="plain">{{ experiment.execution_assumption }}</el-tag>
+      </div>
+      <el-descriptions :column="3" border>
+        <el-descriptions-item label="模式">{{ experiment.mode === 'sample' ? '样例数据' : '本地数据集' }}</el-descriptions-item>
+        <el-descriptions-item label="日期范围">{{ experiment.actual_start }} / {{ experiment.actual_end }}</el-descriptions-item>
+        <el-descriptions-item label="Top N">{{ experiment.top_n }}</el-descriptions-item>
+        <el-descriptions-item label="初始资金">{{ formatMoney(experiment.capital) }}</el-descriptions-item>
+        <el-descriptions-item label="最小分数">{{ experiment.min_score ?? '-' }}</el-descriptions-item>
+        <el-descriptions-item label="市场宽度">{{ experiment.min_market_breadth_above_ma20 ?? '-' }}</el-descriptions-item>
+      </el-descriptions>
+      <div class="assumption-list">
+        <el-tag v-for="note in experiment.notes" :key="note" effect="plain">{{ note }}</el-tag>
+      </div>
+    </div>
+
+    <div v-if="outcomeSummary" class="metric-grid">
+      <div class="metric-card" v-for="item in outcomeItems" :key="item.label">
+        <div class="metric-label">{{ item.label }}</div>
+        <div class="metric-value">{{ item.value }}</div>
+      </div>
+    </div>
+
     <div class="panel">
       <div class="page-header panel-title-row">
-        <h2 class="page-title">数据趋势</h2>
+        <h2 class="page-title">结果判断</h2>
         <el-tag v-if="result" effect="plain">{{ equityCurve.length }} 个交易日</el-tag>
       </div>
       <div ref="equityEl" class="chart"></div>
       <div ref="drawdownEl" class="chart"></div>
+      <div ref="dailyReturnEl" class="chart small-chart"></div>
     </div>
 
     <div v-if="result" class="tail-result-grid">
@@ -136,7 +162,7 @@
 
       <div class="panel">
         <div class="page-header panel-title-row">
-          <h2 class="page-title">最新调仓选股</h2>
+          <h2 class="page-title">信号验证：最新调仓选股</h2>
           <el-tag effect="plain">{{ latestSelectionDate }}</el-tag>
         </div>
         <el-table :data="latestSelection" height="260">
@@ -148,13 +174,20 @@
           <el-table-column label="收盘价" width="110" align="right">
             <template #default="{ row }">{{ formatPrice(row.close) }}</template>
           </el-table-column>
+          <el-table-column label="因子贡献" min-width="230">
+            <template #default="{ row }">
+              <div class="factor-tags">
+                <el-tag v-for="item in factorTags(row)" :key="item" effect="plain">{{ item }}</el-tag>
+              </div>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </div>
 
     <div v-if="result" class="panel">
       <div class="page-header panel-title-row">
-        <h2 class="page-title">调仓选股记录</h2>
+        <h2 class="page-title">信号验证：调仓选股记录</h2>
         <el-tag effect="plain">{{ rebalanceSelections.length }}</el-tag>
       </div>
       <el-table :data="rebalanceSelections" height="360">
@@ -172,7 +205,7 @@
 
     <div v-if="result" class="panel">
       <div class="page-header panel-title-row">
-        <h2 class="page-title">交易明细</h2>
+        <h2 class="page-title">执行验证：交易明细</h2>
         <el-tag effect="plain">{{ trades.length }}</el-tag>
       </div>
       <el-table :data="trades" height="420">
@@ -198,7 +231,48 @@
         <el-table-column label="已实现盈亏" width="130" align="right">
           <template #default="{ row }">{{ formatMoney(row.realized_pnl) }}</template>
         </el-table-column>
+        <el-table-column label="原因" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.reason }}</template>
+        </el-table-column>
+        <el-table-column label="选股分" width="100" align="right">
+          <template #default="{ row }">{{ formatScore(row.selection_score) }}</template>
+        </el-table-column>
       </el-table>
+    </div>
+
+    <div v-if="result" class="tail-result-grid">
+      <div class="panel">
+        <div class="page-header panel-title-row">
+          <h2 class="page-title">执行验证：持仓收益</h2>
+          <el-tag effect="plain">{{ positionOutcomes.length }}</el-tag>
+        </div>
+        <el-table :data="positionOutcomes" height="340">
+          <el-table-column prop="symbol" label="股票" min-width="120" />
+          <el-table-column prop="status" label="状态" width="90" />
+          <el-table-column prop="buy_date" label="买入日" width="120" />
+          <el-table-column prop="sell_date" label="卖出日" width="120" />
+          <el-table-column prop="holding_days" label="持有天数" width="100" align="right" />
+          <el-table-column label="收益率" width="110" align="right">
+            <template #default="{ row }">{{ formatPercentMetric(row.return_pct) }}</template>
+          </el-table-column>
+          <el-table-column label="盈亏" width="120" align="right">
+            <template #default="{ row }">{{ formatMoney(row.realized_pnl ?? row.unrealized_pnl) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="panel">
+        <div class="page-header panel-title-row">
+          <h2 class="page-title">结果判断：月度收益</h2>
+          <el-tag effect="plain">{{ monthlyReturns.length }}</el-tag>
+        </div>
+        <el-table :data="monthlyReturns" height="340">
+          <el-table-column prop="month" label="月份" min-width="120" />
+          <el-table-column label="收益率" width="130" align="right">
+            <template #default="{ row }">{{ formatPercentMetric(row.return_pct) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
     </div>
   </section>
 </template>
@@ -220,6 +294,8 @@ interface SelectionRow {
   symbol: string
   score: number
   close: number | null
+  factor_values: Record<string, number | null>
+  factor_contributions: Record<string, number | null>
 }
 
 interface TradeRow {
@@ -232,6 +308,47 @@ interface TradeRow {
   amount: number
   commission: number
   realized_pnl: number
+  reason: string
+  selection_score: number | null
+  selection_rank: number | null
+}
+
+interface ExperimentSummary {
+  mode: 'sample' | 'dataset'
+  actual_start: string
+  actual_end: string
+  capital: number
+  top_n: number
+  min_score: number | null
+  min_market_breadth_above_ma20: number | null
+  execution_assumption: string
+  notes: string[]
+}
+
+interface MonthlyReturnRow {
+  month: string
+  return_pct: number
+}
+
+interface PositionOutcomeRow {
+  symbol: string
+  status: 'open' | 'closed'
+  buy_date: string
+  sell_date: string | null
+  holding_days: number
+  return_pct: number
+  realized_pnl?: number
+  unrealized_pnl?: number
+}
+
+interface OutcomeSummary {
+  closed_positions: number
+  open_positions: number
+  realized_pnl: number
+  unrealized_pnl: number
+  total_commission: number
+  avg_position_return_pct: number
+  win_rate_pct: number
 }
 
 const form = ref<TailBacktestPayload>({
@@ -252,15 +369,21 @@ const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
 const equityEl = ref<HTMLElement | null>(null)
 const drawdownEl = ref<HTMLElement | null>(null)
+const dailyReturnEl = ref<HTMLElement | null>(null)
 
 const result = computed(() => job.value?.result ?? null)
+const experiment = computed(() => (result.value?.experiment ?? null) as unknown as ExperimentSummary | null)
 const metrics = computed(() => (result.value?.metrics ?? {}) as Record<string, number | string>)
 const equityCurve = computed(() => (result.value?.equity_curve ?? []) as unknown as SeriesPoint[])
 const drawdownCurve = computed(() => (result.value?.drawdown_curve ?? []) as unknown as SeriesPoint[])
+const dailyReturnCurve = computed(() => (result.value?.daily_return_curve ?? []) as unknown as SeriesPoint[])
 const universeSymbols = computed(() => (result.value?.universe_symbols ?? []) as string[])
 const latestSelection = computed(() => (result.value?.latest_selection ?? []) as unknown as SelectionRow[])
 const rebalanceSelections = computed(() => (result.value?.rebalance_selections ?? []) as unknown as SelectionRow[])
 const trades = computed(() => (result.value?.trades ?? []) as unknown as TradeRow[])
+const monthlyReturns = computed(() => (result.value?.monthly_returns ?? []) as unknown as MonthlyReturnRow[])
+const positionOutcomes = computed(() => (result.value?.position_outcomes ?? []) as unknown as PositionOutcomeRow[])
+const outcomeSummary = computed(() => (result.value?.outcome_summary ?? null) as unknown as OutcomeSummary | null)
 const equityTradeMarkers = computed(() => buildTradeMarkers(equityCurve.value, trades.value))
 const latestSelectionDate = computed(() => latestSelection.value[0]?.date ?? '-')
 const selectedDataset = computed(() => datasets.value.find((dataset) => dataset.id === form.value.dataset_id) ?? null)
@@ -271,6 +394,14 @@ const metricItems = computed(() => [
   { label: '最大回撤', value: formatPercentMetric(metrics.value.max_drawdown) },
   { label: '成交数', value: String(result.value?.trade_count ?? '-') },
   { label: '股票数', value: String(result.value?.symbol_count ?? '-') }
+])
+const outcomeItems = computed(() => [
+  { label: '已平仓', value: String(outcomeSummary.value?.closed_positions ?? '-') },
+  { label: '持仓中', value: String(outcomeSummary.value?.open_positions ?? '-') },
+  { label: '已实现盈亏', value: formatMoney(outcomeSummary.value?.realized_pnl) },
+  { label: '浮动盈亏', value: formatMoney(outcomeSummary.value?.unrealized_pnl) },
+  { label: '手续费', value: formatMoney(outcomeSummary.value?.total_commission) },
+  { label: '持仓胜率', value: formatPercentMetric(outcomeSummary.value?.win_rate_pct) }
 ])
 
 async function submit() {
@@ -346,6 +477,7 @@ async function pollJobUntilDone(jobId: string) {
 function renderCharts() {
   renderLine(equityEl.value, '净值', equityCurve.value, equityTradeMarkers.value)
   renderLine(drawdownEl.value, '回撤', drawdownCurve.value)
+  renderBar(dailyReturnEl.value, '日收益', dailyReturnCurve.value)
 }
 
 function renderLine(el: HTMLElement | null, name: string, points: SeriesPoint[], markers: TradeMarker[] = []) {
@@ -378,6 +510,26 @@ function renderLine(el: HTMLElement | null, name: string, points: SeriesPoint[],
   })
 }
 
+function renderBar(el: HTMLElement | null, name: string, points: SeriesPoint[]) {
+  if (!el) return
+  const chart = echarts.init(el)
+  chart.setOption({
+    grid: { left: 48, right: 24, top: 32, bottom: 42 },
+    tooltip: { trigger: 'axis' },
+    title: { show: !points.length, text: '暂无数据', left: 'center', top: 'middle', textStyle: { color: '#8a94a6', fontSize: 14 } },
+    xAxis: { type: 'category', data: points.map((point) => point.date) },
+    yAxis: { type: 'value', scale: true },
+    series: [{
+      name,
+      type: 'bar',
+      data: points.map((point) => point.value),
+      itemStyle: {
+        color: (params: { value: number }) => (params.value >= 0 ? '#16a34a' : '#dc2626')
+      }
+    }]
+  })
+}
+
 function formatMetric(value: unknown, suffix = '') {
   if (typeof value === 'number') return `${Number(value).toLocaleString('zh-CN')}${suffix}`
   if (typeof value === 'string') return value
@@ -404,6 +556,16 @@ function formatPrice(value: unknown) {
 
 function formatMoney(value: unknown) {
   return typeof value === 'number' ? new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(value) : '-'
+}
+
+function factorTags(row: SelectionRow) {
+  const values = row.factor_values ?? {}
+  const contributions = row.factor_contributions ?? {}
+  return Object.keys({ ...values, ...contributions }).map((name) => {
+    const raw = values[name] == null ? '-' : formatScore(values[name])
+    const contribution = contributions[name] == null ? '-' : formatScore(contributions[name])
+    return `${name}: ${raw} / ${contribution}`
+  })
 }
 
 interface TradeMarker {

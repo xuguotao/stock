@@ -30,13 +30,27 @@ def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
     assert "equity_curve" in job["result"]
     assert len(job["result"]["equity_curve"]) > 0
     assert job["result"]["universe_symbols"] == ["000001.SZ", "300750.SZ", "600519.SH"]
+    assert job["result"]["experiment"]["mode"] == "sample"
+    assert job["result"]["experiment"]["execution_assumption"] == "daily close rebalance proxy"
     assert len(job["result"]["latest_selection"]) == 2
-    assert {"date", "rank", "symbol", "score", "close"}.issubset(job["result"]["latest_selection"][0])
+    assert {"date", "rank", "symbol", "score", "close", "factor_values", "factor_contributions"}.issubset(
+        job["result"]["latest_selection"][0]
+    )
+    assert "tail_session" in job["result"]["latest_selection"][0]["factor_values"]
     assert len(job["result"]["rebalance_selections"]) > 0
     assert {"date", "rank", "symbol", "score", "close"}.issubset(job["result"]["rebalance_selections"][0])
     assert len(job["result"]["trades"]) > 0
-    assert {"date", "symbol", "side", "quantity", "price", "amount"}.issubset(job["result"]["trades"][0])
+    assert {"date", "symbol", "side", "quantity", "price", "amount", "reason", "selection_score"}.issubset(
+        job["result"]["trades"][0]
+    )
     assert "T" not in job["result"]["trades"][0]["date"]
+    assert len(job["result"]["daily_return_curve"]) > 0
+    assert len(job["result"]["monthly_returns"]) > 0
+    assert len(job["result"]["position_outcomes"]) > 0
+    assert {"symbol", "buy_date", "status", "return_pct", "holding_days"}.issubset(
+        job["result"]["position_outcomes"][0]
+    )
+    assert {"closed_positions", "open_positions", "realized_pnl"}.issubset(job["result"]["outcome_summary"])
 
 
 def test_backtest_api_rejects_missing_dataset_when_not_sample(tmp_path) -> None:
@@ -106,6 +120,7 @@ def test_backtest_api_resolves_dataset_id_from_configured_dataset_root(tmp_path)
     assert job["params"]["dataset_path"] == str(dataset_path)
     assert job["result"]["symbol_count"] == 3
     assert job["result"]["universe_symbols"] == ["000001.SZ", "300750.SZ", "600519.SH"]
+    assert job["result"]["experiment"]["mode"] == "dataset"
 
 
 def test_backtest_api_rejects_unknown_dataset_id(tmp_path) -> None:
