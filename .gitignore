@@ -47,7 +47,13 @@ data/*.xlsx
 
 # Local paper-trading state and generated reports
 data/paper_trading/
+data/web/
 reports/
+
+# Frontend dependencies and build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
 
 # Jupyter
 .ipynb_checkpoints/

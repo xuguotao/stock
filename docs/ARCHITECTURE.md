@@ -24,7 +24,19 @@ scripts/                CLI 入口和定时任务入口
 tests/                  pytest 测试
 data/                   本地缓存和研究数据
 reports/                回测、选股、TimesFM、监控等输出
+frontend/               Vue + ECharts 后台控制台
 ```
+
+## Web 后台
+
+第一期 Web 后台采用 FastAPI + Vue 3 + ECharts：
+
+- `src.web.backend.app`：FastAPI 应用工厂，提供健康检查、任务中心和尾盘回测 API。
+- `src.web.backend.jobs`：SQLite 任务元数据存储，记录任务参数、状态、结果、错误和时间戳。
+- `src.web.backend.backtests`：尾盘回测 API 模型和执行器，复用现有 `BacktestEngine`、`TailSessionFactor` 和 research dataset 读取能力。
+- `frontend/`：Vue 3 + TypeScript + Element Plus + ECharts 控制台，当前包含总览、任务中心和尾盘回测页面。
+
+Web 层只做编排、可视化和任务状态管理，不复制策略逻辑。耗时任务通过 job 记录追踪；第一期支持进程内后台任务，后续可替换为独立 worker 或队列。
 
 ## 数据层
 

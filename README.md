@@ -158,6 +158,24 @@ python scripts/compute_timesfm_features.py \
 - `timesfm_uncertainty`: q90-q10 预测区间宽度
 - `timesfm_confidence`: 收益预测除以不确定性
 
+### 8. 启动后台可视化控制台（MVP）
+
+后端 API：
+
+```bash
+uvicorn src.web.backend.app:app --reload
+```
+
+前端 Vue + ECharts：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+默认前端地址为 `http://127.0.0.1:5173`。第一期页面包含总览、任务中心和尾盘回测；尾盘回测支持样例数据直接试跑，也可以填写本地 research dataset 路径。
+
 ## 项目结构
 
 ```
