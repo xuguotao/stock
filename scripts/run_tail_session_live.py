@@ -11,20 +11,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-
-import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config.settings import reset_settings
-from src.core.constants import format_symbol
 from src.data.aggregator import DataAggregator
-from src.data.research_dataset import select_liquid_symbols_from_cache
 from src.strategy.executor import RealTimeExecutor
 from src.strategy.reports import (
     select_tail_session_signals,
@@ -33,136 +28,20 @@ from src.strategy.reports import (
     write_tail_session_selection_json,
 )
 from src.strategy.scanner import IntradayScanner
+from src.strategy.tail_session.live import (
+    MarketBreadthResult,
+    calculate_market_breadth_above_ma20,
+    prices_from_quotes,
+    resolve_scan_symbols,
+)
 from src.trading.paper_account import PaperAccount
 from src.trading.risk_manager import RiskManager
 from src.trading.scheduler import TradingScheduler
 
 
-@dataclass(frozen=True)
-class MarketBreadthResult:
-    """Market breadth over the scan universe."""
-
-    breadth: float
-    above_count: int
-    symbol_count: int
-
-
 def _prices_from_quotes(quotes, fallback_signals) -> dict[str, float]:
-    prices: dict[str, float] = {}
-    if quotes is not None and not quotes.empty and "symbol" in quotes.columns:
-        price_col = "price" if "price" in quotes.columns else "close"
-        if price_col in quotes.columns:
-            prices.update({
-                row["symbol"]: float(row[price_col])
-                for _, row in quotes.iterrows()
-                if float(row[price_col]) > 0
-            })
-
-    for signal in fallback_signals:
-        prices.setdefault(signal.symbol, signal.last_price)
-    return prices
-
-
-def resolve_scan_symbols(
-    aggregator: DataAggregator,
-    raw_symbols: list[str] | None,
-    limit: int,
-    universe: str,
-    bars_cache_dir: str | Path,
-    liquidity_start: date,
-    liquidity_end: date,
-    liquidity_min_bars: int,
-    liquidity_min_end_date: date | None,
-) -> list[str]:
-    """Resolve the live scan universe."""
-    if raw_symbols:
-        return [format_symbol(symbol) for symbol in raw_symbols]
-
-    if universe == "liquid-cache":
-        ranking = select_liquid_symbols_from_cache(
-            bars_dir=bars_cache_dir,
-            start=liquidity_start,
-            end=liquidity_end,
-            limit=limit,
-            min_bars=liquidity_min_bars,
-            min_end_date=liquidity_min_end_date,
-        )
-        symbols = [row["symbol"] for row in ranking]
-        if symbols:
-            return symbols
-
-    return aggregator.get_csi300_symbols()[:limit]
-
-
-def calculate_market_breadth_above_ma20(
-    symbols: list[str],
-    bars_cache_dir: str | Path,
-    trade_date: date,
-    quotes: pd.DataFrame | None = None,
-    ma_window: int = 20,
-) -> MarketBreadthResult:
-    """Calculate the fraction of symbols trading above MA20."""
-    quote_prices = _quote_prices(quotes)
-    above_count = 0
-    symbol_count = 0
-    end_ts = pd.Timestamp(trade_date)
-
-    for symbol in symbols:
-        bars = _load_latest_symbol_bars(Path(bars_cache_dir), symbol, end_ts)
-        if len(bars) < ma_window:
-            continue
-
-        close = pd.to_numeric(bars["close"], errors="coerce").dropna()
-        if len(close) < ma_window:
-            continue
-
-        ma_value = float(close.tail(ma_window).mean())
-        price = quote_prices.get(symbol, float(close.iloc[-1]))
-        if price <= 0 or ma_value <= 0:
-            continue
-
-        symbol_count += 1
-        if price > ma_value:
-            above_count += 1
-
-    breadth = above_count / symbol_count if symbol_count else 0.0
-    return MarketBreadthResult(
-        breadth=round(breadth, 6),
-        above_count=above_count,
-        symbol_count=symbol_count,
-    )
-
-
-def _quote_prices(quotes: pd.DataFrame | None) -> dict[str, float]:
-    if quotes is None or quotes.empty or "symbol" not in quotes.columns:
-        return {}
-    price_col = "price" if "price" in quotes.columns else "close"
-    if price_col not in quotes.columns:
-        return {}
-    prices = {}
-    for _, row in quotes.iterrows():
-        price = float(row[price_col])
-        if price > 0:
-            prices[str(row["symbol"])] = price
-    return prices
-
-
-def _load_latest_symbol_bars(bars_cache_dir: Path, symbol: str, end_ts: pd.Timestamp) -> pd.DataFrame:
-    stem = symbol.replace(".", "_")
-    frames = []
-    for path in bars_cache_dir.glob(f"{stem}_*.parquet"):
-        df = pd.read_parquet(path)
-        if df.empty or "date" not in df.columns:
-            continue
-        df = df.copy()
-        df["date"] = pd.to_datetime(df["date"])
-        df = df[df["date"] <= end_ts]
-        if not df.empty:
-            frames.append(df)
-    if not frames:
-        return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
-    return combined.drop_duplicates(["date", "symbol"]).sort_values("date")
+    """Backward-compatible wrapper for tests and older imports."""
+    return prices_from_quotes(quotes, fallback_signals)
 
 
 def main() -> None:

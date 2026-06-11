@@ -28,6 +28,7 @@ from src.core.types import Side
 from src.strategy.base import Factor
 from src.strategy.execution.broker import SimulatedBroker, Position
 from src.strategy.execution.order import Order
+from src.strategy.scoring import FactorScoreEngine
 
 logger = logging.getLogger(__name__)
 
@@ -277,27 +278,9 @@ class BacktestEngine:
 
     def _compute_composite_score(self, bars_to_date: pd.DataFrame) -> pd.DataFrame | None:
         """Compute weighted composite factor score."""
-        if not self.factors:
-            return None
-
-        scores = []
-        for factor, weight in zip(self.factors, self.factor_weights):
-            try:
-                values = factor.compute(bars_to_date)
-                if not values.empty:
-                    if self.min_score is not None:
-                        values = values.where(values >= self.min_score)
-                    ranked = values.groupby(level=0).rank(pct=True)
-                    scores.append(ranked * weight)
-            except Exception as e:
-                logger.warning(f"Factor {factor.name} failed: {e}")
-
-        if not scores:
-            return None
-
-        # Sum weighted scores
-        composite = scores[0]
-        for s in scores[1:]:
-            composite = composite.add(s, fill_value=0)
-
-        return composite
+        return FactorScoreEngine(
+            factors=self.factors,
+            factor_weights=self.factor_weights,
+            top_n=self.top_n,
+            min_score=self.min_score,
+        ).compute_scores(bars_to_date)

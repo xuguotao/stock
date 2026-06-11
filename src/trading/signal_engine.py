@@ -21,6 +21,7 @@ import pandas as pd
 
 from src.core.types import Side
 from src.strategy.base import Factor
+from src.strategy.scoring import FactorScoreEngine
 
 logger = logging.getLogger(__name__)
 
@@ -156,22 +157,8 @@ class SignalEngine:
         weights: list[float] | None,
     ) -> pd.DataFrame | None:
         """Compute weighted composite factor."""
-        if not factors:
-            return None
-
-        w = weights or [1.0 / len(factors)] * len(factors)
-        composite = None
-
-        for factor, weight in zip(factors, w):
-            try:
-                values = factor.compute(bars)
-                if not values.empty:
-                    ranked = values.groupby(level=0).rank(pct=True)
-                    if composite is None:
-                        composite = ranked * weight
-                    else:
-                        composite = composite.add(ranked * weight, fill_value=0)
-            except Exception as e:
-                logger.warning(f"Factor {factor.name} failed in signal: {e}")
-
-        return composite
+        return FactorScoreEngine(
+            factors=factors,
+            factor_weights=weights,
+            top_n=self.top_n,
+        ).compute_scores(bars)

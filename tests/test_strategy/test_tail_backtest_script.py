@@ -5,12 +5,15 @@ from datetime import date
 import pandas as pd
 
 from scripts.run_tail_session_backtest import (
+    build_historical_selection_rows,
     load_bars_from_offline_cache,
     load_bars_from_research_dataset,
     load_bars_with_progress,
     make_aggregator,
     resolve_symbols,
 )
+from src.strategy.tail_session.backtest import write_metrics_json
+from src.strategy.factors.tail_session import TailSessionFactor
 
 
 class FakeAggregator:
@@ -126,3 +129,65 @@ def test_load_bars_from_research_dataset_uses_all_symbols_when_none_requested(tm
 
     assert symbols == ["000001.SZ", "600519.SH"]
     assert len(bars) == 2
+
+
+def test_build_historical_selection_rows_uses_daily_backtest_scores() -> None:
+    dates = pd.bdate_range("2025-01-01", periods=25)
+    rows = []
+    for i, d in enumerate(dates):
+        rows.append({
+            "date": d,
+            "symbol": "000001.SZ",
+            "open": 10.0 + i * 0.1,
+            "high": 10.1 + i * 0.1,
+            "low": 9.9 + i * 0.1,
+            "close": 10.0 + i * 0.1,
+            "volume": 1_000,
+            "amount": 10_000,
+            "adjusted_close": 10.0 + i * 0.1,
+        })
+        close = 20.0 if i < 24 else 23.0
+        rows.append({
+            "date": d,
+            "symbol": "600519.SH",
+            "open": close,
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": 1_000 if i < 24 else 2_000,
+            "amount": close * (1_000 if i < 24 else 2_000),
+            "adjusted_close": close,
+        })
+    bars = pd.DataFrame(rows).set_index(["date", "symbol"])
+
+    selections = build_historical_selection_rows(
+        bars=bars,
+        factors=[TailSessionFactor(breakout_window=20, trend_window=5, volume_ratio_threshold=1.2)],
+        factor_weights=[1.0],
+        start=dates[-1].date(),
+        end=dates[-1].date(),
+        top_n=3,
+        min_score=1.0,
+    )
+
+    assert selections == [
+        {
+            "date": dates[-1].date().isoformat(),
+            "rank": 1,
+            "symbol": "600519.SH",
+            "score": 1.0,
+        }
+    ]
+
+
+def test_write_metrics_json_records_symbol_and_trade_counts(tmp_path) -> None:
+    class Result:
+        trades = [object(), object()]
+        metrics = {"total_return": 1.23}
+
+    output = write_metrics_json(tmp_path / "metrics.json", Result(), symbol_count=3)
+
+    payload = pd.read_json(output, typ="series")
+    assert payload["symbol_count"] == 3
+    assert payload["trade_count"] == 2
+    assert payload["metrics"] == {"total_return": 1.23}

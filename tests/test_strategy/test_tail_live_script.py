@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 
 from scripts.run_tail_session_live import calculate_market_breadth_above_ma20, resolve_scan_symbols
+from src.strategy.tail_session.live import prices_from_quotes
 
 
 class FakeAggregator:
@@ -151,3 +152,16 @@ def test_calculate_market_breadth_skips_symbols_without_enough_history(tmp_path)
     assert result.symbol_count == 1
     assert result.above_count == 0
     assert result.breadth == 0.0
+
+
+def test_prices_from_quotes_falls_back_to_signal_prices() -> None:
+    class Signal:
+        symbol = "600519.SH"
+        last_price = 100.0
+
+    quotes = pd.DataFrame([{"symbol": "000001.SZ", "price": 11.0}])
+
+    assert prices_from_quotes(quotes, [Signal()]) == {
+        "000001.SZ": 11.0,
+        "600519.SH": 100.0,
+    }
