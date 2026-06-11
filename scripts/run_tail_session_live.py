@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -33,6 +36,15 @@ from src.strategy.scanner import IntradayScanner
 from src.trading.paper_account import PaperAccount
 from src.trading.risk_manager import RiskManager
 from src.trading.scheduler import TradingScheduler
+
+
+@dataclass(frozen=True)
+class MarketBreadthResult:
+    """Market breadth over the scan universe."""
+
+    breadth: float
+    above_count: int
+    symbol_count: int
 
 
 def _prices_from_quotes(quotes, fallback_signals) -> dict[str, float]:
@@ -82,6 +94,77 @@ def resolve_scan_symbols(
     return aggregator.get_csi300_symbols()[:limit]
 
 
+def calculate_market_breadth_above_ma20(
+    symbols: list[str],
+    bars_cache_dir: str | Path,
+    trade_date: date,
+    quotes: pd.DataFrame | None = None,
+    ma_window: int = 20,
+) -> MarketBreadthResult:
+    """Calculate the fraction of symbols trading above MA20."""
+    quote_prices = _quote_prices(quotes)
+    above_count = 0
+    symbol_count = 0
+    end_ts = pd.Timestamp(trade_date)
+
+    for symbol in symbols:
+        bars = _load_latest_symbol_bars(Path(bars_cache_dir), symbol, end_ts)
+        if len(bars) < ma_window:
+            continue
+
+        close = pd.to_numeric(bars["close"], errors="coerce").dropna()
+        if len(close) < ma_window:
+            continue
+
+        ma_value = float(close.tail(ma_window).mean())
+        price = quote_prices.get(symbol, float(close.iloc[-1]))
+        if price <= 0 or ma_value <= 0:
+            continue
+
+        symbol_count += 1
+        if price > ma_value:
+            above_count += 1
+
+    breadth = above_count / symbol_count if symbol_count else 0.0
+    return MarketBreadthResult(
+        breadth=round(breadth, 6),
+        above_count=above_count,
+        symbol_count=symbol_count,
+    )
+
+
+def _quote_prices(quotes: pd.DataFrame | None) -> dict[str, float]:
+    if quotes is None or quotes.empty or "symbol" not in quotes.columns:
+        return {}
+    price_col = "price" if "price" in quotes.columns else "close"
+    if price_col not in quotes.columns:
+        return {}
+    prices = {}
+    for _, row in quotes.iterrows():
+        price = float(row[price_col])
+        if price > 0:
+            prices[str(row["symbol"])] = price
+    return prices
+
+
+def _load_latest_symbol_bars(bars_cache_dir: Path, symbol: str, end_ts: pd.Timestamp) -> pd.DataFrame:
+    stem = symbol.replace(".", "_")
+    frames = []
+    for path in bars_cache_dir.glob(f"{stem}_*.parquet"):
+        df = pd.read_parquet(path)
+        if df.empty or "date" not in df.columns:
+            continue
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        df = df[df["date"] <= end_ts]
+        if not df.empty:
+            frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
+    return combined.drop_duplicates(["date", "symbol"]).sort_values("date")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Tail-session paper trading scan")
     parser.add_argument("--symbols", nargs="+", help="Specific symbols to scan")
@@ -97,6 +180,7 @@ def main() -> None:
     parser.add_argument("--liquidity-end", default=None, help="Liquidity ranking end date; defaults to trade date")
     parser.add_argument("--liquidity-min-bars", type=int, default=120, help="Minimum daily bars required for liquid-cache universe")
     parser.add_argument("--liquidity-min-end-date", default=None, help="Minimum latest daily bar date for liquid-cache universe")
+    parser.add_argument("--min-market-breadth-above-ma20", type=float, default=None, help="Skip live scan unless this fraction of scan universe is above MA20")
     parser.add_argument("--capital", type=float, default=100_000, help="Paper account initial capital")
     parser.add_argument("--confirmations", type=int, default=3, help="Consecutive confirmations required")
     parser.add_argument("--top-n", type=int, default=5, help="Maximum final selected symbols")
@@ -140,14 +224,41 @@ def main() -> None:
         liquidity_min_end_date=liquidity_min_end_date,
     )
 
-    scanner = IntradayScanner(aggregator, confirmation_count=args.confirmations)
-    candidates = scanner.scan(symbols, trade_date)
-    confirmed = scanner.confirm(candidates)
-    selected = select_tail_session_signals(
-        confirmed,
-        top_n=args.top_n,
-        min_strength=args.min_strength,
+    breadth = None
+    universe_quotes = (
+        aggregator.get_realtime_quotes(symbols)
+        if args.min_market_breadth_above_ma20 is not None and symbols
+        else None
     )
+    if args.min_market_breadth_above_ma20 is not None:
+        breadth = calculate_market_breadth_above_ma20(
+            symbols=symbols,
+            bars_cache_dir=args.bars_cache_dir,
+            trade_date=trade_date,
+            quotes=universe_quotes,
+        )
+        if breadth.breadth < args.min_market_breadth_above_ma20:
+            candidates = []
+            confirmed = []
+            selected = []
+        else:
+            scanner = IntradayScanner(aggregator, confirmation_count=args.confirmations)
+            candidates = scanner.scan(symbols, trade_date)
+            confirmed = scanner.confirm(candidates)
+            selected = select_tail_session_signals(
+                confirmed,
+                top_n=args.top_n,
+                min_strength=args.min_strength,
+            )
+    else:
+        scanner = IntradayScanner(aggregator, confirmation_count=args.confirmations)
+        candidates = scanner.scan(symbols, trade_date)
+        confirmed = scanner.confirm(candidates)
+        selected = select_tail_session_signals(
+            confirmed,
+            top_n=args.top_n,
+            min_strength=args.min_strength,
+        )
 
     quotes = aggregator.get_realtime_quotes([signal.symbol for signal in selected]) if selected else None
     prices = _prices_from_quotes(quotes, selected)
@@ -181,6 +292,8 @@ def main() -> None:
     print("=" * 50)
     print(f"Trade date     : {trade_date}")
     print(f"Scanned symbols: {len(symbols)}")
+    if breadth is not None:
+        print(f"Market breadth : {breadth.breadth:.2%} ({breadth.above_count}/{breadth.symbol_count} above MA20)")
     print(f"Candidates     : {len(candidates)}")
     print(f"Confirmed      : {len(confirmed)}")
     print(f"Selected       : {len(selected)}")

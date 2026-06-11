@@ -282,3 +282,4 @@ if scheduler.is_market_hours():
 - [x] 每日自动生成交易报告
 - [x] 每日尾盘可输出最终选股名单：`--selection-only --output-json --output-csv`
 - [x] 每日尾盘扫描可使用流动性股票池：`--universe liquid-cache`
+- [x] 每日尾盘扫描可使用市场宽度风控：`--min-market-breadth-above-ma20 0.6`

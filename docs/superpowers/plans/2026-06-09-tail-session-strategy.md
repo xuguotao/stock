@@ -20,7 +20,8 @@
 - ✅ Signal-quality and market-regime filters are implemented in `TailSessionFactor`: MA20 quality gate, overextension gate, turnover gate, and market breadth above MA20 gate.
 - ✅ Daily tail-session selection output is implemented: `scripts/run_tail_session_live.py --selection-only --output-json --output-csv` writes the final ranked stock list without paper trading.
 - ✅ Daily tail-session live scan can use the liquidity-ranked cache universe: `scripts/run_tail_session_live.py --universe liquid-cache`.
-- ✅ Verification run: `pytest tests/ -q` passes with 168 tests.
+- ✅ Daily tail-session live scan can apply the same market breadth gate: `scripts/run_tail_session_live.py --min-market-breadth-above-ma20 0.6`.
+- ✅ Verification run: `pytest tests/ -q` passes with 171 tests.
 - 📉 Latest offline-cache sample result (10 liquid symbols, 2024-01-01 to 2025-06-01): total return 2.59%, Sharpe -0.006, win rate 44.54%, max drawdown -13.32%, 1450 trades.
 - 📈 Latest recent liquid30 result (auto liquidity-ranked cached universe, 2025-01-01 to 2026-06-10, min_score 1.0, top_n 5): total return 12.22%, Sharpe 0.378, win rate 36.13%, max drawdown -17.6%, 903 trades.
 - 📈 Latest recent liquid30 market-breadth result (same universe/config plus min_market_breadth_above_ma20 0.6): total return 25.69%, Sharpe 1.188, win rate 15.61%, max drawdown -10.22%, 558 trades.
