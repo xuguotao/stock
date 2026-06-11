@@ -488,8 +488,12 @@ def _chinese_metric_column(column: str) -> str:
 def to_chinese_report(report: pd.DataFrame) -> pd.DataFrame:
     """Translate report columns and enum values for human-facing CSV output."""
     out = report.copy()
+    if "latest_daily_return" in out.columns:
+        out = out.sort_values("latest_daily_return", ascending=False, na_position="last").reset_index(drop=True)
     for column in out.columns:
         if out[column].dtype == "object":
             out[column] = out[column].map(lambda value: CHINESE_VALUE_MAP.get(value, value))
     out = out.rename(columns={column: _chinese_metric_column(column) for column in out.columns})
+    if "今日代理涨跌率" in out.columns:
+        out["今日代理涨跌率"] = out["今日代理涨跌率"].map(lambda value: f"{float(value) * 100:.2f}%")
     return out

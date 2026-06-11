@@ -369,4 +369,31 @@ def test_converts_report_to_chinese_columns_and_values():
     assert result.iloc[0]["信号原因"] == "弱于趋势"
     assert result.iloc[0]["最终操作建议"] == "小额试探"
     assert result.iloc[0]["建议原因"] == "同类历史反弹概率略高"
-    assert result.iloc[0]["今日代理涨跌率"] == -0.022
+    assert result.iloc[0]["今日代理涨跌率"] == "-2.20%"
+
+
+def test_converts_report_to_chinese_sorted_by_latest_daily_return_descending():
+    report = pd.DataFrame(
+        [
+            {
+                "fund_name": "华夏中证500指数增强C",
+                "fund_code": "007995",
+                "latest_daily_return": -0.022,
+            },
+            {
+                "fund_name": "天弘中证食品饮料ETF联接C",
+                "fund_code": "001632",
+                "latest_daily_return": 0.015,
+            },
+            {
+                "fund_name": "华宝纳斯达克精选股票(QDII)C",
+                "fund_code": "017437",
+                "latest_daily_return": -0.003,
+            },
+        ]
+    )
+
+    result = to_chinese_report(report)
+
+    assert result["基金代码"].tolist() == ["001632", "017437", "007995"]
+    assert result["今日代理涨跌率"].tolist() == ["1.50%", "-0.30%", "-2.20%"]

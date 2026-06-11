@@ -19,6 +19,8 @@ from src.trading.scheduler import TradingScheduler
 
 
 def pct(value: object) -> str:
+    if isinstance(value, str) and value.strip().endswith("%"):
+        return value.strip()
     return f"{float(value) * 100:.2f}%"
 
 
