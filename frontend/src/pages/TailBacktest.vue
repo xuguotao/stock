@@ -45,11 +45,42 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="Dataset">
-              <el-input v-model="form.dataset_path" :disabled="form.sample" placeholder="data/research/xxx.parquet" />
+              <el-select
+                v-model="form.dataset_id"
+                :disabled="form.sample"
+                :loading="datasetsLoading"
+                filterable
+                placeholder="选择本地 research dataset"
+                @change="applyDatasetDefaults"
+              >
+                <el-option
+                  v-for="dataset in datasets"
+                  :key="dataset.id"
+                  :label="dataset.name"
+                  :value="dataset.id"
+                >
+                  <div class="dataset-option">
+                    <span>{{ dataset.name }}</span>
+                    <span>{{ dataset.start ?? '-' }} / {{ dataset.end ?? '-' }}</span>
+                  </div>
+                </el-option>
+              </el-select>
             </el-form-item>
           </el-col>
         </el-row>
       </el-form>
+    </div>
+
+    <div v-if="selectedDataset && !form.sample" class="panel compact-panel">
+      <div class="dataset-summary">
+        <div>
+          <div class="metric-label">当前数据集</div>
+          <div class="summary-title">{{ selectedDataset.name }}</div>
+        </div>
+        <el-tag effect="plain">{{ selectedDataset.symbol_count }} 个标的</el-tag>
+        <el-tag effect="plain">{{ formatNumber(selectedDataset.row_count) }} 行</el-tag>
+        <el-tag effect="plain">{{ selectedDataset.start ?? '-' }} / {{ selectedDataset.end ?? '-' }}</el-tag>
+      </div>
     </div>
 
     <div v-if="job" class="metric-grid">
@@ -73,9 +104,9 @@
 
 <script setup lang="ts">
 import * as echarts from 'echarts'
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { api, type JobRecord, type TailBacktestPayload } from '../api/client'
+import { api, type DatasetSummary, type JobRecord, type TailBacktestPayload } from '../api/client'
 
 interface SeriesPoint {
   date: string
@@ -88,10 +119,13 @@ const form = ref<TailBacktestPayload>({
   capital: 100000,
   top_n: 3,
   min_score: null,
+  dataset_id: null,
   dataset_path: '',
   sample: true
 })
 const submitting = ref(false)
+const datasetsLoading = ref(false)
+const datasets = ref<DatasetSummary[]>([])
 const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
 const equityEl = ref<HTMLElement | null>(null)
@@ -99,6 +133,7 @@ const drawdownEl = ref<HTMLElement | null>(null)
 
 const result = computed(() => job.value?.result ?? null)
 const metrics = computed(() => (result.value?.metrics ?? {}) as Record<string, number | string>)
+const selectedDataset = computed(() => datasets.value.find((dataset) => dataset.id === form.value.dataset_id) ?? null)
 const metricItems = computed(() => [
   { label: '总收益', value: formatMetric(metrics.value.total_return, '%') },
   { label: '年化收益', value: formatMetric(metrics.value.annualized_return, '%') },
@@ -113,6 +148,7 @@ async function submit() {
   try {
     const payload = {
       ...form.value,
+      dataset_id: form.value.sample ? null : form.value.dataset_id,
       dataset_path: form.value.sample ? null : form.value.dataset_path
     }
     const response = await api.submitTailBacktest(payload)
@@ -124,6 +160,29 @@ async function submit() {
   } finally {
     submitting.value = false
   }
+}
+
+async function loadDatasets() {
+  datasetsLoading.value = true
+  try {
+    datasets.value = (await api.listDatasets()).items
+    if (!form.value.sample && !form.value.dataset_id && datasets.value.length) {
+      form.value.dataset_id = datasets.value[0].id
+      applyDatasetDefaults()
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载数据集失败')
+  } finally {
+    datasetsLoading.value = false
+  }
+}
+
+function applyDatasetDefaults() {
+  const dataset = selectedDataset.value
+  if (!dataset) return
+  form.value.dataset_path = dataset.path
+  if (dataset.start) form.value.start = dataset.start
+  if (dataset.end) form.value.end = dataset.end
 }
 
 async function refreshJob() {
@@ -155,4 +214,20 @@ function formatMetric(value: unknown, suffix = '') {
   if (typeof value === 'string') return value
   return '-'
 }
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat('zh-CN').format(value)
+}
+
+watch(
+  () => form.value.sample,
+  (sample) => {
+    if (!sample && !form.value.dataset_id && datasets.value.length) {
+      form.value.dataset_id = datasets.value[0].id
+      applyDatasetDefaults()
+    }
+  }
+)
+
+onMounted(loadDatasets)
 </script>

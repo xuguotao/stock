@@ -174,12 +174,17 @@ npm install
 npm run dev
 ```
 
-默认前端地址为 `http://127.0.0.1:5173`。第一期页面包含总览、数据中心、任务中心和尾盘回测；尾盘回测支持样例数据直接试跑，也可以填写本地 research dataset 路径。
+默认前端地址为 `http://127.0.0.1:5173`。第一期页面包含总览、数据中心、任务中心和尾盘回测；尾盘回测支持样例数据直接试跑，也可以从数据中心选择本地 research dataset。
 
 数据中心会扫描 `data/research/*.parquet`，展示数据集文件、manifest、日期范围、行数、符号数和符号列表。对应 API：
 
 - `GET /api/datasets`
 - `GET /api/datasets/{dataset_id}`
+
+尾盘回测 API 支持两种数据来源：
+
+- `sample=true`：使用内置样例数据快速试跑。
+- `sample=false` 且传入 `dataset_id`：后端从 `data/research` 解析对应 parquet 文件，避免前端手填本地路径。
 
 ## 项目结构
 

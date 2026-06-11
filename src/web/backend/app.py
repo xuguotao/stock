@@ -67,6 +67,12 @@ def create_app(
         payload: TailBacktestRequest,
         background_tasks: BackgroundTasks,
     ) -> dict[str, Any]:
+        if not payload.sample and payload.dataset_id:
+            dataset_path = datasets.resolve_dataset_path(payload.dataset_id)
+            if dataset_path is None:
+                raise HTTPException(status_code=404, detail="Dataset not found")
+            payload = payload.model_copy(update={"dataset_path": str(dataset_path)})
+
         job = store.create_job("tail_session_backtest", payload.model_dump(mode="json"))
 
         if app.state.run_jobs_inline:

@@ -22,6 +22,7 @@ export interface TailBacktestPayload {
   top_n: number
   min_score?: number | null
   min_market_breadth_above_ma20?: number | null
+  dataset_id?: string | null
   dataset_path?: string | null
   symbols?: string[] | null
   sample: boolean

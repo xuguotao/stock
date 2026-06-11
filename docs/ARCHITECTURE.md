@@ -37,7 +37,7 @@ frontend/               Vue + ECharts 后台控制台
 - `src.web.backend.backtests`：尾盘回测 API 模型和执行器，复用现有 `BacktestEngine`、`TailSessionFactor` 和 research dataset 读取能力。
 - `frontend/`：Vue 3 + TypeScript + Element Plus + ECharts 控制台，当前包含总览、数据中心、任务中心和尾盘回测页面。
 
-Web 层只做编排、可视化和任务状态管理，不复制策略逻辑。数据中心只读取本地 `data/research/*.parquet` 的摘要和符号列表，不负责联网下载。耗时任务通过 job 记录追踪；第一期支持进程内后台任务，后续可替换为独立 worker 或队列。
+Web 层只做编排、可视化和任务状态管理，不复制策略逻辑。数据中心只读取本地 `data/research/*.parquet` 的摘要和符号列表，不负责联网下载。尾盘回测页面通过 `dataset_id` 选择数据集，由后端在配置的 `dataset_root` 下解析成本地路径，前端不直接依赖文件系统布局。耗时任务通过 job 记录追踪；第一期支持进程内后台任务，后续可替换为独立 worker 或队列。
 
 ## 数据层
 

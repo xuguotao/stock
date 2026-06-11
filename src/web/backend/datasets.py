@@ -62,6 +62,13 @@ class DatasetService:
         summary["symbols"] = symbols
         return summary
 
+    def resolve_dataset_path(self, dataset_id: str) -> Path | None:
+        """Resolve a public dataset id to a local parquet path under dataset_root."""
+        path = self._resolve_dataset_id(dataset_id)
+        if path is None or not path.exists():
+            return None
+        return path
+
     def _resolve_dataset_id(self, dataset_id: str) -> Path | None:
         candidate = self.dataset_root / dataset_id
         try:

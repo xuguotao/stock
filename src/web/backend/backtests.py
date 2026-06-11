@@ -24,14 +24,15 @@ class TailBacktestRequest(BaseModel):
     top_n: int = Field(default=5, ge=1)
     min_score: float | None = None
     min_market_breadth_above_ma20: float | None = None
+    dataset_id: str | None = None
     dataset_path: str | None = None
     symbols: list[str] | None = None
     sample: bool = False
 
     @model_validator(mode="after")
     def require_dataset_or_sample(self) -> "TailBacktestRequest":
-        if not self.sample and not self.dataset_path:
-            raise ValueError("dataset_path is required unless sample is true")
+        if not self.sample and not self.dataset_path and not self.dataset_id:
+            raise ValueError("dataset_path or dataset_id is required unless sample is true")
         return self
 
 
