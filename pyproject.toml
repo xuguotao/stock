@@ -26,6 +26,9 @@ dev = [
     "pytest-cov>=5.0",
     "jupyter>=1.0",
 ]
+timesfm = [
+    "timesfm[torch]>=2.0.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

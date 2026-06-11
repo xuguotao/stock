@@ -7,6 +7,7 @@ from src.strategy.factors.value import ValueFactor
 from src.strategy.factors.composite import CompositeFactor
 from src.strategy.factors.tail_session import TailSessionFactor
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
+from src.strategy.factors.timesfm import LazyTimesFMForecaster, TimesFMReturnForecastFactor
 
 __all__ = [
     "MomentumFactor",
@@ -16,4 +17,6 @@ __all__ = [
     "CompositeFactor",
     "TailSessionFactor",
     "OvernightMomentumFactor",
+    "LazyTimesFMForecaster",
+    "TimesFMReturnForecastFactor",
 ]
