@@ -274,3 +274,4 @@ if scheduler.is_market_hours():
 - [ ] 模拟实盘可连续运行 5 个交易日无报错
 - [x] 每日自动生成交易报告
 - [x] 每日尾盘可输出最终选股名单：`--selection-only --output-json --output-csv`
+- [x] 每日尾盘扫描可使用流动性股票池：`--universe liquid-cache`

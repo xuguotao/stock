@@ -4,14 +4,14 @@
 Usage:
     python scripts/run_tail_session_live.py --symbols 000001 600519
     python scripts/run_tail_session_live.py --limit 20 --confirmations 1
-    python scripts/run_tail_session_live.py --limit 50 --selection-only --output-json reports/tail_session/latest_selection.json
+    python scripts/run_tail_session_live.py --universe liquid-cache --limit 30 --selection-only --output-json reports/tail_session/latest_selection.json
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 from config.settings import reset_settings
 from src.core.constants import format_symbol
 from src.data.aggregator import DataAggregator
+from src.data.research_dataset import select_liquid_symbols_from_cache
 from src.strategy.executor import RealTimeExecutor
 from src.strategy.reports import (
     select_tail_session_signals,
@@ -50,10 +51,52 @@ def _prices_from_quotes(quotes, fallback_signals) -> dict[str, float]:
     return prices
 
 
+def resolve_scan_symbols(
+    aggregator: DataAggregator,
+    raw_symbols: list[str] | None,
+    limit: int,
+    universe: str,
+    bars_cache_dir: str | Path,
+    liquidity_start: date,
+    liquidity_end: date,
+    liquidity_min_bars: int,
+    liquidity_min_end_date: date | None,
+) -> list[str]:
+    """Resolve the live scan universe."""
+    if raw_symbols:
+        return [format_symbol(symbol) for symbol in raw_symbols]
+
+    if universe == "liquid-cache":
+        ranking = select_liquid_symbols_from_cache(
+            bars_dir=bars_cache_dir,
+            start=liquidity_start,
+            end=liquidity_end,
+            limit=limit,
+            min_bars=liquidity_min_bars,
+            min_end_date=liquidity_min_end_date,
+        )
+        symbols = [row["symbol"] for row in ranking]
+        if symbols:
+            return symbols
+
+    return aggregator.get_csi300_symbols()[:limit]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Tail-session paper trading scan")
     parser.add_argument("--symbols", nargs="+", help="Specific symbols to scan")
     parser.add_argument("--limit", type=int, default=20, help="Number of default symbols to scan")
+    parser.add_argument(
+        "--universe",
+        choices=["default", "liquid-cache"],
+        default="liquid-cache",
+        help="Default scan universe when --symbols is omitted",
+    )
+    parser.add_argument("--bars-cache-dir", default="data/cache/bars", help="Local daily bars cache for liquid-cache universe")
+    parser.add_argument("--liquidity-start", default=None, help="Liquidity ranking start date; defaults to 18 months before trade date")
+    parser.add_argument("--liquidity-end", default=None, help="Liquidity ranking end date; defaults to trade date")
+    parser.add_argument("--liquidity-min-bars", type=int, default=120, help="Minimum daily bars required for liquid-cache universe")
+    parser.add_argument("--liquidity-min-end-date", default=None, help="Minimum latest daily bar date for liquid-cache universe")
     parser.add_argument("--capital", type=float, default=100_000, help="Paper account initial capital")
     parser.add_argument("--confirmations", type=int, default=3, help="Consecutive confirmations required")
     parser.add_argument("--top-n", type=int, default=5, help="Maximum final selected symbols")
@@ -78,10 +121,24 @@ def main() -> None:
         return
 
     aggregator = DataAggregator()
-    if args.symbols:
-        symbols = [format_symbol(symbol) for symbol in args.symbols]
-    else:
-        symbols = aggregator.get_csi300_symbols()[:args.limit]
+    liquidity_start = (
+        date.fromisoformat(args.liquidity_start)
+        if args.liquidity_start
+        else trade_date - timedelta(days=548)
+    )
+    liquidity_end = date.fromisoformat(args.liquidity_end) if args.liquidity_end else trade_date
+    liquidity_min_end_date = date.fromisoformat(args.liquidity_min_end_date) if args.liquidity_min_end_date else None
+    symbols = resolve_scan_symbols(
+        aggregator=aggregator,
+        raw_symbols=args.symbols,
+        limit=args.limit,
+        universe=args.universe,
+        bars_cache_dir=args.bars_cache_dir,
+        liquidity_start=liquidity_start,
+        liquidity_end=liquidity_end,
+        liquidity_min_bars=args.liquidity_min_bars,
+        liquidity_min_end_date=liquidity_min_end_date,
+    )
 
     scanner = IntradayScanner(aggregator, confirmation_count=args.confirmations)
     candidates = scanner.scan(symbols, trade_date)

@@ -113,7 +113,11 @@ python scripts/run_tail_session_backtest.py \
 ```bash
 # 每天尾盘只输出最终选股名单，不模拟下单
 python scripts/run_tail_session_live.py \
-  --limit 50 \
+  --universe liquid-cache \
+  --limit 30 \
+  --liquidity-start 2025-01-01 \
+  --liquidity-min-bars 250 \
+  --liquidity-min-end-date 2026-06-01 \
   --selection-only \
   --confirmations 1 \
   --top-n 5 \
@@ -225,6 +229,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 - 最小入场分数门槛: `--min-score` / `--min-scores`
 - 尾盘分钟级扫描器 (IntradayScanner)
 - 最终选股名单输出: `--selection-only`, `--output-json`, `--output-csv`
+- 每日扫描股票池: `--universe liquid-cache`
 - 模拟实盘执行器 (RealTimeExecutor)
 - 模拟扫描脚本: `python scripts/run_tail_session_live.py`
 - 每日 Markdown 交易报告: `reports/tail_session/`
@@ -235,12 +240,12 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 | 模块 | 测试数 |
 |------|--------|
 | Data (models, cache, aggregator, research dataset) | 22 |
-| Strategy (factors, broker, backtest, tail session) | 74 |
+| Strategy (factors, broker, backtest, tail session) | 77 |
 | Trading (signal, risk, scheduler, paper) | 34 |
 | Research (neutralization, IC, quantile, fund tail, tail grid) | 17 |
 | Monitoring (紫金) | 6 |
 | Core behaviors | 3 |
-| **总计** | **156** |
+| **总计** | **159** |
 
 ## 数据源说明
 
