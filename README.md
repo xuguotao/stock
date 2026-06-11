@@ -77,7 +77,8 @@ python scripts/run_tail_session_backtest.py \
   --bars-dataset data/research/daily_bars_sample.parquet \
   --start 2024-01-01 \
   --end 2025-06-01 \
-  --min-score 1.0
+  --min-score 1.0 \
+  --min-market-breadth-above-ma20 0.6
 
 # 离线参数网格评估，输出 CSV
 python scripts/evaluate_tail_session_grid.py \
@@ -118,6 +119,7 @@ python scripts/run_tail_session_live.py \
   --liquidity-start 2025-01-01 \
   --liquidity-min-bars 250 \
   --liquidity-min-end-date 2026-06-01 \
+  --min-market-breadth-above-ma20 0.6 \
   --selection-only \
   --confirmations 1 \
   --top-n 5 \
@@ -133,6 +135,28 @@ python scripts/run_tail_session_live.py --symbols 000001 --ignore-session --conf
 # 指定日报输出目录
 python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/tail_session
 ```
+
+### 7. 计算 TimesFM 预测因子（可选）
+
+TimesFM 依赖较重，默认不安装。需要实验预测型因子时：
+
+```bash
+pip install -e ".[timesfm]"
+
+python scripts/compute_timesfm_features.py \
+  --bars-dataset data/research/daily_bars_recent_liquid30.parquet \
+  --start 2025-01-01 \
+  --end 2026-06-10 \
+  --context-window 512 \
+  --min-history 120 \
+  --horizon 1 \
+  --output reports/timesfm/features.csv
+```
+
+输出包含：
+- `timesfm_return_forecast`: 未来累计收益预测，越高越偏多
+- `timesfm_uncertainty`: q90-q10 预测区间宽度
+- `timesfm_confidence`: 收益预测除以不确定性
 
 ## 项目结构
 
@@ -227,6 +251,7 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 - 流动性研究池构建: `python scripts/build_liquid_research_dataset.py`
 - 参数网格评估: `python scripts/evaluate_tail_session_grid.py`
 - 最小入场分数门槛: `--min-score` / `--min-scores`
+- 市场宽度风控: `--min-market-breadth-above-ma20`
 - 尾盘分钟级扫描器 (IntradayScanner)
 - 最终选股名单输出: `--selection-only`, `--output-json`, `--output-csv`
 - 每日扫描股票池: `--universe liquid-cache`
@@ -239,13 +264,14 @@ python scripts/run_tail_session_live.py --symbols 000001 --report-dir reports/ta
 
 | 模块 | 测试数 |
 |------|--------|
-| Data (models, cache, aggregator, research dataset) | 22 |
-| Strategy (factors, broker, backtest, tail session) | 77 |
+| Data (models, cache, aggregator, research dataset) | 25 |
+| Strategy (factors, broker, backtest, tail session) | 92 |
 | Trading (signal, risk, scheduler, paper) | 34 |
-| Research (neutralization, IC, quantile, fund tail, tail grid) | 17 |
+| Research (neutralization, IC, quantile, fund tail, tail grid) | 19 |
+| Scripts (daily reports and CLI helpers) | 1 |
 | Monitoring (紫金) | 6 |
 | Core behaviors | 3 |
-| **总计** | **159** |
+| **总计** | **180** |
 
 ## 数据源说明
 
