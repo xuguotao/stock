@@ -9,6 +9,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
+from src.web.backend.datasets import DatasetService
 from src.web.backend.jobs import JobStore
 
 
@@ -20,12 +21,15 @@ class CreateJobRequest(BaseModel):
 def create_app(
     *,
     db_path: str | Path = "data/web/jobs.sqlite3",
+    dataset_root: str | Path = "data/research",
     run_jobs_inline: bool = False,
 ) -> FastAPI:
     """Create a configured FastAPI app."""
     app = FastAPI(title="A-Share Quant Dashboard API")
     store = JobStore(db_path)
+    datasets = DatasetService(dataset_root)
     app.state.job_store = store
+    app.state.dataset_service = datasets
     app.state.run_jobs_inline = run_jobs_inline
 
     @app.get("/api/health")
@@ -46,6 +50,17 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
         return job.to_dict()
+
+    @app.get("/api/datasets")
+    def list_datasets() -> dict[str, Any]:
+        return {"items": [dataset.to_dict() for dataset in datasets.list_datasets()]}
+
+    @app.get("/api/datasets/{dataset_id}")
+    def get_dataset(dataset_id: str) -> dict[str, Any]:
+        dataset = datasets.get_dataset(dataset_id)
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        return dataset
 
     @app.post("/api/backtests/tail-session")
     def create_tail_backtest(

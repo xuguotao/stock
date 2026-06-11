@@ -4,6 +4,7 @@
       <div class="brand">A 股量化后台</div>
       <el-menu :default-active="activePage" @select="activePage = $event">
         <el-menu-item index="dashboard">总览</el-menu-item>
+        <el-menu-item index="data">数据中心</el-menu-item>
         <el-menu-item index="backtest">尾盘回测</el-menu-item>
         <el-menu-item index="jobs">任务中心</el-menu-item>
       </el-menu>
@@ -15,6 +16,7 @@
       </el-header>
       <el-main class="content">
         <Dashboard v-if="activePage === 'dashboard'" @open-backtest="activePage = 'backtest'" />
+        <DataCenter v-else-if="activePage === 'data'" />
         <TailBacktest v-else-if="activePage === 'backtest'" />
         <Jobs v-else />
       </el-main>
@@ -24,6 +26,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import DataCenter from './pages/DataCenter.vue'
 import Dashboard from './pages/Dashboard.vue'
 import Jobs from './pages/Jobs.vue'
 import TailBacktest from './pages/TailBacktest.vue'

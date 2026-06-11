@@ -31,6 +31,27 @@ export interface BacktestSubmitResponse {
   job_id: string
 }
 
+export interface DatasetSummary {
+  id: string
+  name: string
+  path: string
+  manifest_path: string | null
+  row_count: number
+  symbol_count: number
+  start: string | null
+  end: string | null
+  built_at: string | null
+  size_bytes: number
+}
+
+export interface DatasetDetail extends DatasetSummary {
+  symbols: string[]
+}
+
+export interface DatasetsResponse {
+  items: DatasetSummary[]
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
@@ -44,6 +65,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  listDatasets() {
+    return request<DatasetsResponse>('/api/datasets')
+  },
+  getDataset(datasetId: string) {
+    return request<DatasetDetail>(`/api/datasets/${encodeURIComponent(datasetId)}`)
+  },
   listJobs(limit = 20) {
     return request<JobsResponse>(`/api/jobs?limit=${limit}`)
   },

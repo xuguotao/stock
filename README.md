@@ -174,7 +174,12 @@ npm install
 npm run dev
 ```
 
-默认前端地址为 `http://127.0.0.1:5173`。第一期页面包含总览、任务中心和尾盘回测；尾盘回测支持样例数据直接试跑，也可以填写本地 research dataset 路径。
+默认前端地址为 `http://127.0.0.1:5173`。第一期页面包含总览、数据中心、任务中心和尾盘回测；尾盘回测支持样例数据直接试跑，也可以填写本地 research dataset 路径。
+
+数据中心会扫描 `data/research/*.parquet`，展示数据集文件、manifest、日期范围、行数、符号数和符号列表。对应 API：
+
+- `GET /api/datasets`
+- `GET /api/datasets/{dataset_id}`
 
 ## 项目结构
 
@@ -213,7 +218,7 @@ npm run dev
 │       ├── signal_engine.py   # 信号引擎
 │       ├── risk_manager.py    # 风控管理器
 │       └── scheduler.py       # 交易调度器
-├── tests/                     # 测试套件 (153个测试)
+├── tests/                     # 测试套件
 │   ├── test_data/             # 数据层测试
 │   ├── test_strategy/         # 策略层测试
 │   ├── test_trading/          # 交易层测试

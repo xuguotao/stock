@@ -65,6 +65,12 @@ body {
   font-weight: 700;
 }
 
+.compact-value {
+  font-size: 15px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .panel {
   border: 1px solid #e1e5ea;
   border-radius: 6px;
@@ -75,4 +81,61 @@ body {
 .chart {
   width: 100%;
   height: 320px;
+}
+
+.data-center-grid {
+  display: grid;
+  grid-template-columns: minmax(520px, 1.4fr) minmax(360px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.panel-title-row {
+  margin-bottom: 12px;
+}
+
+.dataset-list,
+.dataset-detail {
+  min-width: 0;
+}
+
+.mono-text {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sub-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.symbol-section {
+  margin-top: 16px;
+}
+
+.symbol-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+@media (max-width: 1080px) {
+  .data-center-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .content {
+    padding: 12px;
+  }
+
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
