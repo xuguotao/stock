@@ -107,6 +107,13 @@ body {
   align-items: start;
 }
 
+.tail-result-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .panel-title-row {
   margin-bottom: 12px;
 }
@@ -203,7 +210,8 @@ body {
 
 @media (max-width: 1080px) {
   .data-center-grid,
-  .fund-tail-grid {
+  .fund-tail-grid,
+  .tail-result-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -13,6 +13,7 @@ from src.data.research_dataset import load_research_dataset
 from src.strategy.engine.backtest import BacktestEngine
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
 from src.strategy.factors.tail_session import TailSessionFactor
+from src.strategy.scoring import FactorScoreEngine, Selection
 
 
 class TailBacktestRequest(BaseModel):
@@ -42,16 +43,10 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
     if bars.empty:
         raise ValueError("No bars available for backtest")
 
-    tail_factor = TailSessionFactor(
-        breakout_window=20,
-        trend_window=5,
-        volume_ratio_threshold=1.2,
-        min_market_breadth_above_ma20=request.min_market_breadth_above_ma20,
-    )
-    overnight_factor = OvernightMomentumFactor(smoothing_window=1)
+    factors = _tail_factors(request)
     engine = BacktestEngine(
         bars=bars,
-        factors=[tail_factor, overnight_factor],
+        factors=factors,
         factor_weights=[0.7, 0.3],
         top_n=request.top_n,
         rebalance_days=1,
@@ -60,16 +55,25 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
         min_score=request.min_score,
     )
     result = engine.run()
+    rebalance_selections = _rebalance_selections(
+        bars=bars,
+        factors=factors,
+        top_n=request.top_n,
+        min_score=request.min_score,
+    )
     return {
         "metrics": result.metrics,
         "trade_count": len(result.trades),
         "symbol_count": int(bars.index.get_level_values("symbol").nunique()),
+        "universe_symbols": sorted(map(str, bars.index.get_level_values("symbol").unique())),
+        "latest_selection": _latest_selection(rebalance_selections),
+        "rebalance_selections": rebalance_selections,
         "equity_curve": [
             {"date": pd.Timestamp(idx).date().isoformat(), "value": float(value)}
             for idx, value in result.portfolio_values.items()
         ],
         "drawdown_curve": _drawdown_curve(result.portfolio_values),
-        "trades": [trade.to_dict() for trade in result.trades],
+        "trades": [_trade_row(trade) for trade in result.trades],
     }
 
 
@@ -123,3 +127,66 @@ def _drawdown_curve(values: pd.Series) -> list[dict[str, Any]]:
         {"date": pd.Timestamp(idx).date().isoformat(), "value": float(value)}
         for idx, value in drawdown.items()
     ]
+
+
+def _tail_factors(request: TailBacktestRequest):
+    return [
+        TailSessionFactor(
+            breakout_window=20,
+            trend_window=5,
+            volume_ratio_threshold=1.2,
+            min_market_breadth_above_ma20=request.min_market_breadth_above_ma20,
+        ),
+        OvernightMomentumFactor(smoothing_window=1),
+    ]
+
+
+def _rebalance_selections(
+    *,
+    bars: pd.DataFrame,
+    factors: list,
+    top_n: int,
+    min_score: float | None,
+) -> list[dict[str, Any]]:
+    scorer = FactorScoreEngine(
+        factors=factors,
+        factor_weights=[0.7, 0.3],
+        top_n=top_n,
+        min_score=min_score,
+    )
+    rows: list[dict[str, Any]] = []
+    dates = sorted(bars.index.get_level_values("date").unique())
+    for current_date in dates:
+        historical = bars[bars.index.get_level_values("date") <= current_date]
+        for selection in scorer.select(historical, pd.Timestamp(current_date).date()):
+            rows.append(_selection_row(selection, bars))
+    return rows
+
+
+def _selection_row(selection: Selection, bars: pd.DataFrame) -> dict[str, Any]:
+    date_value = pd.Timestamp(selection.date)
+    close = None
+    try:
+        close = float(bars.loc[(date_value, selection.symbol), "close"])
+    except KeyError:
+        pass
+    return {
+        "date": date_value.date().isoformat(),
+        "rank": selection.rank,
+        "symbol": selection.symbol,
+        "score": round(selection.score, 6),
+        "close": close,
+    }
+
+
+def _latest_selection(selections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not selections:
+        return []
+    latest_date = max(row["date"] for row in selections)
+    return [row for row in selections if row["date"] == latest_date]
+
+
+def _trade_row(trade) -> dict[str, Any]:
+    row = trade.to_dict()
+    row["date"] = pd.Timestamp(row["date"]).date().isoformat()
+    return row

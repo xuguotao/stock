@@ -113,13 +113,92 @@
     </div>
 
     <div class="panel">
-      <h2 class="page-title">净值曲线</h2>
+      <div class="page-header panel-title-row">
+        <h2 class="page-title">数据趋势</h2>
+        <el-tag v-if="result" effect="plain">{{ equityCurve.length }} 个交易日</el-tag>
+      </div>
       <div ref="equityEl" class="chart"></div>
+      <div ref="drawdownEl" class="chart"></div>
     </div>
 
-    <div class="panel">
-      <h2 class="page-title">回撤曲线</h2>
-      <div ref="drawdownEl" class="chart"></div>
+    <div v-if="result" class="tail-result-grid">
+      <div class="panel">
+        <div class="page-header panel-title-row">
+          <h2 class="page-title">回测标的池</h2>
+          <el-tag effect="plain">{{ universeSymbols.length }}</el-tag>
+        </div>
+        <div class="symbol-tags">
+          <el-tag v-for="symbol in universeSymbols" :key="symbol" effect="plain">
+            {{ symbol }}
+          </el-tag>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="page-header panel-title-row">
+          <h2 class="page-title">最新调仓选股</h2>
+          <el-tag effect="plain">{{ latestSelectionDate }}</el-tag>
+        </div>
+        <el-table :data="latestSelection" height="260">
+          <el-table-column prop="rank" label="排名" width="72" />
+          <el-table-column prop="symbol" label="股票" min-width="120" />
+          <el-table-column label="分数" width="110" align="right">
+            <template #default="{ row }">{{ formatScore(row.score) }}</template>
+          </el-table-column>
+          <el-table-column label="收盘价" width="110" align="right">
+            <template #default="{ row }">{{ formatPrice(row.close) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
+
+    <div v-if="result" class="panel">
+      <div class="page-header panel-title-row">
+        <h2 class="page-title">调仓选股记录</h2>
+        <el-tag effect="plain">{{ rebalanceSelections.length }}</el-tag>
+      </div>
+      <el-table :data="rebalanceSelections" height="360">
+        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column prop="rank" label="排名" width="72" />
+        <el-table-column prop="symbol" label="股票" min-width="120" />
+        <el-table-column label="分数" width="110" align="right">
+          <template #default="{ row }">{{ formatScore(row.score) }}</template>
+        </el-table-column>
+        <el-table-column label="收盘价" width="110" align="right">
+          <template #default="{ row }">{{ formatPrice(row.close) }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div v-if="result" class="panel">
+      <div class="page-header panel-title-row">
+        <h2 class="page-title">交易明细</h2>
+        <el-tag effect="plain">{{ trades.length }}</el-tag>
+      </div>
+      <el-table :data="trades" height="420">
+        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column prop="symbol" label="股票" min-width="120" />
+        <el-table-column label="方向" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.side === 'buy' ? 'success' : 'danger'" effect="plain">
+              {{ row.side === 'buy' ? '买入' : '卖出' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="quantity" label="数量" width="110" align="right" />
+        <el-table-column label="价格" width="110" align="right">
+          <template #default="{ row }">{{ formatPrice(row.price) }}</template>
+        </el-table-column>
+        <el-table-column label="金额" width="130" align="right">
+          <template #default="{ row }">{{ formatMoney(row.amount) }}</template>
+        </el-table-column>
+        <el-table-column label="手续费" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.commission) }}</template>
+        </el-table-column>
+        <el-table-column label="已实现盈亏" width="130" align="right">
+          <template #default="{ row }">{{ formatMoney(row.realized_pnl) }}</template>
+        </el-table-column>
+      </el-table>
     </div>
   </section>
 </template>
@@ -133,6 +212,26 @@ import { api, type DatasetSummary, type JobRecord, type JobStatus, type TailBack
 interface SeriesPoint {
   date: string
   value: number
+}
+
+interface SelectionRow {
+  date: string
+  rank: number
+  symbol: string
+  score: number
+  close: number | null
+}
+
+interface TradeRow {
+  trade_id: string
+  date: string
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  amount: number
+  commission: number
+  realized_pnl: number
 }
 
 const form = ref<TailBacktestPayload>({
@@ -156,6 +255,14 @@ const drawdownEl = ref<HTMLElement | null>(null)
 
 const result = computed(() => job.value?.result ?? null)
 const metrics = computed(() => (result.value?.metrics ?? {}) as Record<string, number | string>)
+const equityCurve = computed(() => (result.value?.equity_curve ?? []) as unknown as SeriesPoint[])
+const drawdownCurve = computed(() => (result.value?.drawdown_curve ?? []) as unknown as SeriesPoint[])
+const universeSymbols = computed(() => (result.value?.universe_symbols ?? []) as string[])
+const latestSelection = computed(() => (result.value?.latest_selection ?? []) as unknown as SelectionRow[])
+const rebalanceSelections = computed(() => (result.value?.rebalance_selections ?? []) as unknown as SelectionRow[])
+const trades = computed(() => (result.value?.trades ?? []) as unknown as TradeRow[])
+const equityTradeMarkers = computed(() => buildTradeMarkers(equityCurve.value, trades.value))
+const latestSelectionDate = computed(() => latestSelection.value[0]?.date ?? '-')
 const selectedDataset = computed(() => datasets.value.find((dataset) => dataset.id === form.value.dataset_id) ?? null)
 const metricItems = computed(() => [
   { label: '总收益', value: formatPercentMetric(metrics.value.total_return) },
@@ -237,20 +344,37 @@ async function pollJobUntilDone(jobId: string) {
 }
 
 function renderCharts() {
-  renderLine(equityEl.value, '净值', (result.value?.equity_curve ?? []) as unknown as SeriesPoint[])
-  renderLine(drawdownEl.value, '回撤', (result.value?.drawdown_curve ?? []) as unknown as SeriesPoint[])
+  renderLine(equityEl.value, '净值', equityCurve.value, equityTradeMarkers.value)
+  renderLine(drawdownEl.value, '回撤', drawdownCurve.value)
 }
 
-function renderLine(el: HTMLElement | null, name: string, points: SeriesPoint[]) {
+function renderLine(el: HTMLElement | null, name: string, points: SeriesPoint[], markers: TradeMarker[] = []) {
   if (!el) return
   const chart = echarts.init(el)
   chart.setOption({
     grid: { left: 48, right: 24, top: 32, bottom: 42 },
     tooltip: { trigger: 'axis' },
     title: { show: !points.length, text: '暂无数据', left: 'center', top: 'middle', textStyle: { color: '#8a94a6', fontSize: 14 } },
+    legend: markers.length ? { top: 0, right: 20 } : undefined,
     xAxis: { type: 'category', data: points.map((point) => point.date) },
     yAxis: { type: 'value', scale: true },
-    series: [{ name, type: 'line', smooth: false, showSymbol: false, data: points.map((point) => point.value) }]
+    series: [
+      { name, type: 'line', smooth: false, showSymbol: false, data: points.map((point) => point.value) },
+      {
+        name: '买入',
+        type: 'scatter',
+        symbolSize: 9,
+        itemStyle: { color: '#16a34a' },
+        data: markers.filter((marker) => marker.side === 'buy').map((marker) => [marker.date, marker.value, marker.label])
+      },
+      {
+        name: '卖出',
+        type: 'scatter',
+        symbolSize: 9,
+        itemStyle: { color: '#dc2626' },
+        data: markers.filter((marker) => marker.side === 'sell').map((marker) => [marker.date, marker.value, marker.label])
+      }
+    ]
   })
 }
 
@@ -268,6 +392,42 @@ function formatPercentMetric(value: unknown) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat('zh-CN').format(value)
+}
+
+function formatScore(value: unknown) {
+  return typeof value === 'number' ? value.toFixed(4) : '-'
+}
+
+function formatPrice(value: unknown) {
+  return typeof value === 'number' ? value.toFixed(2) : '-'
+}
+
+function formatMoney(value: unknown) {
+  return typeof value === 'number' ? new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(value) : '-'
+}
+
+interface TradeMarker {
+  date: string
+  value: number
+  side: 'buy' | 'sell'
+  label: string
+}
+
+function buildTradeMarkers(points: SeriesPoint[], rows: TradeRow[]): TradeMarker[] {
+  const valueByDate = new Map(points.map((point) => [point.date, point.value]))
+  return rows
+    .map((trade) => {
+      const date = trade.date.slice(0, 10)
+      const value = valueByDate.get(date)
+      if (value == null) return null
+      return {
+        date,
+        value,
+        side: trade.side,
+        label: `${trade.symbol} ${trade.side === 'buy' ? '买入' : '卖出'} ${trade.quantity}`
+      }
+    })
+    .filter((marker): marker is TradeMarker => marker !== null)
 }
 
 function statusType(status: JobStatus) {
