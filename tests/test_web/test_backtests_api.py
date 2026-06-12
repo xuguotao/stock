@@ -76,6 +76,32 @@ def test_backtest_api_rejects_missing_dataset_when_not_sample(tmp_path) -> None:
     assert response.status_code == 422
 
 
+def test_backtest_api_accepts_legacy_request_field_names(tmp_path) -> None:
+    app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests/tail-session",
+        json={
+            "start_date": "2025-01-01",
+            "end_date": "2025-02-28",
+            "initial_cash": 100000,
+            "top_n": 2,
+            "use_sample": True,
+        },
+    )
+
+    payload = response.json()
+    job = client.get(f"/api/jobs/{payload['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert job["params"]["start"] == "2025-01-01"
+    assert job["params"]["end"] == "2025-02-28"
+    assert job["params"]["capital"] == 100000
+    assert job["params"]["sample"] is True
+
+
 def test_backtest_api_resolves_dataset_id_from_configured_dataset_root(tmp_path) -> None:
     data_root = tmp_path / "research"
     data_root.mkdir()

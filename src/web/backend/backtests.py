@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from src.data.research_dataset import load_research_dataset
 from src.strategy.engine.backtest import BacktestEngine
@@ -19,16 +19,16 @@ from src.strategy.scoring import FactorScoreEngine, Selection
 class TailBacktestRequest(BaseModel):
     """Request body for tail-session backtest jobs."""
 
-    start: date
-    end: date
-    capital: float = Field(default=100_000, gt=0)
+    start: date = Field(validation_alias=AliasChoices("start", "start_date"))
+    end: date = Field(validation_alias=AliasChoices("end", "end_date"))
+    capital: float = Field(default=100_000, gt=0, validation_alias=AliasChoices("capital", "initial_cash"))
     top_n: int = Field(default=5, ge=1)
     min_score: float | None = None
     min_market_breadth_above_ma20: float | None = None
     dataset_id: str | None = None
     dataset_path: str | None = None
     symbols: list[str] | None = None
-    sample: bool = False
+    sample: bool = Field(default=False, validation_alias=AliasChoices("sample", "use_sample"))
 
     @model_validator(mode="after")
     def require_dataset_or_sample(self) -> "TailBacktestRequest":
