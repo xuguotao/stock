@@ -74,6 +74,83 @@ def test_datasets_api_lists_local_research_datasets(tmp_path) -> None:
     ]
 
 
+def test_datasets_api_orders_recent_datasets_first(tmp_path) -> None:
+    data_root = tmp_path / "research"
+    data_root.mkdir()
+    old_path = data_root / "aaa_old.parquet"
+    new_small_path = data_root / "bbb_new_small.parquet"
+    new_large_path = data_root / "ccc_new_large.parquet"
+    for path in [old_path, new_small_path, new_large_path]:
+        pd.DataFrame([{"date": "2025-01-02", "symbol": "000001.SZ", "close": 10.2}]).to_parquet(path, index=False)
+    old_path.with_name("aaa_old_manifest.json").write_text(
+        json.dumps({"start": "2024-01-01", "end": "2025-06-01", "symbol_count": 10, "row_count": 10}),
+        encoding="utf-8",
+    )
+    new_small_path.with_name("bbb_new_small_manifest.json").write_text(
+        json.dumps({
+            "start": "2025-01-01",
+            "end": "2026-06-10",
+            "symbol_count": 30,
+            "row_count": 30,
+            "built_at": "2026-06-11T08:45:28",
+        }),
+        encoding="utf-8",
+    )
+    new_large_path.with_name("ccc_new_large_manifest.json").write_text(
+        json.dumps({
+            "start": "2025-01-01",
+            "end": "2026-06-10",
+            "symbol_count": 50,
+            "row_count": 50,
+            "built_at": "2026-06-11T09:18:59",
+        }),
+        encoding="utf-8",
+    )
+    app = create_app(db_path=tmp_path / "jobs.sqlite3", dataset_root=data_root)
+    client = TestClient(app)
+
+    response = client.get("/api/datasets")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [
+        "ccc_new_large.parquet",
+        "bbb_new_small.parquet",
+        "aaa_old.parquet",
+    ]
+
+
+def test_datasets_api_uses_actual_parquet_date_range_over_manifest_target(tmp_path) -> None:
+    data_root = tmp_path / "research"
+    data_root.mkdir()
+    dataset_path = data_root / "weekend_target.parquet"
+    pd.DataFrame(
+        [
+            {"date": "2025-05-29", "symbol": "000001.SZ", "close": 10.2},
+            {"date": "2025-05-30", "symbol": "000001.SZ", "close": 10.4},
+        ]
+    ).to_parquet(dataset_path, index=False)
+    dataset_path.with_name("weekend_target_manifest.json").write_text(
+        json.dumps(
+            {
+                "start": "2025-01-01",
+                "end": "2025-06-01",
+                "symbol_count": 1,
+                "row_count": 2,
+                "built_at": "2025-06-02T09:30:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(db_path=tmp_path / "jobs.sqlite3", dataset_root=data_root)
+    client = TestClient(app)
+
+    response = client.get("/api/datasets")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["start"] == "2025-05-29"
+    assert response.json()["items"][0]["end"] == "2025-05-30"
+
+
 def test_datasets_api_returns_dataset_detail_with_symbols(tmp_path) -> None:
     data_root = tmp_path / "research"
     data_root.mkdir()

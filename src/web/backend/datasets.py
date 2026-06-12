@@ -50,7 +50,8 @@ class DatasetService:
     def list_datasets(self) -> list[DatasetSummary]:
         if not self.dataset_root.exists():
             return []
-        return [self._summarize(path) for path in sorted(self.dataset_root.glob("*.parquet"))]
+        datasets = [self._summarize(path) for path in self.dataset_root.glob("*.parquet")]
+        return sorted(datasets, key=_dataset_sort_key, reverse=True)
 
     def get_dataset(self, dataset_id: str) -> dict[str, Any] | None:
         path = self._resolve_dataset_id(dataset_id)
@@ -81,16 +82,16 @@ class DatasetService:
 
     def _summarize(self, path: Path) -> DatasetSummary:
         manifest = _read_manifest(path)
-        fallback = _parquet_stats(path) if _needs_fallback(manifest) else {}
+        stats = _parquet_stats(path)
         return DatasetSummary(
             id=path.name,
             name=path.name,
             path=str(path),
             manifest_path=str(_manifest_path(path)) if _manifest_path(path).exists() else None,
-            row_count=int(manifest.get("row_count", fallback.get("row_count", 0)) or 0),
-            symbol_count=int(manifest.get("symbol_count", fallback.get("symbol_count", 0)) or 0),
-            start=manifest.get("start") or fallback.get("start"),
-            end=manifest.get("end") or fallback.get("end"),
+            row_count=int(stats.get("row_count", manifest.get("row_count", 0)) or 0),
+            symbol_count=int(stats.get("symbol_count", manifest.get("symbol_count", 0)) or 0),
+            start=stats.get("start") or manifest.get("start"),
+            end=stats.get("end") or manifest.get("end"),
             built_at=manifest.get("built_at"),
             size_bytes=path.stat().st_size,
         )
@@ -108,11 +109,6 @@ def _read_manifest(path: Path) -> dict[str, Any]:
         return json.loads(manifest_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
-
-
-def _needs_fallback(manifest: dict[str, Any]) -> bool:
-    required = {"row_count", "symbol_count", "start", "end"}
-    return not required.issubset(manifest)
 
 
 def _parquet_stats(path: Path) -> dict[str, Any]:
@@ -140,3 +136,12 @@ def _parquet_stats(path: Path) -> dict[str, Any]:
 def _available_columns(path: Path, requested: list[str]) -> list[str]:
     columns = set(pq.ParquetFile(path).schema.names)
     return [column for column in requested if column in columns]
+
+
+def _dataset_sort_key(dataset: DatasetSummary) -> tuple[str, str, int, str]:
+    return (
+        dataset.end or "",
+        dataset.built_at or "",
+        dataset.symbol_count,
+        dataset.name,
+    )
