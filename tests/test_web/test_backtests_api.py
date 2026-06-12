@@ -218,6 +218,55 @@ def test_backtest_api_filters_dataset_to_custom_symbols(tmp_path) -> None:
     assert job["result"]["experiment"]["requested_symbols"] == ["000001.SZ", "600519.SH"]
 
 
+def test_backtest_api_reports_empty_dataset_filter_context(tmp_path) -> None:
+    data_root = tmp_path / "research"
+    data_root.mkdir()
+    dataset_path = data_root / "daily.parquet"
+    dates = pd.bdate_range("2025-01-01", periods=10)
+    rows = []
+    for current_date in dates:
+        rows.append(
+            {
+                "date": current_date.date().isoformat(),
+                "symbol": "000001.SZ",
+                "open": 10,
+                "high": 11,
+                "low": 9,
+                "close": 10,
+                "volume": 1000000,
+                "amount": 10000000,
+                "adjusted_close": 10,
+            }
+        )
+    pd.DataFrame(rows).to_parquet(dataset_path, index=False)
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        dataset_root=data_root,
+        run_jobs_inline=True,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests/tail-session",
+        json={
+            "start": "2026-01-01",
+            "end": "2026-02-01",
+            "dataset_id": "daily.parquet",
+            "sample": False,
+        },
+    )
+
+    payload = response.json()
+    job = client.get(f"/api/jobs/{payload['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "failed"
+    assert "No bars available after applying filters" in job["error"]
+    assert "requested=2026-01-01..2026-02-01" in job["error"]
+    assert "available=2025-01-01..2025-01-14" in job["error"]
+    assert "universe=dataset_all" in job["error"]
+
+
 def test_backtest_api_rejects_unknown_dataset_id(tmp_path) -> None:
     app = create_app(
         db_path=tmp_path / "jobs.sqlite3",

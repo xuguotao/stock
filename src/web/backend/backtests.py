@@ -41,7 +41,7 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
     """Run a tail-session backtest and return UI-friendly result data."""
     bars = _sample_bars(request.start, request.end) if request.sample else _load_dataset(request)
     if bars.empty:
-        raise ValueError("No bars available for backtest")
+        raise ValueError(_empty_bars_message(request))
 
     factors = _tail_factors(request)
     rebalance_selections = _rebalance_selections(
@@ -88,6 +88,46 @@ def _load_dataset(request: TailBacktestRequest) -> pd.DataFrame:
         start=request.start,
         end=request.end,
     )
+
+
+def _empty_bars_message(request: TailBacktestRequest) -> str:
+    parts = [
+        "No bars available after applying filters",
+        f"requested={request.start.isoformat()}..{request.end.isoformat()}",
+        f"universe={_universe_source(request)}",
+    ]
+    if request.dataset_id:
+        parts.append(f"dataset_id={request.dataset_id}")
+    if request.dataset_path:
+        parts.extend(_dataset_filter_context(Path(request.dataset_path), request.symbols))
+    if request.symbols:
+        preview = ",".join(request.symbols[:8])
+        suffix = "..." if len(request.symbols) > 8 else ""
+        parts.append(f"symbols={preview}{suffix}")
+    return "; ".join(parts)
+
+
+def _dataset_filter_context(dataset_path: Path, symbols: list[str] | None) -> list[str]:
+    if not dataset_path.exists():
+        return [f"dataset_path_missing={dataset_path}"]
+    try:
+        df = pd.read_parquet(dataset_path, columns=["date", "symbol"])
+    except Exception as exc:
+        return [f"dataset_read_error={exc}"]
+    if df.empty:
+        return ["available=empty"]
+    dates = pd.to_datetime(df["date"])
+    parts = [f"available={dates.min().date().isoformat()}..{dates.max().date().isoformat()}"]
+    available_symbols = set(map(str, df["symbol"].dropna().unique()))
+    if symbols:
+        matched = sorted(set(symbols) & available_symbols)
+        missing = sorted(set(symbols) - available_symbols)
+        parts.append(f"matched_symbols={len(matched)}/{len(symbols)}")
+        if missing:
+            preview = ",".join(missing[:8])
+            suffix = "..." if len(missing) > 8 else ""
+            parts.append(f"missing_symbols={preview}{suffix}")
+    return parts
 
 
 def _sample_bars(start: date, end: date) -> pd.DataFrame:

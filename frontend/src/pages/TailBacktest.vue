@@ -533,6 +533,10 @@ async function submit() {
       ElMessage.warning('请先选择数据集')
       return
     }
+    if (!payload.sample && selectedDataset.value && !dateRangeWithinDataset()) {
+      ElMessage.warning(`日期范围超出当前数据集：${selectedDataset.value.start ?? '-'} / ${selectedDataset.value.end ?? '-'}`)
+      return
+    }
     if (!payload.sample && universeMode.value === 'custom' && !selectedSymbols.value.length) {
       ElMessage.warning('请至少选择一只股票')
       return
@@ -711,6 +715,12 @@ function universeSourceLabel(value: unknown) {
   if (value === 'custom_symbols') return '自定义股票池'
   if (value === 'dataset_all') return '数据集全部标的'
   return '-'
+}
+
+function dateRangeWithinDataset() {
+  const dataset = selectedDataset.value
+  if (!dataset?.start || !dataset?.end) return true
+  return form.value.start >= dataset.start && form.value.end <= dataset.end && form.value.start <= form.value.end
 }
 
 function factorTags(row: SelectionRow) {
