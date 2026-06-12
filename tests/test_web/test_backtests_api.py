@@ -31,6 +31,7 @@ def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
     assert len(job["result"]["equity_curve"]) > 0
     assert job["result"]["universe_symbols"] == ["000001.SZ", "300750.SZ", "600519.SH"]
     assert job["result"]["experiment"]["mode"] == "sample"
+    assert job["result"]["experiment"]["universe_source"] == "sample_fixed"
     assert job["result"]["experiment"]["execution_assumption"] == "tail signal today, next-session open execution"
     assert len(job["result"]["latest_selection"]) == 2
     assert {"date", "rank", "symbol", "score", "close", "factor_values", "factor_contributions"}.issubset(
@@ -159,7 +160,62 @@ def test_backtest_api_resolves_dataset_id_from_configured_dataset_root(tmp_path)
     assert job["result"]["symbol_count"] == 3
     assert job["result"]["universe_symbols"] == ["000001.SZ", "300750.SZ", "600519.SH"]
     assert job["result"]["experiment"]["mode"] == "dataset"
+    assert job["result"]["experiment"]["universe_source"] == "dataset_all"
     assert job["result"]["tail_verifications"][0]["status"] == "missing_intraday_data"
+
+
+def test_backtest_api_filters_dataset_to_custom_symbols(tmp_path) -> None:
+    data_root = tmp_path / "research"
+    data_root.mkdir()
+    dataset_path = data_root / "daily.parquet"
+    dates = pd.bdate_range("2025-01-01", periods=45)
+    rows = []
+    for symbol_index, symbol in enumerate(["000001.SZ", "600519.SH", "300750.SZ"]):
+        for index, current_date in enumerate(dates):
+            close = 10 + symbol_index * 5 + index * 0.1
+            rows.append(
+                {
+                    "date": current_date.date().isoformat(),
+                    "symbol": symbol,
+                    "open": close * 0.99,
+                    "high": close * 1.01,
+                    "low": close * 0.98,
+                    "close": close,
+                    "volume": 1000000 + index * 1000,
+                    "amount": close * (1000000 + index * 1000),
+                    "adjusted_close": close,
+                }
+            )
+    pd.DataFrame(rows).to_parquet(dataset_path, index=False)
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        dataset_root=data_root,
+        run_jobs_inline=True,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests/tail-session",
+        json={
+            "start": "2025-01-01",
+            "end": "2025-02-28",
+            "capital": 100000,
+            "top_n": 2,
+            "dataset_id": "daily.parquet",
+            "symbols": ["000001.SZ", "600519.SH"],
+            "sample": False,
+        },
+    )
+
+    payload = response.json()
+    job = client.get(f"/api/jobs/{payload['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert job["result"]["symbol_count"] == 2
+    assert job["result"]["universe_symbols"] == ["000001.SZ", "600519.SH"]
+    assert job["result"]["experiment"]["universe_source"] == "custom_symbols"
+    assert job["result"]["experiment"]["requested_symbols"] == ["000001.SZ", "600519.SH"]
 
 
 def test_backtest_api_rejects_unknown_dataset_id(tmp_path) -> None:

@@ -416,6 +416,8 @@ def _experiment_summary(
         "capital": request.capital,
         "top_n": request.top_n,
         "hold_days": request.hold_days,
+        "universe_source": _universe_source(request),
+        "requested_symbols": request.symbols or [],
         "min_score": request.min_score,
         "min_market_breadth_above_ma20": request.min_market_breadth_above_ma20,
         "rebalance_days": 1,
@@ -427,6 +429,14 @@ def _experiment_summary(
             "Selections use weighted cross-sectional ranks from tail_session and overnight_momentum factors.",
         ],
     }
+
+
+def _universe_source(request: TailBacktestRequest) -> str:
+    if request.sample:
+        return "sample_fixed"
+    if request.symbols:
+        return "custom_symbols"
+    return "dataset_all"
 
 
 def _factor_explanations(

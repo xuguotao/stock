@@ -58,7 +58,16 @@
               <el-switch v-model="form.sample" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :span="6">
+            <el-form-item label="股票池">
+              <el-segmented
+                v-model="universeMode"
+                :disabled="form.sample"
+                :options="universeModeOptions"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="6">
             <el-form-item label="Dataset">
               <el-select
                 v-model="form.dataset_id"
@@ -83,6 +92,28 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <el-row v-if="!form.sample && universeMode === 'custom'" :gutter="12">
+          <el-col :span="24">
+            <el-form-item label="自选股票">
+              <el-select
+                v-model="selectedSymbols"
+                :loading="datasetDetailLoading"
+                multiple
+                filterable
+                collapse-tags
+                collapse-tags-tooltip
+                placeholder="从当前数据集选择股票"
+              >
+                <el-option
+                  v-for="symbol in datasetSymbols"
+                  :key="symbol"
+                  :label="symbol"
+                  :value="symbol"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
       </el-form>
     </div>
 
@@ -93,6 +124,7 @@
           <div class="summary-title">{{ selectedDataset.name }}</div>
         </div>
         <el-tag effect="plain">{{ selectedDataset.symbol_count }} 个标的</el-tag>
+        <el-tag effect="plain">{{ universeMode === 'custom' ? `${selectedSymbols.length} 个自选` : '使用全部标的' }}</el-tag>
         <el-tag effect="plain">{{ formatNumber(selectedDataset.row_count) }} 行</el-tag>
         <el-tag effect="plain">{{ selectedDataset.start ?? '-' }} / {{ selectedDataset.end ?? '-' }}</el-tag>
       </div>
@@ -127,6 +159,7 @@
         <el-descriptions-item label="日期范围">{{ experiment.actual_start }} / {{ experiment.actual_end }}</el-descriptions-item>
         <el-descriptions-item label="Top N">{{ experiment.top_n }}</el-descriptions-item>
         <el-descriptions-item label="持有交易日">{{ experiment.hold_days }}</el-descriptions-item>
+        <el-descriptions-item label="标的池来源">{{ universeSourceLabel(experiment.universe_source) }}</el-descriptions-item>
         <el-descriptions-item label="初始资金">{{ formatMoney(experiment.capital) }}</el-descriptions-item>
         <el-descriptions-item label="最小分数">{{ experiment.min_score ?? '-' }}</el-descriptions-item>
         <el-descriptions-item label="市场宽度">{{ experiment.min_market_breadth_above_ma20 ?? '-' }}</el-descriptions-item>
@@ -158,6 +191,7 @@
         <div class="page-header panel-title-row">
           <h2 class="page-title">回测标的池</h2>
           <el-tag effect="plain">{{ universeSymbols.length }}</el-tag>
+          <el-tag v-if="experiment" effect="plain">{{ universeSourceLabel(experiment.universe_source) }}</el-tag>
         </div>
         <div class="symbol-tags">
           <el-tag v-for="symbol in universeSymbols" :key="symbol" effect="plain">
@@ -322,7 +356,7 @@
 import * as echarts from 'echarts'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { api, type DatasetSummary, type JobRecord, type JobStatus, type TailBacktestPayload } from '../api/client'
+import { api, type DatasetDetail, type DatasetSummary, type JobRecord, type JobStatus, type TailBacktestPayload } from '../api/client'
 
 interface SeriesPoint {
   date: string
@@ -364,6 +398,8 @@ interface ExperimentSummary {
   capital: number
   top_n: number
   hold_days: number
+  universe_source: 'sample_fixed' | 'dataset_all' | 'custom_symbols'
+  requested_symbols: string[]
   min_score: number | null
   min_market_breadth_above_ma20: number | null
   execution_assumption: string
@@ -423,12 +459,21 @@ const form = ref<TailBacktestPayload>({
   min_score: null,
   dataset_id: null,
   dataset_path: '',
-  sample: true
+  symbols: null,
+  sample: false
 })
 const submitting = ref(false)
 const isPolling = ref(false)
 const datasetsLoading = ref(false)
+const datasetDetailLoading = ref(false)
 const datasets = ref<DatasetSummary[]>([])
+const datasetDetail = ref<DatasetDetail | null>(null)
+const selectedSymbols = ref<string[]>([])
+const universeMode = ref<'all' | 'custom'>('all')
+const universeModeOptions = [
+  { label: '全部', value: 'all' },
+  { label: '自选', value: 'custom' }
+]
 const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
 const equityEl = ref<HTMLElement | null>(null)
@@ -452,6 +497,7 @@ const outcomeSummary = computed(() => (result.value?.outcome_summary ?? null) as
 const equityTradeMarkers = computed(() => buildTradeMarkers(equityCurve.value, trades.value))
 const latestSelectionDate = computed(() => latestSelection.value[0]?.date ?? '-')
 const selectedDataset = computed(() => datasets.value.find((dataset) => dataset.id === form.value.dataset_id) ?? null)
+const datasetSymbols = computed(() => datasetDetail.value?.symbols ?? [])
 const metricItems = computed(() => [
   { label: '总收益', value: formatPercentMetric(metrics.value.total_return) },
   { label: '年化收益', value: formatPercentMetric(metrics.value.annualized_return) },
@@ -480,7 +526,16 @@ async function submit() {
     const payload = {
       ...form.value,
       dataset_id: form.value.sample ? null : form.value.dataset_id,
-      dataset_path: form.value.sample ? null : form.value.dataset_path
+      dataset_path: form.value.sample ? null : form.value.dataset_path,
+      symbols: form.value.sample || universeMode.value === 'all' ? null : selectedSymbols.value
+    }
+    if (!payload.sample && !payload.dataset_id) {
+      ElMessage.warning('请先选择数据集')
+      return
+    }
+    if (!payload.sample && universeMode.value === 'custom' && !selectedSymbols.value.length) {
+      ElMessage.warning('请至少选择一只股票')
+      return
     }
     const response = await api.submitTailBacktest(payload)
     activeJobId.value = response.job_id
@@ -497,9 +552,12 @@ async function loadDatasets() {
   datasetsLoading.value = true
   try {
     datasets.value = (await api.listDatasets()).items
-    if (!form.value.sample && !form.value.dataset_id && datasets.value.length) {
+    if (datasets.value.length && !form.value.dataset_id) {
+      form.value.sample = false
       form.value.dataset_id = datasets.value[0].id
-      applyDatasetDefaults()
+      await applyDatasetDefaults()
+    } else if (!datasets.value.length) {
+      form.value.sample = true
     }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载数据集失败')
@@ -508,12 +566,26 @@ async function loadDatasets() {
   }
 }
 
-function applyDatasetDefaults() {
+async function applyDatasetDefaults() {
   const dataset = selectedDataset.value
   if (!dataset) return
   form.value.dataset_path = dataset.path
   if (dataset.start) form.value.start = dataset.start
   if (dataset.end) form.value.end = dataset.end
+  selectedSymbols.value = []
+  await loadDatasetDetail(dataset.id)
+}
+
+async function loadDatasetDetail(datasetId: string) {
+  datasetDetailLoading.value = true
+  try {
+    datasetDetail.value = await api.getDataset(datasetId)
+  } catch (error) {
+    datasetDetail.value = null
+    ElMessage.error(error instanceof Error ? error.message : '加载数据集标的失败')
+  } finally {
+    datasetDetailLoading.value = false
+  }
 }
 
 async function refreshJob() {
@@ -634,6 +706,13 @@ function formatMoney(value: unknown) {
   return typeof value === 'number' ? new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(value) : '-'
 }
 
+function universeSourceLabel(value: unknown) {
+  if (value === 'sample_fixed') return '样例固定标的'
+  if (value === 'custom_symbols') return '自定义股票池'
+  if (value === 'dataset_all') return '数据集全部标的'
+  return '-'
+}
+
 function factorTags(row: SelectionRow) {
   const values = row.factor_values ?? {}
   const contributions = row.factor_contributions ?? {}
@@ -681,10 +760,21 @@ watch(
   (sample) => {
     if (!sample && !form.value.dataset_id && datasets.value.length) {
       form.value.dataset_id = datasets.value[0].id
-      applyDatasetDefaults()
+      void applyDatasetDefaults()
     }
   }
 )
+
+watch(
+  () => form.value.dataset_id,
+  (datasetId) => {
+    if (datasetId && !form.value.sample) void applyDatasetDefaults()
+  }
+)
+
+watch(universeMode, (mode) => {
+  if (mode === 'all') selectedSymbols.value = []
+})
 
 watch(
   () => props.jobId,
