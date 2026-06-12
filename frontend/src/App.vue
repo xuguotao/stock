@@ -2,7 +2,7 @@
   <el-container class="shell">
     <el-aside width="228px" class="sidebar">
       <div class="brand">A 股量化后台</div>
-      <el-menu :default-active="activePage" @select="activePage = $event">
+      <el-menu :default-active="activePage" @select="openPage">
         <el-menu-item index="dashboard">总览</el-menu-item>
         <el-menu-item index="data">数据中心</el-menu-item>
         <el-menu-item index="backtest">尾盘回测</el-menu-item>
@@ -16,11 +16,11 @@
         <el-tag type="success" effect="plain">FastAPI</el-tag>
       </el-header>
       <el-main class="content">
-        <Dashboard v-if="activePage === 'dashboard'" @open-backtest="activePage = 'backtest'" />
+        <Dashboard v-if="activePage === 'dashboard'" @open-backtest="openPage('backtest')" />
         <DataCenter v-else-if="activePage === 'data'" />
-        <TailBacktest v-else-if="activePage === 'backtest'" />
-        <FundTail v-else-if="activePage === 'fund-tail'" />
-        <Jobs v-else />
+        <TailBacktest v-else-if="activePage === 'backtest'" :job-id="targetJobId" />
+        <FundTail v-else-if="activePage === 'fund-tail'" :job-id="targetJobId" />
+        <Jobs v-else @open-result="openResult" />
       </el-main>
     </el-container>
   </el-container>
@@ -35,6 +35,17 @@ import Jobs from './pages/Jobs.vue'
 import TailBacktest from './pages/TailBacktest.vue'
 
 const activePage = ref('dashboard')
+const targetJobId = ref('')
+
+function openPage(page: string) {
+  targetJobId.value = ''
+  activePage.value = page
+}
+
+function openResult(payload: { page: string; jobId: string }) {
+  targetJobId.value = payload.jobId
+  activePage.value = payload.page
+}
 </script>
 
 <style scoped>

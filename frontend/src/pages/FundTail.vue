@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api, type FundTailReportResponse, type FundTailUniverseItem, type JobRecord } from '../api/client'
 
@@ -101,6 +101,9 @@ const report = ref<FundTailReportResponse>({
 const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
 const tradeDate = ref(new Date().toISOString().slice(0, 10))
+const props = defineProps<{
+  jobId?: string
+}>()
 
 const navReadyCount = computed(() => universe.value.filter((item) => item.has_nav).length)
 const proxyReadyCount = computed(() => universe.value.filter((item) => item.has_proxy).length)
@@ -139,15 +142,33 @@ async function refreshJob() {
   if (!activeJobId.value) return
   job.value = await api.getJob(activeJobId.value)
   if (job.value.status === 'success' && job.value.result) {
-    const result = job.value.result as unknown as FundTailReportResponse
-    report.value = {
-      rows: result.rows ?? [],
-      markdown: result.markdown ?? '',
-      report_path: result.report_path ?? '',
-      markdown_path: result.markdown_path ?? ''
-    }
+    applyJobResult(job.value.result)
   }
 }
+
+async function loadJob(jobId: string) {
+  if (!jobId) return
+  activeJobId.value = jobId
+  await refreshJob()
+}
+
+function applyJobResult(value: Record<string, unknown>) {
+  const result = value as unknown as FundTailReportResponse
+  report.value = {
+    rows: result.rows ?? [],
+    markdown: result.markdown ?? '',
+    report_path: result.report_path ?? '',
+    markdown_path: result.markdown_path ?? ''
+  }
+}
+
+watch(
+  () => props.jobId,
+  (jobId) => {
+    if (jobId) void loadJob(jobId)
+  },
+  { immediate: true }
+)
 
 onMounted(loadAll)
 </script>

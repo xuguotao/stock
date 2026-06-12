@@ -25,6 +25,18 @@
         <el-table-column prop="error" label="错误" min-width="220" />
         <el-table-column prop="created_at" label="创建时间" min-width="180" />
         <el-table-column prop="updated_at" label="更新时间" min-width="180" />
+        <el-table-column label="结果" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              :disabled="!resultPage(row)"
+              @click.stop="openResult(row)"
+            >
+              查看结果
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </div>
 
@@ -44,6 +56,13 @@
         </el-descriptions>
 
         <div class="drawer-actions">
+          <el-button
+            type="primary"
+            :disabled="!resultPage(selectedJob)"
+            @click="openResult(selectedJob)"
+          >
+            查看结果
+          </el-button>
           <el-button @click="refreshSelectedJob">刷新任务</el-button>
         </div>
 
@@ -65,6 +84,9 @@ const jobs = ref<JobRecord[]>([])
 const statusFilter = ref<JobStatus | ''>('')
 const drawerVisible = ref(false)
 const selectedJob = ref<JobRecord | null>(null)
+const emit = defineEmits<{
+  openResult: [{ page: string; jobId: string }]
+}>()
 
 const filteredJobs = computed(() => {
   if (!statusFilter.value) return jobs.value
@@ -82,6 +104,19 @@ async function loadJobs() {
 function openJob(row: JobRecord) {
   selectedJob.value = row
   drawerVisible.value = true
+}
+
+function openResult(job: JobRecord | null) {
+  const page = resultPage(job)
+  if (!job || !page) return
+  emit('openResult', { page, jobId: job.id })
+}
+
+function resultPage(job: JobRecord | null) {
+  if (!job || job.status !== 'success') return ''
+  if (job.kind === 'tail_session_backtest') return 'backtest'
+  if (job.kind === 'fund_tail_advice') return 'fund-tail'
+  return ''
 }
 
 async function refreshSelectedJob() {

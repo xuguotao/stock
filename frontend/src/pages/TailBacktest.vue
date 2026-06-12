@@ -351,6 +351,10 @@ interface OutcomeSummary {
   win_rate_pct: number
 }
 
+const props = defineProps<{
+  jobId?: string
+}>()
+
 const form = ref<TailBacktestPayload>({
   start: '2025-01-01',
   end: '2025-02-28',
@@ -451,6 +455,12 @@ async function refreshJob() {
   job.value = await api.getJob(activeJobId.value)
   await nextTick()
   renderCharts()
+}
+
+async function loadJob(jobId: string) {
+  if (!jobId) return
+  activeJobId.value = jobId
+  await refreshJob()
 }
 
 async function pollJobUntilDone(jobId: string) {
@@ -608,6 +618,14 @@ watch(
       applyDatasetDefaults()
     }
   }
+)
+
+watch(
+  () => props.jobId,
+  (jobId) => {
+    if (jobId) void loadJob(jobId)
+  },
+  { immediate: true }
 )
 
 onMounted(loadDatasets)
