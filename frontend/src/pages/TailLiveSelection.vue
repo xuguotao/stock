@@ -118,6 +118,33 @@
       </div>
     </div>
 
+    <div v-if="diagnostics" class="panel compact-panel">
+      <div class="dataset-summary">
+        <div>
+          <div class="metric-label">空结果诊断</div>
+          <div class="summary-title">{{ emptyReasonText }}</div>
+        </div>
+        <el-tag effect="plain">分钟数据 {{ diagnostics.has_intraday_data_count ?? 0 }} / {{ diagnostics.checked_intraday_count ?? 0 }}</el-tag>
+        <el-tag effect="plain">候选 {{ diagnostics.candidate_count }}</el-tag>
+        <el-tag effect="plain">确认 {{ diagnostics.confirmed_count }}</el-tag>
+      </div>
+      <div v-if="diagnostics.empty_message" class="diagnostic-message">
+        {{ diagnostics.empty_message }}
+      </div>
+      <div class="diagnostic-tags">
+        <el-tag
+          v-for="symbol in diagnostics.scan_universe_preview"
+          :key="symbol"
+          effect="plain"
+        >
+          {{ symbol }}
+        </el-tag>
+      </div>
+      <div v-if="diagnostics.missing_intraday_symbols?.length" class="diagnostic-message muted">
+        缺分钟数据：{{ diagnostics.missing_intraday_symbols.join(', ') }}
+      </div>
+    </div>
+
     <div v-if="result" class="tail-result-grid">
       <div class="panel">
         <div class="page-header panel-title-row">
@@ -181,6 +208,18 @@ interface TailLiveResult {
   selections: SelectionRow[]
   files: Record<string, string>
   market_breadth: { breadth: number; above_count: number; symbol_count: number } | null
+  diagnostics?: {
+    empty_reason: string | null
+    empty_message: string | null
+    scan_universe_preview: string[]
+    has_intraday_data_count: number
+    checked_intraday_count: number
+    missing_intraday_symbols: string[]
+    candidate_count: number
+    confirmed_count: number
+    selected_count: number
+    blocked_by_market_breadth: boolean
+  }
 }
 
 const props = defineProps<{
@@ -209,6 +248,17 @@ const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
 const result = computed(() => (job.value?.result ?? null) as unknown as TailLiveResult | null)
 const selections = computed(() => result.value?.selections ?? [])
+const diagnostics = computed(() => result.value?.diagnostics ?? null)
+const emptyReasonText = computed(() => {
+  const reason = diagnostics.value?.empty_reason
+  if (!reason) return selections.value.length ? '已选出信号' : '未发现异常'
+  if (reason === 'scan_universe_empty') return '股票池为空'
+  if (reason === 'blocked_by_market_breadth') return '市场宽度拦截'
+  if (reason === 'no_intraday_candidates') return '没有尾盘候选信号'
+  if (reason === 'no_confirmed_signals') return '候选未连续确认'
+  if (reason === 'filtered_by_selection_rules') return '被强度/Top N 过滤'
+  return reason
+})
 const jobProgressPercent = computed(() => Math.max(0, Math.min(100, Number(job.value?.progress?.percent ?? 0))))
 const jobProgressStatus = computed(() => {
   if (job.value?.status === 'success') return 'success'

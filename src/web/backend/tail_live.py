@@ -72,6 +72,7 @@ def run_tail_live_selection(
         liquidity_min_bars=request.liquidity_min_bars,
         liquidity_min_end_date=request.liquidity_min_end_date,
     )
+    intraday_coverage = _intraday_coverage(aggregator, symbols, request.trade_date)
 
     _report_progress(progress, 30, "market_breadth", "计算市场宽度过滤")
     breadth_result = None
@@ -94,10 +95,12 @@ def run_tail_live_selection(
             return _write_live_selection_result(
                 request=request,
                 symbols=symbols,
+                intraday_coverage=intraday_coverage,
                 candidates=candidates,
                 confirmed=confirmed,
                 selected=selected,
                 breadth_result=breadth_result,
+                blocked_by_market_breadth=True,
                 progress=progress,
             )
 
@@ -113,10 +116,12 @@ def run_tail_live_selection(
     return _write_live_selection_result(
         request=request,
         symbols=symbols,
+        intraday_coverage=intraday_coverage,
         candidates=candidates,
         confirmed=confirmed,
         selected=selected,
         breadth_result=breadth_result,
+        blocked_by_market_breadth=False,
         progress=progress,
     )
 
@@ -125,10 +130,12 @@ def _write_live_selection_result(
     *,
     request: TailLiveSelectionRequest,
     symbols: list[str],
+    intraday_coverage: dict[str, Any],
     candidates: list[Any],
     confirmed: list[Any],
     selected: list[Any],
     breadth_result: Any | None,
+    blocked_by_market_breadth: bool,
     progress: ProgressCallback | None,
 ) -> dict[str, Any]:
     _report_progress(progress, 80, "writing_outputs", "写入选股结果文件")
@@ -159,6 +166,77 @@ def _write_live_selection_result(
             "csv": str(written_csv),
             "report": str(report_path),
         },
+        "market_breadth": _market_breadth_row(breadth_result),
+        "diagnostics": _diagnostics(
+            symbols=symbols,
+            intraday_coverage=intraday_coverage,
+            candidates=candidates,
+            confirmed=confirmed,
+            selected=selected,
+            breadth_result=breadth_result,
+            blocked_by_market_breadth=blocked_by_market_breadth,
+        ),
+    }
+
+
+def _intraday_coverage(aggregator: Any, symbols: list[str], trade_date: date) -> dict[str, Any]:
+    checked_symbols = symbols[:20]
+    available = []
+    missing = []
+    for symbol in checked_symbols:
+        bars = aggregator.get_intraday_bars(symbol, trade_date, "5m")
+        if bars is not None and not bars.empty:
+            available.append(symbol)
+        else:
+            missing.append(symbol)
+    return {
+        "checked_count": len(checked_symbols),
+        "available_count": len(available),
+        "missing_count": len(missing),
+        "available_symbols": available,
+        "missing_symbols": missing,
+    }
+
+
+def _diagnostics(
+    *,
+    symbols: list[str],
+    intraday_coverage: dict[str, Any],
+    candidates: list[Any],
+    confirmed: list[Any],
+    selected: list[Any],
+    breadth_result: Any | None,
+    blocked_by_market_breadth: bool,
+) -> dict[str, Any]:
+    reason = None
+    message = None
+    if not symbols:
+        reason = "scan_universe_empty"
+        message = "没有解析到可扫描股票，请检查股票池、缓存目录或手动输入股票。"
+    elif blocked_by_market_breadth:
+        reason = "blocked_by_market_breadth"
+        message = "市场宽度未达到阈值，本次按风控规则不扫描尾盘信号。"
+    elif not candidates:
+        reason = "no_intraday_candidates"
+        message = "没有股票形成尾盘候选信号；常见原因是分钟数据为空、当前不在有效尾盘时段、或量价条件未达标。"
+    elif not confirmed:
+        reason = "no_confirmed_signals"
+        message = "已有候选信号，但未达到连续确认次数。"
+    elif not selected:
+        reason = "filtered_by_selection_rules"
+        message = "已有确认信号，但被 Top N 或最小强度过滤。"
+
+    return {
+        "empty_reason": reason,
+        "empty_message": message,
+        "scan_universe_preview": symbols[:20],
+        "has_intraday_data_count": intraday_coverage["available_count"],
+        "checked_intraday_count": intraday_coverage["checked_count"],
+        "missing_intraday_symbols": intraday_coverage["missing_symbols"][:20],
+        "candidate_count": len(candidates),
+        "confirmed_count": len(confirmed),
+        "selected_count": len(selected),
+        "blocked_by_market_breadth": blocked_by_market_breadth,
         "market_breadth": _market_breadth_row(breadth_result),
     }
 

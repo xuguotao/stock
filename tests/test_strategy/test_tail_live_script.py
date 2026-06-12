@@ -75,6 +75,22 @@ def test_resolve_scan_symbols_prefers_explicit_symbols(tmp_path) -> None:
     assert symbols == ["000001.SZ", "600519.SH"]
 
 
+def test_resolve_scan_symbols_keeps_suffixed_explicit_symbols(tmp_path) -> None:
+    symbols = resolve_scan_symbols(
+        aggregator=FakeAggregator(),
+        raw_symbols=["000001.SZ", "600519.SH"],
+        limit=1,
+        universe="liquid-cache",
+        bars_cache_dir=tmp_path,
+        liquidity_start=date(2025, 1, 1),
+        liquidity_end=date(2025, 1, 10),
+        liquidity_min_bars=2,
+        liquidity_min_end_date=None,
+    )
+
+    assert symbols == ["000001.SZ", "600519.SH"]
+
+
 def test_resolve_scan_symbols_uses_liquid_cache_universe(tmp_path) -> None:
     cache_dir = tmp_path / "bars"
     cache_dir.mkdir()

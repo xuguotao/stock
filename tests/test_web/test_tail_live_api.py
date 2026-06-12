@@ -38,6 +38,12 @@ def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
                 "report": "reports/tail_session/tail_session_2026-06-12.md",
             },
             "market_breadth": None,
+            "diagnostics": {
+                "empty_reason": None,
+                "scan_universe_preview": ["000001.SZ", "600519.SH"],
+                "has_intraday_data_count": None,
+                "blocked_by_market_breadth": False,
+            },
         }
 
     app = create_app(
@@ -67,6 +73,7 @@ def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
     assert job["result"]["selected_count"] == 1
     assert job["result"]["selections"][0]["symbol"] == "000001.SZ"
     assert job["result"]["files"]["csv"].endswith("latest_selection.csv")
+    assert job["result"]["diagnostics"]["empty_reason"] is None
 
 
 def test_tail_live_selection_reports_chinese_session_error(monkeypatch) -> None:
@@ -88,3 +95,67 @@ def test_tail_live_selection_reports_chinese_session_error(monkeypatch) -> None:
 
     assert "当前不在 14:30-15:00 尾盘窗口" in message
     assert "忽略时间窗口" in message
+
+
+def test_tail_live_selection_explains_empty_universe(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return []
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=5,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["selected_count"] == 0
+    assert result["diagnostics"]["empty_reason"] == "scan_universe_empty"
+    assert "没有解析到可扫描股票" in result["diagnostics"]["empty_message"]
+
+
+def test_tail_live_selection_explains_no_intraday_candidates(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return ["000001.SZ", "600519.SH"]
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            import pandas as pd
+
+            return pd.DataFrame()
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=2,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["selected_count"] == 0
+    assert result["diagnostics"]["empty_reason"] == "no_intraday_candidates"
+    assert result["diagnostics"]["has_intraday_data_count"] == 0
+    assert "没有股票形成尾盘候选信号" in result["diagnostics"]["empty_message"]

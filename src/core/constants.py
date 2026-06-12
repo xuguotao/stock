@@ -57,6 +57,10 @@ def format_symbol(code: str) -> str:
     >>> format_symbol("000001")
     '000001.SZ'
     """
+    code = code.strip().upper()
+    if "." in code:
+        raw_code, suffix = code.split(".", 1)
+        return f"{raw_code.zfill(6)}.{suffix}"
     code = code.zfill(6)
     return f"{code}.{symbol_suffix(code)}"
 
