@@ -10,7 +10,6 @@ import pandas as pd
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from src.data.research_dataset import load_research_dataset
-from src.strategy.engine.backtest import BacktestEngine
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
 from src.strategy.factors.tail_session import TailSessionFactor
 from src.strategy.scoring import FactorScoreEngine, Selection
@@ -23,6 +22,7 @@ class TailBacktestRequest(BaseModel):
     end: date = Field(validation_alias=AliasChoices("end", "end_date"))
     capital: float = Field(default=100_000, gt=0, validation_alias=AliasChoices("capital", "initial_cash"))
     top_n: int = Field(default=5, ge=1)
+    hold_days: int = Field(default=1, ge=1)
     min_score: float | None = None
     min_market_breadth_above_ma20: float | None = None
     dataset_id: str | None = None
@@ -44,30 +44,23 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
         raise ValueError("No bars available for backtest")
 
     factors = _tail_factors(request)
-    engine = BacktestEngine(
-        bars=bars,
-        factors=factors,
-        factor_weights=[0.7, 0.3],
-        top_n=request.top_n,
-        rebalance_days=1,
-        initial_capital=request.capital,
-        equal_weight=True,
-        min_score=request.min_score,
-    )
-    result = engine.run()
     rebalance_selections = _rebalance_selections(
         bars=bars,
         factors=factors,
         top_n=request.top_n,
         min_score=request.min_score,
     )
-    selection_lookup = _selection_lookup(rebalance_selections)
-    trades = [_trade_row(trade, selection_lookup) for trade in result.trades]
-    position_outcomes = _position_outcomes(trades, bars)
+    event_result = _run_tail_event_backtest(
+        request=request,
+        bars=bars,
+        selections=rebalance_selections,
+    )
+    trades = event_result["trades"]
+    position_outcomes = event_result["position_outcomes"]
     return {
         "experiment": _experiment_summary(request, bars, factors),
-        "metrics": result.metrics,
-        "trade_count": len(result.trades),
+        "metrics": event_result["metrics"],
+        "trade_count": len(trades),
         "symbol_count": int(bars.index.get_level_values("symbol").nunique()),
         "universe_symbols": sorted(map(str, bars.index.get_level_values("symbol").unique())),
         "latest_selection": _latest_selection(rebalance_selections),
@@ -76,13 +69,10 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
             request=request,
             selections=_latest_selection(rebalance_selections),
         ),
-        "daily_return_curve": _daily_return_curve(result.daily_returns),
-        "monthly_returns": _monthly_returns(result.daily_returns),
-        "equity_curve": [
-            {"date": pd.Timestamp(idx).date().isoformat(), "value": float(value)}
-            for idx, value in result.portfolio_values.items()
-        ],
-        "drawdown_curve": _drawdown_curve(result.portfolio_values),
+        "daily_return_curve": _daily_return_curve(event_result["daily_returns"]),
+        "monthly_returns": _monthly_returns(event_result["daily_returns"]),
+        "equity_curve": event_result["equity_curve"],
+        "drawdown_curve": _drawdown_curve(event_result["portfolio_values"]),
         "trades": trades,
         "position_outcomes": position_outcomes,
         "outcome_summary": _outcome_summary(position_outcomes, trades),
@@ -204,6 +194,191 @@ def _selection_row(
     }
 
 
+def _run_tail_event_backtest(
+    *,
+    request: TailBacktestRequest,
+    bars: pd.DataFrame,
+    selections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    dates = sorted(bars.index.get_level_values("date").unique())
+    date_to_index = {pd.Timestamp(value).date().isoformat(): index for index, value in enumerate(dates)}
+    selections_by_date: dict[str, list[dict[str, Any]]] = {}
+    for selection in selections:
+        selections_by_date.setdefault(selection["date"], []).append(selection)
+
+    trades: list[dict[str, Any]] = []
+    outcomes: list[dict[str, Any]] = []
+    realized_by_date: dict[str, float] = {}
+    allocation = request.capital / max(request.top_n, 1)
+    trade_counter = 1
+
+    for signal_date in sorted(selections_by_date):
+        signal_index = date_to_index.get(signal_date)
+        if signal_index is None or signal_index + 1 >= len(dates):
+            continue
+        entry_date = pd.Timestamp(dates[signal_index + 1])
+        exit_index = min(signal_index + request.hold_days, len(dates) - 1)
+        exit_date = pd.Timestamp(dates[exit_index])
+        if exit_date < entry_date:
+            exit_date = entry_date
+
+        for selection in selections_by_date[signal_date]:
+            symbol = selection["symbol"]
+            try:
+                signal_bar = bars.loc[(pd.Timestamp(signal_date), symbol)]
+                entry_bar = bars.loc[(entry_date, symbol)]
+                exit_bar = bars.loc[(exit_date, symbol)]
+            except KeyError:
+                continue
+
+            entry_price = float(entry_bar["open"])
+            exit_price = float(exit_bar["close"])
+            if entry_price <= 0 or exit_price <= 0:
+                continue
+            quantity = int(allocation / entry_price)
+            if quantity <= 0:
+                continue
+
+            buy_amount = round(entry_price * quantity, 2)
+            sell_amount = round(exit_price * quantity, 2)
+            buy_commission = _commission(buy_amount)
+            sell_commission = _commission(sell_amount)
+            realized_pnl = round((exit_price - entry_price) * quantity - buy_commission - sell_commission, 2)
+            return_pct = (exit_price / entry_price - 1) * 100
+            exit_date_text = exit_date.date().isoformat()
+            realized_by_date[exit_date_text] = realized_by_date.get(exit_date_text, 0.0) + realized_pnl
+
+            trades.append({
+                "trade_id": f"T{trade_counter:06d}",
+                "symbol": symbol,
+                "side": "buy",
+                "price": round(entry_price, 4),
+                "quantity": quantity,
+                "amount": buy_amount,
+                "commission": buy_commission,
+                "date": entry_date.date().isoformat(),
+                "signal_date": signal_date,
+                "signal_close": round(float(signal_bar["close"]), 4),
+                "price_source": "next_open",
+                "realized_pnl": 0.0,
+                "selection_score": selection.get("score"),
+                "selection_rank": selection.get("rank"),
+                "reason": f"tail_signal_rank_{selection.get('rank')}_next_open_entry",
+            })
+            trade_counter += 1
+            trades.append({
+                "trade_id": f"T{trade_counter:06d}",
+                "symbol": symbol,
+                "side": "sell",
+                "price": round(exit_price, 4),
+                "quantity": quantity,
+                "amount": sell_amount,
+                "commission": sell_commission,
+                "date": exit_date_text,
+                "signal_date": signal_date,
+                "signal_close": round(float(signal_bar["close"]), 4),
+                "price_source": "exit_close",
+                "realized_pnl": realized_pnl,
+                "selection_score": selection.get("score"),
+                "selection_rank": selection.get("rank"),
+                "reason": f"hold_{request.hold_days}_trading_day_exit",
+            })
+            trade_counter += 1
+            outcomes.append({
+                "symbol": symbol,
+                "status": "closed",
+                "signal_date": signal_date,
+                "buy_date": entry_date.date().isoformat(),
+                "sell_date": exit_date_text,
+                "holding_days": _trading_day_diff(dates, entry_date, exit_date),
+                "quantity": quantity,
+                "buy_price": round(entry_price, 4),
+                "sell_price": round(exit_price, 4),
+                "signal_close": round(float(signal_bar["close"]), 4),
+                "return_pct": round(return_pct, 4),
+                "realized_pnl": realized_pnl,
+                "buy_reason": f"rank_{selection.get('rank')}_selected_on_signal_day",
+                "sell_reason": f"hold_{request.hold_days}_trading_day_exit",
+            })
+
+    portfolio_values = _event_portfolio_values(dates, request.capital, realized_by_date)
+    daily_returns = portfolio_values.pct_change().fillna(0.0)
+    return {
+        "trades": trades,
+        "position_outcomes": outcomes,
+        "portfolio_values": portfolio_values,
+        "daily_returns": daily_returns,
+        "equity_curve": [
+            {"date": pd.Timestamp(idx).date().isoformat(), "value": round(float(value), 4)}
+            for idx, value in portfolio_values.items()
+        ],
+        "metrics": _event_metrics(
+            daily_returns=daily_returns,
+            portfolio_values=portfolio_values,
+            initial_capital=request.capital,
+            outcomes=outcomes,
+        ),
+    }
+
+
+def _commission(amount: float) -> float:
+    return round(max(amount * 0.0003, 5.0), 2)
+
+
+def _trading_day_diff(dates: list[Any], start: pd.Timestamp, end: pd.Timestamp) -> int:
+    start_date = start.date().isoformat()
+    end_date = end.date().isoformat()
+    text_dates = [pd.Timestamp(value).date().isoformat() for value in dates]
+    return max(text_dates.index(end_date) - text_dates.index(start_date) + 1, 1)
+
+
+def _event_portfolio_values(
+    dates: list[Any],
+    initial_capital: float,
+    realized_by_date: dict[str, float],
+) -> pd.Series:
+    values = []
+    current_value = initial_capital
+    index = []
+    for current_date in dates:
+        date_text = pd.Timestamp(current_date).date().isoformat()
+        current_value += realized_by_date.get(date_text, 0.0)
+        values.append(current_value)
+        index.append(pd.Timestamp(current_date))
+    return pd.Series(values, index=pd.DatetimeIndex(index), name="portfolio_value")
+
+
+def _event_metrics(
+    *,
+    daily_returns: pd.Series,
+    portfolio_values: pd.Series,
+    initial_capital: float,
+    outcomes: list[dict[str, Any]],
+) -> dict[str, float]:
+    if portfolio_values.empty:
+        return {}
+    final_value = float(portfolio_values.iloc[-1])
+    total_return = (final_value / initial_capital - 1) if initial_capital > 0 else 0.0
+    n_days = max(len(daily_returns), 1)
+    annualized_return = (1 + total_return) ** (252 / n_days) - 1
+    annualized_volatility = float(daily_returns.std() * (252 ** 0.5)) if len(daily_returns) > 1 else 0.0
+    sharpe = (annualized_return - 0.02) / annualized_volatility if annualized_volatility > 0 else 0.0
+    running_max = portfolio_values.cummax()
+    drawdown = (portfolio_values - running_max) / running_max
+    returns = [float(row.get("return_pct", 0.0)) for row in outcomes]
+    return {
+        "total_return": round(total_return * 100, 2),
+        "annualized_return": round(annualized_return * 100, 2),
+        "annualized_volatility": round(annualized_volatility * 100, 2),
+        "sharpe_ratio": round(sharpe, 3),
+        "max_drawdown": round(float(drawdown.min()) * 100, 2),
+        "calmar_ratio": round(annualized_return / abs(float(drawdown.min())), 3) if float(drawdown.min()) != 0 else 0,
+        "win_rate": round(sum(1 for value in returns if value > 0) / len(returns) * 100, 2) if returns else 0.0,
+        "trading_days": n_days,
+        "final_value": round(final_value, 2),
+    }
+
+
 def _latest_selection(selections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not selections:
         return []
@@ -240,13 +415,15 @@ def _experiment_summary(
         "actual_end": pd.Timestamp(dates[-1]).date().isoformat() if dates else None,
         "capital": request.capital,
         "top_n": request.top_n,
+        "hold_days": request.hold_days,
         "min_score": request.min_score,
         "min_market_breadth_above_ma20": request.min_market_breadth_above_ma20,
         "rebalance_days": 1,
         "factor_weights": {factor.name: weight for factor, weight in zip(factors, [0.7, 0.3])},
-        "execution_assumption": "daily close rebalance proxy",
+        "execution_assumption": "tail signal today, next-session open execution",
         "notes": [
-            "This is a daily-bar proxy backtest, not a minute-level 14:30-15:00 fill simulation.",
+            "Signals are selected after the signal-day tail session; entries execute on the next trading day's open.",
+            f"Each event exits after {request.hold_days} trading day(s) using the exit day's close.",
             "Selections use weighted cross-sectional ranks from tail_session and overnight_momentum factors.",
         ],
     }

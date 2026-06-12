@@ -44,6 +44,11 @@
         </el-row>
         <el-row :gutter="12">
           <el-col :span="6">
+            <el-form-item label="持有交易日">
+              <el-input-number v-model="form.hold_days" :min="1" :max="20" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="6">
             <el-form-item label="最小分数">
               <el-input-number v-model="form.min_score" :step="0.1" />
             </el-form-item>
@@ -121,6 +126,7 @@
         <el-descriptions-item label="模式">{{ experiment.mode === 'sample' ? '样例数据' : '本地数据集' }}</el-descriptions-item>
         <el-descriptions-item label="日期范围">{{ experiment.actual_start }} / {{ experiment.actual_end }}</el-descriptions-item>
         <el-descriptions-item label="Top N">{{ experiment.top_n }}</el-descriptions-item>
+        <el-descriptions-item label="持有交易日">{{ experiment.hold_days }}</el-descriptions-item>
         <el-descriptions-item label="初始资金">{{ formatMoney(experiment.capital) }}</el-descriptions-item>
         <el-descriptions-item label="最小分数">{{ experiment.min_score ?? '-' }}</el-descriptions-item>
         <el-descriptions-item label="市场宽度">{{ experiment.min_market_breadth_above_ma20 ?? '-' }}</el-descriptions-item>
@@ -162,7 +168,7 @@
 
       <div class="panel">
         <div class="page-header panel-title-row">
-          <h2 class="page-title">信号验证：最新调仓选股</h2>
+          <h2 class="page-title">信号验证：最新尾盘选股</h2>
           <el-tag effect="plain">{{ latestSelectionDate }}</el-tag>
         </div>
         <el-table :data="latestSelection" height="260">
@@ -219,7 +225,7 @@
 
     <div v-if="result" class="panel">
       <div class="page-header panel-title-row">
-        <h2 class="page-title">信号验证：调仓选股记录</h2>
+        <h2 class="page-title">信号验证：每日尾盘选股记录</h2>
         <el-tag effect="plain">{{ rebalanceSelections.length }}</el-tag>
       </div>
       <el-table :data="rebalanceSelections" height="360">
@@ -241,7 +247,8 @@
         <el-tag effect="plain">{{ trades.length }}</el-tag>
       </div>
       <el-table :data="trades" height="420">
-        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column prop="signal_date" label="信号日" width="120" />
+        <el-table-column prop="date" label="交易日" width="120" />
         <el-table-column prop="symbol" label="股票" min-width="120" />
         <el-table-column label="方向" width="90">
           <template #default="{ row }">
@@ -254,6 +261,7 @@
         <el-table-column label="价格" width="110" align="right">
           <template #default="{ row }">{{ formatPrice(row.price) }}</template>
         </el-table-column>
+        <el-table-column prop="price_source" label="价格来源" width="120" />
         <el-table-column label="金额" width="130" align="right">
           <template #default="{ row }">{{ formatMoney(row.amount) }}</template>
         </el-table-column>
@@ -281,6 +289,7 @@
         <el-table :data="positionOutcomes" height="340">
           <el-table-column prop="symbol" label="股票" min-width="120" />
           <el-table-column prop="status" label="状态" width="90" />
+          <el-table-column prop="signal_date" label="信号日" width="120" />
           <el-table-column prop="buy_date" label="买入日" width="120" />
           <el-table-column prop="sell_date" label="卖出日" width="120" />
           <el-table-column prop="holding_days" label="持有天数" width="100" align="right" />
@@ -333,10 +342,13 @@ interface SelectionRow {
 interface TradeRow {
   trade_id: string
   date: string
+  signal_date?: string
   symbol: string
   side: 'buy' | 'sell'
   quantity: number
   price: number
+  price_source?: string
+  signal_close?: number
   amount: number
   commission: number
   realized_pnl: number
@@ -351,6 +363,7 @@ interface ExperimentSummary {
   actual_end: string
   capital: number
   top_n: number
+  hold_days: number
   min_score: number | null
   min_market_breadth_above_ma20: number | null
   execution_assumption: string
@@ -365,6 +378,7 @@ interface MonthlyReturnRow {
 interface PositionOutcomeRow {
   symbol: string
   status: 'open' | 'closed'
+  signal_date?: string
   buy_date: string
   sell_date: string | null
   holding_days: number
@@ -405,6 +419,7 @@ const form = ref<TailBacktestPayload>({
   end: '2025-02-28',
   capital: 100000,
   top_n: 3,
+  hold_days: 1,
   min_score: null,
   dataset_id: null,
   dataset_path: '',

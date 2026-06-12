@@ -20,6 +20,7 @@ export interface TailBacktestPayload {
   end: string
   capital: number
   top_n: number
+  hold_days: number
   min_score?: number | null
   min_market_breadth_above_ma20?: number | null
   dataset_id?: string | null

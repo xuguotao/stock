@@ -31,7 +31,7 @@ def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
     assert len(job["result"]["equity_curve"]) > 0
     assert job["result"]["universe_symbols"] == ["000001.SZ", "300750.SZ", "600519.SH"]
     assert job["result"]["experiment"]["mode"] == "sample"
-    assert job["result"]["experiment"]["execution_assumption"] == "daily close rebalance proxy"
+    assert job["result"]["experiment"]["execution_assumption"] == "tail signal today, next-session open execution"
     assert len(job["result"]["latest_selection"]) == 2
     assert {"date", "rank", "symbol", "score", "close", "factor_values", "factor_contributions"}.issubset(
         job["result"]["latest_selection"][0]
@@ -40,10 +40,15 @@ def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
     assert len(job["result"]["rebalance_selections"]) > 0
     assert {"date", "rank", "symbol", "score", "close"}.issubset(job["result"]["rebalance_selections"][0])
     assert len(job["result"]["trades"]) > 0
-    assert {"date", "symbol", "side", "quantity", "price", "amount", "reason", "selection_score"}.issubset(
+    assert {"date", "signal_date", "symbol", "side", "quantity", "price", "amount", "reason", "selection_score"}.issubset(
         job["result"]["trades"][0]
     )
     assert "T" not in job["result"]["trades"][0]["date"]
+    first_buy = next(trade for trade in job["result"]["trades"] if trade["side"] == "buy")
+    assert first_buy["signal_date"] == "2025-01-01"
+    assert first_buy["date"] == "2025-01-02"
+    assert first_buy["price_source"] == "next_open"
+    assert first_buy["price"] != first_buy["signal_close"]
     assert len(job["result"]["daily_return_curve"]) > 0
     assert len(job["result"]["monthly_returns"]) > 0
     assert len(job["result"]["position_outcomes"]) > 0
