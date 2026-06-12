@@ -161,6 +161,12 @@ def _write_live_selection_result(
         "confirmed_count": len(confirmed),
         "selected_count": len(selected),
         "selections": tail_session_selection_rows(selected),
+        "ranked_signals": _ranked_signal_rows(
+            confirmed=confirmed,
+            selected=selected,
+            top_n=request.top_n,
+            min_strength=request.min_strength,
+        ),
         "files": {
             "json": str(written_json),
             "csv": str(written_csv),
@@ -177,6 +183,36 @@ def _write_live_selection_result(
             blocked_by_market_breadth=blocked_by_market_breadth,
         ),
     }
+
+
+def _ranked_signal_rows(
+    *,
+    confirmed: list[Any],
+    selected: list[Any],
+    top_n: int,
+    min_strength: float | None,
+) -> list[dict[str, Any]]:
+    ordered = select_tail_session_signals(confirmed, top_n=None, min_strength=None)
+    selected_symbols = {signal.symbol for signal in selected}
+    rows = []
+    for index, signal in enumerate(ordered, start=1):
+        status = "selected" if signal.symbol in selected_symbols else "filtered"
+        filter_reason = None
+        if status == "filtered":
+            if min_strength is not None and signal.strength < min_strength:
+                filter_reason = "below_min_strength"
+            elif index > top_n:
+                filter_reason = "outside_top_n"
+            else:
+                filter_reason = "not_selected"
+        row = tail_session_selection_rows([signal])[0]
+        row.update({
+            "rank": index,
+            "status": status,
+            "filter_reason": filter_reason,
+        })
+        rows.append(row)
+    return rows
 
 
 def _intraday_coverage(aggregator: Any, symbols: list[str], trade_date: date) -> dict[str, Any]:

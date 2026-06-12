@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from src.web.backend.app import create_app
@@ -159,3 +160,46 @@ def test_tail_live_selection_explains_no_intraday_candidates(monkeypatch, tmp_pa
     assert result["diagnostics"]["empty_reason"] == "no_intraday_candidates"
     assert result["diagnostics"]["has_intraday_data_count"] == 0
     assert "没有股票形成尾盘候选信号" in result["diagnostics"]["empty_message"]
+
+
+def test_tail_live_selection_returns_ranked_signals_filtered_from_final_selection(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return ["000001.SZ", "600519.SH"]
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            base_price = 10.0 if symbol == "000001.SZ" else 20.0
+            return pd.DataFrame(
+                [
+                    {"time": pd.Timestamp("14:00").time(), "open": base_price, "close": base_price, "volume": 1000},
+                    {"time": pd.Timestamp("14:05").time(), "open": base_price, "close": base_price, "volume": 1000},
+                    {"time": pd.Timestamp("14:30").time(), "open": base_price, "close": base_price * 1.001, "volume": 2000},
+                    {"time": pd.Timestamp("14:35").time(), "open": base_price, "close": base_price * 1.002, "volume": 2200},
+                    {"time": pd.Timestamp("14:40").time(), "open": base_price, "close": base_price * 1.003, "volume": 2400},
+                ]
+            )
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=2,
+            min_strength=0.95,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["selected_count"] == 0
+    assert [row["rank"] for row in result["ranked_signals"]] == [1, 2]
+    assert {row["status"] for row in result["ranked_signals"]} == {"filtered"}
+    assert {row["filter_reason"] for row in result["ranked_signals"]} == {"below_min_strength"}

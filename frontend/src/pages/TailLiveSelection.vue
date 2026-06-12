@@ -148,6 +148,36 @@
     <div v-if="result" class="tail-result-grid">
       <div class="panel">
         <div class="page-header panel-title-row">
+          <h2 class="page-title">策略排序池</h2>
+          <el-tag effect="plain">{{ rankedSignals.length }}</el-tag>
+        </div>
+        <el-table :data="rankedSignals" height="420">
+          <el-table-column prop="rank" label="排名" width="72" />
+          <el-table-column prop="symbol" label="股票" min-width="120" />
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'selected' ? 'success' : 'info'" effect="plain">
+                {{ row.status === 'selected' ? '入选' : '过滤' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="强度" width="110" align="right">
+            <template #default="{ row }">{{ formatScore(row.strength) }}</template>
+          </el-table-column>
+          <el-table-column label="量比" width="110" align="right">
+            <template #default="{ row }">{{ formatScore(row.volume_ratio) }}</template>
+          </el-table-column>
+          <el-table-column label="尾盘涨幅" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.tail_return) }}</template>
+          </el-table-column>
+          <el-table-column label="过滤原因" min-width="150">
+            <template #default="{ row }">{{ filterReasonText(row.filter_reason) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="panel">
+        <div class="page-header panel-title-row">
           <h2 class="page-title">最终选股</h2>
           <el-tag effect="plain">{{ selections.length }}</el-tag>
         </div>
@@ -190,6 +220,7 @@ import { ElMessage } from 'element-plus'
 import { api, type JobRecord, type JobStatus, type TailLiveSelectionPayload } from '../api/client'
 
 interface SelectionRow {
+  rank?: number
   symbol: string
   trade_date: string
   strength: number
@@ -197,6 +228,8 @@ interface SelectionRow {
   volume_ratio: number
   tail_return: number
   reason: string
+  status?: 'selected' | 'filtered'
+  filter_reason?: string | null
 }
 
 interface TailLiveResult {
@@ -206,6 +239,7 @@ interface TailLiveResult {
   confirmed_count: number
   selected_count: number
   selections: SelectionRow[]
+  ranked_signals?: SelectionRow[]
   files: Record<string, string>
   market_breadth: { breadth: number; above_count: number; symbol_count: number } | null
   diagnostics?: {
@@ -248,6 +282,7 @@ const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
 const result = computed(() => (job.value?.result ?? null) as unknown as TailLiveResult | null)
 const selections = computed(() => result.value?.selections ?? [])
+const rankedSignals = computed(() => result.value?.ranked_signals ?? [])
 const diagnostics = computed(() => result.value?.diagnostics ?? null)
 const emptyReasonText = computed(() => {
   const reason = diagnostics.value?.empty_reason
@@ -329,6 +364,13 @@ function formatPrice(value: unknown) {
 
 function formatPercent(value: unknown) {
   return typeof value === 'number' ? `${(value * 100).toFixed(2)}%` : '-'
+}
+
+function filterReasonText(value: unknown) {
+  if (value === 'below_min_strength') return '低于最小强度'
+  if (value === 'outside_top_n') return '排名超出 Top N'
+  if (value === 'not_selected') return '未入选'
+  return '-'
 }
 
 function sleep(ms: number) {
