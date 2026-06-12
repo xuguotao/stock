@@ -21,6 +21,7 @@ class JobRecord:
     params: dict[str, Any]
     result: dict[str, Any] | None
     error: str | None
+    progress: dict[str, Any]
     created_at: str
     updated_at: str
 
@@ -32,6 +33,7 @@ class JobRecord:
             "params": self.params,
             "result": self.result,
             "error": self.error,
+            "progress": self.progress,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -54,14 +56,15 @@ class JobStore:
             params=params,
             result=None,
             error=None,
+            progress=_progress(0, "pending", "等待执行"),
             created_at=now,
             updated_at=now,
         )
         with self._connect() as conn:
             conn.execute(
                 """
-                insert into jobs (id, kind, status, params, result, error, created_at, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?)
+                insert into jobs (id, kind, status, params, result, error, progress, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job.id,
@@ -70,6 +73,7 @@ class JobStore:
                     json.dumps(job.params, ensure_ascii=False),
                     None,
                     None,
+                    json.dumps(job.progress, ensure_ascii=False),
                     job.created_at,
                     job.updated_at,
                 ),
@@ -96,19 +100,21 @@ class JobStore:
         status: str,
         result: dict[str, Any] | None = None,
         error: str | None = None,
+        progress: dict[str, Any] | None = None,
     ) -> JobRecord:
         updated_at = _now()
         with self._connect() as conn:
             conn.execute(
                 """
                 update jobs
-                set status = ?, result = ?, error = ?, updated_at = ?
+                set status = ?, result = ?, error = ?, progress = coalesce(?, progress), updated_at = ?
                 where id = ?
                 """,
                 (
                     status,
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
                     error,
+                    json.dumps(progress, ensure_ascii=False) if progress is not None else None,
                     updated_at,
                     job_id,
                 ),
@@ -129,11 +135,19 @@ class JobStore:
                     params text not null,
                     result text,
                     error text,
+                    progress text,
                     created_at text not null,
                     updated_at text not null
                 )
                 """
             )
+            columns = {row["name"] for row in conn.execute("pragma table_info(jobs)").fetchall()}
+            if "progress" not in columns:
+                conn.execute("alter table jobs add column progress text")
+                conn.execute(
+                    "update jobs set progress = ? where progress is null",
+                    (json.dumps(_progress(0, "unknown", "历史任务未记录进度"), ensure_ascii=False),),
+                )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -148,6 +162,7 @@ class JobStore:
             params=json.loads(row["params"]),
             result=json.loads(row["result"]) if row["result"] else None,
             error=row["error"],
+            progress=json.loads(row["progress"]) if row["progress"] else _progress(0, "unknown", "未记录进度"),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -155,3 +170,7 @@ class JobStore:
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _progress(percent: int, stage: str, message: str) -> dict[str, Any]:
+    return {"percent": percent, "stage": stage, "message": message}

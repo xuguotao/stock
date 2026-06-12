@@ -7,6 +7,11 @@ export interface JobRecord {
   params: Record<string, unknown>
   result: Record<string, unknown> | null
   error: string | null
+  progress: {
+    percent: number
+    stage: string
+    message: string
+  }
   created_at: string
   updated_at: string
 }

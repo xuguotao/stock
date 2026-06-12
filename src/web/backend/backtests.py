@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 from pydantic import AliasChoices, BaseModel, Field, model_validator
@@ -37,12 +37,20 @@ class TailBacktestRequest(BaseModel):
         return self
 
 
-def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
+ProgressCallback = Callable[[int, str, str], None]
+
+
+def run_tail_backtest(
+    request: TailBacktestRequest,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
     """Run a tail-session backtest and return UI-friendly result data."""
+    _report_progress(progress, 10, "loading_data", "加载回测数据")
     bars = _sample_bars(request.start, request.end) if request.sample else _load_dataset(request)
     if bars.empty:
         raise ValueError(_empty_bars_message(request))
 
+    _report_progress(progress, 30, "computing_factors", "计算尾盘因子和每日选股")
     factors = _tail_factors(request)
     rebalance_selections = _rebalance_selections(
         bars=bars,
@@ -50,6 +58,7 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
         top_n=request.top_n,
         min_score=request.min_score,
     )
+    _report_progress(progress, 65, "simulating_events", "执行次日开盘事件回测")
     event_result = _run_tail_event_backtest(
         request=request,
         bars=bars,
@@ -57,6 +66,7 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
     )
     trades = event_result["trades"]
     position_outcomes = event_result["position_outcomes"]
+    _report_progress(progress, 85, "building_result", "生成图表和交易明细")
     return {
         "experiment": _experiment_summary(request, bars, factors),
         "metrics": event_result["metrics"],
@@ -77,6 +87,16 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
         "position_outcomes": position_outcomes,
         "outcome_summary": _outcome_summary(position_outcomes, trades),
     }
+
+
+def _report_progress(
+    progress: ProgressCallback | None,
+    percent: int,
+    stage: str,
+    message: str,
+) -> None:
+    if progress is not None:
+        progress(percent, stage, message)
 
 
 def _load_dataset(request: TailBacktestRequest) -> pd.DataFrame:

@@ -140,6 +140,14 @@
         <el-tag v-if="isPolling" type="warning" effect="plain">运行中</el-tag>
         <el-tag v-if="job.error" type="danger" effect="plain">{{ job.error }}</el-tag>
       </div>
+      <div class="job-progress-panel">
+        <el-progress
+          :percentage="jobProgressPercent"
+          :status="jobProgressStatus"
+          :stroke-width="10"
+        />
+        <div class="progress-message">{{ job.progress?.message ?? '-' }}</div>
+      </div>
     </div>
 
     <div v-if="job" class="metric-grid">
@@ -518,6 +526,12 @@ const confirmedTailCount = computed(() => tailVerifications.value.filter((row) =
 const tailVerificationType = computed(() => {
   if (!tailVerifications.value.length) return 'info'
   return confirmedTailCount.value === tailVerifications.value.length ? 'success' : 'warning'
+})
+const jobProgressPercent = computed(() => Math.max(0, Math.min(100, Number(job.value?.progress?.percent ?? 0))))
+const jobProgressStatus = computed(() => {
+  if (job.value?.status === 'success') return 'success'
+  if (job.value?.status === 'failed') return 'exception'
+  return undefined
 })
 
 async function submit() {

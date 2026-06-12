@@ -26,6 +26,7 @@ def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
 
     assert response.status_code == 200
     assert job["status"] == "success"
+    assert job["progress"] == {"percent": 100, "stage": "completed", "message": "回测完成"}
     assert "metrics" in job["result"]
     assert "equity_curve" in job["result"]
     assert len(job["result"]["equity_curve"]) > 0

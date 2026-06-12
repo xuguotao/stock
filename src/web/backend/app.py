@@ -134,13 +134,20 @@ app = create_app()
 
 
 def _run_tail_backtest_job(store: JobStore, job_id: str, payload: TailBacktestRequest) -> None:
-    store.update_job(job_id, status="running")
+    store.update_job(job_id, status="running", progress=_progress(5, "starting", "任务启动"))
     try:
-        result = run_tail_backtest(payload)
+        result = run_tail_backtest(
+            payload,
+            progress=lambda percent, stage, message: store.update_job(
+                job_id,
+                status="running",
+                progress=_progress(percent, stage, message),
+            ),
+        )
     except Exception as exc:
-        store.update_job(job_id, status="failed", error=str(exc))
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "任务失败"))
         return
-    store.update_job(job_id, status="success", result=result)
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "回测完成"))
 
 
 def _run_fund_tail_advice_job(
@@ -149,10 +156,14 @@ def _run_fund_tail_advice_job(
     job_id: str,
     payload: FundTailAdviceRequest,
 ) -> None:
-    store.update_job(job_id, status="running")
+    store.update_job(job_id, status="running", progress=_progress(10, "running", "生成基金尾盘建议"))
     try:
         result = run_local_fund_tail_advice(paths, payload)
     except Exception as exc:
-        store.update_job(job_id, status="failed", error=str(exc))
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "任务失败"))
         return
-    store.update_job(job_id, status="success", result=result)
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "建议生成完成"))
+
+
+def _progress(percent: int, stage: str, message: str) -> dict[str, Any]:
+    return {"percent": percent, "stage": stage, "message": message}

@@ -22,6 +22,18 @@
             <el-tag :type="statusType(row.status)">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="进度" min-width="220">
+          <template #default="{ row }">
+            <div class="job-progress-cell">
+              <el-progress
+                :percentage="progressPercent(row)"
+                :status="progressStatus(row)"
+                :stroke-width="8"
+              />
+              <span class="progress-message">{{ row.progress?.message ?? '-' }}</span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="error" label="错误" min-width="220" />
         <el-table-column prop="created_at" label="创建时间" min-width="180" />
         <el-table-column prop="updated_at" label="更新时间" min-width="180" />
@@ -50,6 +62,15 @@
           <el-descriptions-item label="状态">
             <el-tag :type="statusType(selectedJob.status)">{{ selectedJob.status }}</el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="进度">
+            <el-progress
+              :percentage="progressPercent(selectedJob)"
+              :status="progressStatus(selectedJob)"
+              :stroke-width="10"
+            />
+          </el-descriptions-item>
+          <el-descriptions-item label="阶段">{{ selectedJob.progress?.stage ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="说明">{{ selectedJob.progress?.message ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ selectedJob.created_at }}</el-descriptions-item>
           <el-descriptions-item label="更新时间">{{ selectedJob.updated_at }}</el-descriptions-item>
           <el-descriptions-item label="错误">{{ selectedJob.error ?? '-' }}</el-descriptions-item>
@@ -97,6 +118,16 @@ function statusType(status: JobStatus) {
   return status === 'success' ? 'success' : status === 'failed' ? 'danger' : status === 'running' ? 'warning' : 'info'
 }
 
+function progressPercent(job: JobRecord) {
+  return Math.max(0, Math.min(100, Number(job.progress?.percent ?? 0)))
+}
+
+function progressStatus(job: JobRecord) {
+  if (job.status === 'success') return 'success'
+  if (job.status === 'failed') return 'exception'
+  return undefined
+}
+
 async function loadJobs() {
   jobs.value = (await api.listJobs(100)).items
 }
@@ -133,3 +164,16 @@ function formatJson(value: unknown) {
 
 onMounted(loadJobs)
 </script>
+
+<style scoped>
+.job-progress-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.progress-message {
+  color: #5f6b7a;
+  font-size: 12px;
+  line-height: 1.2;
+}
+</style>

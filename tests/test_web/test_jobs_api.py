@@ -16,7 +16,9 @@ def test_jobs_api_creates_and_lists_jobs(tmp_path) -> None:
     assert response.status_code == 200
     assert created["kind"] == "noop"
     assert created["status"] == "pending"
+    assert created["progress"] == {"percent": 0, "stage": "pending", "message": "等待执行"}
     assert listed["items"][0]["id"] == created["id"]
+    assert listed["items"][0]["progress"]["percent"] == 0
 
 
 def test_jobs_api_returns_one_job(tmp_path) -> None:
