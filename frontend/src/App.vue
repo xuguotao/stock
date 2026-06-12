@@ -5,6 +5,7 @@
       <el-menu :default-active="activePage" @select="openPage">
         <el-menu-item index="dashboard">总览</el-menu-item>
         <el-menu-item index="data">数据中心</el-menu-item>
+        <el-menu-item index="tail-live">今日尾盘选股</el-menu-item>
         <el-menu-item index="backtest">尾盘回测</el-menu-item>
         <el-menu-item index="fund-tail">基金尾盘</el-menu-item>
         <el-menu-item index="jobs">任务中心</el-menu-item>
@@ -18,6 +19,7 @@
       <el-main class="content">
         <Dashboard v-if="activePage === 'dashboard'" @open-backtest="openPage('backtest')" />
         <DataCenter v-else-if="activePage === 'data'" />
+        <TailLiveSelection v-else-if="activePage === 'tail-live'" :job-id="targetJobId" />
         <TailBacktest v-else-if="activePage === 'backtest'" :job-id="targetJobId" />
         <FundTail v-else-if="activePage === 'fund-tail'" :job-id="targetJobId" />
         <Jobs v-else @open-result="openResult" />
@@ -33,6 +35,7 @@ import Dashboard from './pages/Dashboard.vue'
 import FundTail from './pages/FundTail.vue'
 import Jobs from './pages/Jobs.vue'
 import TailBacktest from './pages/TailBacktest.vue'
+import TailLiveSelection from './pages/TailLiveSelection.vue'
 
 const activePage = ref('dashboard')
 const targetJobId = ref('')

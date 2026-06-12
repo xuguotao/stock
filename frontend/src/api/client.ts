@@ -86,6 +86,21 @@ export interface FundTailAdvicePayload {
   fund_codes?: string[] | null
 }
 
+export interface TailLiveSelectionPayload {
+  trade_date: string
+  symbols?: string[] | null
+  limit: number
+  universe: 'default' | 'liquid-cache'
+  bars_cache_dir: string
+  liquidity_min_bars: number
+  min_market_breadth_above_ma20?: number | null
+  confirmations: number
+  top_n: number
+  min_strength?: number | null
+  ignore_session: boolean
+  output_dir: string
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
@@ -125,6 +140,12 @@ export const api = {
   },
   submitTailBacktest(payload: TailBacktestPayload) {
     return request<BacktestSubmitResponse>('/api/backtests/tail-session', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  },
+  submitTailLiveSelection(payload: TailLiveSelectionPayload) {
+    return request<BacktestSubmitResponse>('/api/tail-session/live-selection', {
       method: 'POST',
       body: JSON.stringify(payload)
     })

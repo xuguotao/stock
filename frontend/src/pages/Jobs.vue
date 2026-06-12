@@ -145,6 +145,7 @@ function openResult(job: JobRecord | null) {
 
 function resultPage(job: JobRecord | null) {
   if (!job || job.status !== 'success') return ''
+  if (job.kind === 'tail_session_live_selection') return 'tail-live'
   if (job.kind === 'tail_session_backtest') return 'backtest'
   if (job.kind === 'fund_tail_advice') return 'fund-tail'
   return ''

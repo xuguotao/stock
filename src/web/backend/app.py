@@ -18,6 +18,7 @@ from src.web.backend.fund_tail import (
     run_local_fund_tail_advice,
 )
 from src.web.backend.jobs import JobStore
+from src.web.backend.tail_live import TailLiveSelectionRequest, run_tail_live_selection
 
 
 class CreateJobRequest(BaseModel):
@@ -35,6 +36,7 @@ def create_app(
     fund_tail_advice_dir: str | Path = "reports/fund_tail_advice",
     fund_tail_markdown_path: str | Path = "reports/fund_tail_advice/latest.md",
     run_jobs_inline: bool = False,
+    tail_live_runner=run_tail_live_selection,
 ) -> FastAPI:
     """Create a configured FastAPI app."""
     app = FastAPI(title="A-Share Quant Dashboard API")
@@ -51,6 +53,7 @@ def create_app(
     app.state.dataset_service = datasets
     app.state.fund_tail_paths = fund_tail_paths
     app.state.run_jobs_inline = run_jobs_inline
+    app.state.tail_live_runner = tail_live_runner
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -127,6 +130,20 @@ def create_app(
 
         return {"job_id": job.id}
 
+    @app.post("/api/tail-session/live-selection")
+    def create_tail_live_selection(
+        payload: TailLiveSelectionRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, Any]:
+        job = store.create_job("tail_session_live_selection", payload.model_dump(mode="json"))
+
+        if app.state.run_jobs_inline:
+            _run_tail_live_selection_job(store, app.state.tail_live_runner, job.id, payload)
+        else:
+            background_tasks.add_task(_run_tail_live_selection_job, store, app.state.tail_live_runner, job.id, payload)
+
+        return {"job_id": job.id}
+
     return app
 
 
@@ -163,6 +180,28 @@ def _run_fund_tail_advice_job(
         store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "任务失败"))
         return
     store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "建议生成完成"))
+
+
+def _run_tail_live_selection_job(
+    store: JobStore,
+    runner,
+    job_id: str,
+    payload: TailLiveSelectionRequest,
+) -> None:
+    store.update_job(job_id, status="running", progress=_progress(5, "starting", "今日尾盘选股启动"))
+    try:
+        result = runner(
+            payload,
+            progress=lambda percent, stage, message: store.update_job(
+                job_id,
+                status="running",
+                progress=_progress(percent, stage, message),
+            ),
+        )
+    except Exception as exc:
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "任务失败"))
+        return
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "今日尾盘选股完成"))
 
 
 def _progress(percent: int, stage: str, message: str) -> dict[str, Any]:
