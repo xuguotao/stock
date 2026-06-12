@@ -53,7 +53,7 @@ def run_tail_live_selection(
     reset_settings()
     scheduler = TradingScheduler()
     if not request.ignore_session and not scheduler.is_tail_session():
-        raise ValueError("Not in tail session. Enable ignore_session for a manual run.")
+        raise ValueError("当前不在 14:30-15:00 尾盘窗口；如需盘外试跑，请打开「忽略时间窗口」。")
     if not scheduler.is_trading_day(request.trade_date):
         raise ValueError(f"{request.trade_date.isoformat()} is not a trading day.")
 

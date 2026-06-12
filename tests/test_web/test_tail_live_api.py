@@ -5,7 +5,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from src.web.backend.app import create_app
-from src.web.backend.tail_live import TailLiveSelectionRequest
+from src.web.backend.tail_live import TailLiveSelectionRequest, run_tail_live_selection
 
 
 def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
@@ -67,3 +67,24 @@ def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
     assert job["result"]["selected_count"] == 1
     assert job["result"]["selections"][0]["symbol"] == "000001.SZ"
     assert job["result"]["files"]["csv"].endswith("latest_selection.csv")
+
+
+def test_tail_live_selection_reports_chinese_session_error(monkeypatch) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return False
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+
+    try:
+        run_tail_live_selection(TailLiveSelectionRequest(trade_date="2026-06-12"))
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected session window validation to fail")
+
+    assert "当前不在 14:30-15:00 尾盘窗口" in message
+    assert "忽略时间窗口" in message

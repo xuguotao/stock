@@ -63,7 +63,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="6">
-            <el-form-item label="忽略时间窗口">
+            <el-form-item label="允许盘外试跑">
               <el-switch v-model="form.ignore_session" />
             </el-form-item>
           </el-col>
@@ -199,7 +199,7 @@ const form = ref<TailLiveSelectionPayload>({
   confirmations: 1,
   top_n: 5,
   min_strength: null,
-  ignore_session: false,
+  ignore_session: true,
   output_dir: 'reports/tail_session'
 })
 
