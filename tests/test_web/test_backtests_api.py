@@ -51,6 +51,13 @@ def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
         job["result"]["position_outcomes"][0]
     )
     assert {"closed_positions", "open_positions", "realized_pnl"}.issubset(job["result"]["outcome_summary"])
+    assert len(job["result"]["tail_verifications"]) == len(job["result"]["latest_selection"])
+    verification = job["result"]["tail_verifications"][0]
+    assert verification["status"] == "confirmed"
+    assert {"symbol", "date", "tail_return_pct", "volume_ratio", "signal_time", "bars"}.issubset(verification)
+    assert verification["signal_time"] == "14:50"
+    assert len(verification["bars"]) > 0
+    assert {"time", "close", "volume"}.issubset(verification["bars"][0])
 
 
 def test_backtest_api_rejects_missing_dataset_when_not_sample(tmp_path) -> None:
@@ -121,6 +128,7 @@ def test_backtest_api_resolves_dataset_id_from_configured_dataset_root(tmp_path)
     assert job["result"]["symbol_count"] == 3
     assert job["result"]["universe_symbols"] == ["000001.SZ", "300750.SZ", "600519.SH"]
     assert job["result"]["experiment"]["mode"] == "dataset"
+    assert job["result"]["tail_verifications"][0]["status"] == "missing_intraday_data"
 
 
 def test_backtest_api_rejects_unknown_dataset_id(tmp_path) -> None:

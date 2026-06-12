@@ -187,6 +187,38 @@
 
     <div v-if="result" class="panel">
       <div class="page-header panel-title-row">
+        <h2 class="page-title">分钟级尾盘验证</h2>
+        <el-tag :type="tailVerificationType" effect="plain">{{ confirmedTailCount }} / {{ tailVerifications.length }} 已确认</el-tag>
+      </div>
+      <el-table :data="tailVerifications" height="360">
+        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column prop="symbol" label="股票" min-width="120" />
+        <el-table-column label="状态" width="130">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'confirmed' ? 'success' : 'warning'" effect="plain">
+              {{ row.status === 'confirmed' ? '已确认' : '缺分钟数据' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="signal_time" label="信号时间" width="100" />
+        <el-table-column label="尾盘涨幅" width="110" align="right">
+          <template #default="{ row }">{{ formatPercentMetric(row.tail_return_pct) }}</template>
+        </el-table-column>
+        <el-table-column label="尾盘量比" width="110" align="right">
+          <template #default="{ row }">{{ formatMetric(row.volume_ratio) }}</template>
+        </el-table-column>
+        <el-table-column label="信号价" width="110" align="right">
+          <template #default="{ row }">{{ formatPrice(row.signal_price) }}</template>
+        </el-table-column>
+        <el-table-column label="收盘价" width="110" align="right">
+          <template #default="{ row }">{{ formatPrice(row.close_price) }}</template>
+        </el-table-column>
+        <el-table-column prop="reason" label="说明" min-width="260" show-overflow-tooltip />
+      </el-table>
+    </div>
+
+    <div v-if="result" class="panel">
+      <div class="page-header panel-title-row">
         <h2 class="page-title">信号验证：调仓选股记录</h2>
         <el-tag effect="plain">{{ rebalanceSelections.length }}</el-tag>
       </div>
@@ -341,6 +373,19 @@ interface PositionOutcomeRow {
   unrealized_pnl?: number
 }
 
+interface TailVerificationRow {
+  symbol: string
+  date: string
+  status: 'confirmed' | 'missing_intraday_data'
+  reason: string
+  signal_time: string | null
+  tail_return_pct: number | null
+  volume_ratio: number | null
+  signal_price: number | null
+  close_price: number | null
+  bars: Array<{ time: string; close: number; volume: number }>
+}
+
 interface OutcomeSummary {
   closed_positions: number
   open_positions: number
@@ -387,6 +432,7 @@ const rebalanceSelections = computed(() => (result.value?.rebalance_selections ?
 const trades = computed(() => (result.value?.trades ?? []) as unknown as TradeRow[])
 const monthlyReturns = computed(() => (result.value?.monthly_returns ?? []) as unknown as MonthlyReturnRow[])
 const positionOutcomes = computed(() => (result.value?.position_outcomes ?? []) as unknown as PositionOutcomeRow[])
+const tailVerifications = computed(() => (result.value?.tail_verifications ?? []) as unknown as TailVerificationRow[])
 const outcomeSummary = computed(() => (result.value?.outcome_summary ?? null) as unknown as OutcomeSummary | null)
 const equityTradeMarkers = computed(() => buildTradeMarkers(equityCurve.value, trades.value))
 const latestSelectionDate = computed(() => latestSelection.value[0]?.date ?? '-')
@@ -407,6 +453,11 @@ const outcomeItems = computed(() => [
   { label: '手续费', value: formatMoney(outcomeSummary.value?.total_commission) },
   { label: '持仓胜率', value: formatPercentMetric(outcomeSummary.value?.win_rate_pct) }
 ])
+const confirmedTailCount = computed(() => tailVerifications.value.filter((row) => row.status === 'confirmed').length)
+const tailVerificationType = computed(() => {
+  if (!tailVerifications.value.length) return 'info'
+  return confirmedTailCount.value === tailVerifications.value.length ? 'success' : 'warning'
+})
 
 async function submit() {
   submitting.value = true

@@ -72,6 +72,10 @@ def run_tail_backtest(request: TailBacktestRequest) -> dict[str, Any]:
         "universe_symbols": sorted(map(str, bars.index.get_level_values("symbol").unique())),
         "latest_selection": _latest_selection(rebalance_selections),
         "rebalance_selections": rebalance_selections,
+        "tail_verifications": _tail_verifications(
+            request=request,
+            selections=_latest_selection(rebalance_selections),
+        ),
         "daily_return_curve": _daily_return_curve(result.daily_returns),
         "monthly_returns": _monthly_returns(result.daily_returns),
         "equity_curve": [
@@ -419,4 +423,59 @@ def _outcome_summary(outcomes: list[dict[str, Any]], trades: list[dict[str, Any]
         "total_commission": round(total_commission, 2),
         "avg_position_return_pct": round(sum(returns) / len(returns), 4) if returns else 0.0,
         "win_rate_pct": round(sum(1 for value in returns if value > 0) / len(returns) * 100, 2) if returns else 0.0,
+    }
+
+
+def _tail_verifications(
+    *,
+    request: TailBacktestRequest,
+    selections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if request.sample:
+        return [_sample_tail_verification(selection) for selection in selections]
+    return [
+        {
+            "symbol": selection["symbol"],
+            "date": selection["date"],
+            "status": "missing_intraday_data",
+            "reason": "No local 1m/5m intraday bars are configured for this dataset run.",
+            "signal_time": None,
+            "tail_return_pct": None,
+            "volume_ratio": None,
+            "signal_price": None,
+            "close_price": selection.get("close"),
+            "bars": [],
+        }
+        for selection in selections
+    ]
+
+
+def _sample_tail_verification(selection: dict[str, Any]) -> dict[str, Any]:
+    close_price = float(selection.get("close") or 10.0)
+    start_price = close_price * 0.985
+    volumes = [1000, 1100, 1200, 2600, 3000, 3400, 3600]
+    times = ["14:25", "14:30", "14:35", "14:40", "14:45", "14:50", "14:55"]
+    bars = []
+    for index, time_label in enumerate(times):
+        progress = index / (len(times) - 1)
+        price = start_price + (close_price - start_price) * progress
+        bars.append({
+            "time": time_label,
+            "close": round(price, 4),
+            "volume": volumes[index],
+        })
+    baseline_volume = sum(volumes[:3]) / 3
+    tail_volume = sum(volumes[3:]) / 4
+    tail_return = (bars[-1]["close"] / bars[1]["close"] - 1) * 100
+    return {
+        "symbol": selection["symbol"],
+        "date": selection["date"],
+        "status": "confirmed",
+        "reason": "Synthetic sample 5m bars confirm rising tail price and stronger tail volume.",
+        "signal_time": "14:50",
+        "tail_return_pct": round(tail_return, 4),
+        "volume_ratio": round(tail_volume / baseline_volume, 4),
+        "signal_price": bars[-2]["close"],
+        "close_price": close_price,
+        "bars": bars,
     }
