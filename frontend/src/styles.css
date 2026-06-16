@@ -80,8 +80,23 @@ body {
 
 .panel .el-date-editor,
 .panel .el-select,
-.panel .el-input-number {
+.panel .el-input-number,
+.panel .el-input {
   width: 100%;
+}
+
+.positive-text {
+  color: #cf1322;
+  font-weight: 600;
+}
+
+.negative-text {
+  color: #12805c;
+  font-weight: 600;
+}
+
+.watchlist-position-hint {
+  margin-bottom: 18px;
 }
 
 .compact-panel {

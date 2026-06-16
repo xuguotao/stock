@@ -62,5 +62,20 @@ def test_fund_tail_page_exposes_watchlist_management_panel() -> None:
     assert "持有中" in source
     assert "准备买入" in source
     assert "参与建议" in source
-    assert "持仓成本" in source
+    assert "成本净值" in source
+    assert "持仓金额" in source
+    assert "浮盈亏%" in source
     assert "watchlistStatusText" in source
+
+
+def test_fund_tail_watchlist_position_fields_use_plain_inputs() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert 'placeholder="如 1.2345"' in source
+    assert 'placeholder="如 5000"' in source
+    assert 'placeholder="如 -12.50"' in source
+    assert "decimalToPercent" in source
+    assert "percentToDecimal" in source
+    assert 'label="持仓成本"' not in source
+    assert 'label="持仓收益率"' not in source
+    assert "el-input-number" not in source

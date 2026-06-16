@@ -90,14 +90,18 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="持仓成本" width="104" align="right">
-          <template #default="{ row }">{{ formatOptionalNumber(row.position_cost) }}</template>
+        <el-table-column label="成本净值" width="104" align="right">
+          <template #default="{ row }">{{ row.status === 'holding' ? formatOptionalNumber(row.position_cost) : '-' }}</template>
         </el-table-column>
         <el-table-column label="持仓金额" width="112" align="right">
-          <template #default="{ row }">{{ formatOptionalNumber(row.position_amount) }}</template>
+          <template #default="{ row }">{{ row.status === 'holding' ? formatMoney(row.position_amount) : '-' }}</template>
         </el-table-column>
-        <el-table-column label="持仓收益率" width="116" align="right">
-          <template #default="{ row }">{{ formatOptionalPercent(row.position_return_pct) }}</template>
+        <el-table-column label="浮盈亏%" width="104" align="right">
+          <template #default="{ row }">
+            <span :class="returnClass(row.position_return_pct)">
+              {{ row.status === 'holding' ? formatOptionalPercent(row.position_return_pct) : '-' }}
+            </span>
+          </template>
         </el-table-column>
         <el-table-column prop="note" label="备注" min-width="180" show-overflow-tooltip />
         <el-table-column label="操作" width="140" fixed="right">
@@ -284,23 +288,51 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-row :gutter="12">
+        <el-row v-if="watchlistForm.status === 'holding'" :gutter="12">
           <el-col :span="8">
-            <el-form-item label="持仓成本">
-              <el-input-number v-model="watchlistForm.position_cost" :min="0" :step="0.01" />
+            <el-form-item label="成本净值">
+              <el-input
+                v-model.number="watchlistForm.position_cost"
+                type="number"
+                inputmode="decimal"
+                placeholder="如 1.2345"
+                clearable
+              />
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="持仓金额">
-              <el-input-number v-model="watchlistForm.position_amount" :min="0" :step="100" />
+              <el-input
+                v-model.number="watchlistForm.position_amount"
+                type="number"
+                inputmode="decimal"
+                placeholder="如 5000"
+                clearable
+              />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="持仓收益率">
-              <el-input-number v-model="watchlistForm.position_return_pct" :step="0.01" />
+            <el-form-item label="浮盈亏%">
+              <el-input
+                v-model.number="watchlistForm.position_return_pct"
+                type="number"
+                inputmode="decimal"
+                placeholder="如 -12.50"
+                clearable
+              >
+                <template #append>%</template>
+              </el-input>
             </el-form-item>
           </el-col>
         </el-row>
+        <el-alert
+          v-else
+          title="未持有或仅观察的基金无需填写成本、金额和浮盈亏。状态改为“持有中”后再维护这些持仓信息。"
+          type="info"
+          show-icon
+          :closable="false"
+          class="watchlist-position-hint"
+        />
         <el-form-item label="备注">
           <el-input v-model="watchlistForm.note" type="textarea" :rows="2" />
         </el-form-item>
@@ -325,7 +357,7 @@ const watchlist = ref<FundWatchlistItem[]>([])
 const watchlistStatusFilter = ref('all')
 const watchlistDialogVisible = ref(false)
 const watchlistEditingCode = ref('')
-const watchlistForm = ref<FundWatchlistItem>(emptyWatchlistForm())
+const watchlistForm = ref<WatchlistForm>(emptyWatchlistForm())
 const report = ref<FundTailReportResponse>({
   rows: [],
   markdown: '',
@@ -350,6 +382,9 @@ const gradeFilters = [
   { text: 'D', value: 'D' }
 ]
 type AdviceRow = Record<string, unknown>
+type WatchlistForm = Omit<FundWatchlistItem, 'position_return_pct'> & {
+  position_return_pct: number | null
+}
 
 const dataStatus = computed<FundTailDataStatusItem[]>(() => report.value.data_status?.length ? report.value.data_status : universe.value)
 const filteredWatchlist = computed(() => {
@@ -399,7 +434,7 @@ async function loadAll() {
   }
 }
 
-function emptyWatchlistForm(): FundWatchlistItem {
+function emptyWatchlistForm(): WatchlistForm {
   return {
     fund_code: '',
     fund_name: '',
@@ -417,7 +452,9 @@ function emptyWatchlistForm(): FundWatchlistItem {
 
 function openWatchlistDialog(item?: FundWatchlistItem) {
   watchlistEditingCode.value = item?.fund_code ?? ''
-  watchlistForm.value = item ? { ...item } : emptyWatchlistForm()
+  watchlistForm.value = item
+    ? { ...item, position_return_pct: decimalToPercent(item.position_return_pct) }
+    : emptyWatchlistForm()
   watchlistDialogVisible.value = true
 }
 
@@ -431,7 +468,14 @@ async function saveWatchlistItem() {
     ElMessage.error('基金名称不能为空')
     return
   }
-  const payload = { ...watchlistForm.value, fund_code: code, fund_name: watchlistForm.value.fund_name.trim() }
+  const payload = {
+    ...watchlistForm.value,
+    fund_code: code,
+    fund_name: watchlistForm.value.fund_name.trim(),
+    position_cost: nullableNumber(watchlistForm.value.position_cost),
+    position_amount: nullableNumber(watchlistForm.value.position_amount),
+    position_return_pct: percentToDecimal(watchlistForm.value.position_return_pct)
+  }
   try {
     await api.upsertFundTailWatchlistItem(code, payload)
     watchlistDialogVisible.value = false
@@ -595,13 +639,43 @@ function fundTypeText(value: string) {
 function formatOptionalNumber(value: unknown) {
   const numeric = numberValue(value)
   if (!Number.isFinite(numeric)) return '-'
-  return numeric.toFixed(2)
+  return numeric.toFixed(4)
+}
+
+function formatMoney(value: unknown) {
+  const numeric = numberValue(value)
+  if (!Number.isFinite(numeric)) return '-'
+  return numeric.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })
 }
 
 function formatOptionalPercent(value: unknown) {
   const numeric = numberValue(value)
   if (!Number.isFinite(numeric)) return '-'
   return `${(numeric * 100).toFixed(2)}%`
+}
+
+function returnClass(value: unknown) {
+  const numeric = numberValue(value)
+  if (!Number.isFinite(numeric) || numeric === 0) return ''
+  return numeric > 0 ? 'positive-text' : 'negative-text'
+}
+
+function nullableNumber(value: unknown) {
+  const numeric = numberValue(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
+function decimalToPercent(value: unknown) {
+  const numeric = numberValue(value)
+  return Number.isFinite(numeric) ? Number((numeric * 100).toFixed(2)) : null
+}
+
+function percentToDecimal(value: unknown) {
+  const numeric = numberValue(value)
+  return Number.isFinite(numeric) ? numeric / 100 : null
 }
 
 function predictionConfidence(row: AdviceRow) {
