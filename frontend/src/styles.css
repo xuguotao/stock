@@ -99,6 +99,10 @@ body {
   margin-bottom: 18px;
 }
 
+.watchlist-dialog {
+  max-width: calc(100vw - 32px);
+}
+
 .compact-panel {
   padding: 12px 16px;
 }

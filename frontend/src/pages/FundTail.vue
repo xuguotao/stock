@@ -228,15 +228,20 @@
       <pre class="markdown-preview">{{ report.markdown || '暂无报告' }}</pre>
     </div>
 
-    <el-dialog v-model="watchlistDialogVisible" :title="watchlistEditingCode ? '编辑基金' : '新增基金'" width="620px">
+    <el-dialog
+      v-model="watchlistDialogVisible"
+      :title="watchlistEditingCode ? '编辑基金' : '新增基金'"
+      width="760px"
+      class="watchlist-dialog"
+    >
       <el-form :model="watchlistForm" label-width="110px">
         <el-row :gutter="12">
-          <el-col :span="12">
+          <el-col :span="8">
             <el-form-item label="基金代码">
               <el-input v-model="watchlistForm.fund_code" :disabled="Boolean(watchlistEditingCode)" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :span="16">
             <el-form-item label="基金名称">
               <el-input v-model="watchlistForm.fund_name" />
             </el-form-item>
@@ -289,7 +294,7 @@
           </el-col>
         </el-row>
         <el-row v-if="watchlistForm.status === 'holding'" :gutter="12">
-          <el-col :span="8">
+          <el-col :span="12">
             <el-form-item label="成本净值">
               <el-input
                 v-model.number="watchlistForm.position_cost"
@@ -300,18 +305,7 @@
               />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
-            <el-form-item label="持仓金额">
-              <el-input
-                v-model.number="watchlistForm.position_amount"
-                type="number"
-                inputmode="decimal"
-                placeholder="如 5000"
-                clearable
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
+          <el-col :span="12">
             <el-form-item label="浮盈亏%">
               <el-input
                 v-model.number="watchlistForm.position_return_pct"
@@ -322,6 +316,17 @@
               >
                 <template #append>%</template>
               </el-input>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <el-form-item label="持仓金额">
+              <el-input
+                v-model.number="watchlistForm.position_amount"
+                type="number"
+                inputmode="decimal"
+                placeholder="如 5000"
+                clearable
+              />
             </el-form-item>
           </el-col>
         </el-row>

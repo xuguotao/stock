@@ -70,10 +70,15 @@ def test_fund_tail_page_exposes_watchlist_management_panel() -> None:
 
 def test_fund_tail_watchlist_position_fields_use_plain_inputs() -> None:
     source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+    styles = Path("frontend/src/styles.css").read_text(encoding="utf-8")
 
     assert 'placeholder="如 1.2345"' in source
     assert 'placeholder="如 5000"' in source
     assert 'placeholder="如 -12.50"' in source
+    assert 'width="760px"' in source
+    assert 'class="watchlist-dialog"' in source
+    assert '<el-col :span="24">' in source
+    assert ".watchlist-dialog" in styles
     assert "decimalToPercent" in source
     assert "percentToDecimal" in source
     assert 'label="持仓成本"' not in source
