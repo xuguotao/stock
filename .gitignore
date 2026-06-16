@@ -44,6 +44,10 @@ data/*.parquet
 data/*.feather
 data/*.csv
 data/*.xlsx
+data/**/*.csv
+data/**/*.sqlite3
+data/*.db
+data/*.db-*
 
 # Local paper-trading state and generated reports
 data/paper_trading/
