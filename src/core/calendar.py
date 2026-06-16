@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from functools import lru_cache
 
 
 # ── Hardcoded Holiday Dates (2024-2026) ───────────────────────
@@ -66,8 +65,15 @@ ALL_HOLIDAYS: set[date] = set()
 ALL_WORKING_WEEKENDS: set[date] = set()
 
 
+def parse_date(value: date | str) -> date:
+    """Parse a date-like value used by calendar APIs."""
+    if isinstance(value, date):
+        return value
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
 def _parse_dates(date_strs: list[str]) -> set[date]:
-    return {datetime.strptime(d, "%Y-%m-%d").date() for d in date_strs}
+    return {parse_date(d) for d in date_strs}
 
 
 def _init_calendar() -> None:
@@ -86,18 +92,15 @@ class TradingCalendar:
 
     def is_trading_day(self, d: date | str) -> bool:
         """Check if a date is a trading day."""
-        if isinstance(d, str):
-            d = datetime.strptime(d, "%Y-%m-%d").date()
+        d = parse_date(d)
         if d.weekday() >= 5:
             return d in ALL_WORKING_WEEKENDS
         return d not in ALL_HOLIDAYS
 
     def get_trading_days(self, start: date | str, end: date | str) -> list[date]:
         """Get all trading days in a date range."""
-        if isinstance(start, str):
-            start = datetime.strptime(start, "%Y-%m-%d").date()
-        if isinstance(end, str):
-            end = datetime.strptime(end, "%Y-%m-%d").date()
+        start = parse_date(start)
+        end = parse_date(end)
 
         days = []
         current = start
@@ -107,23 +110,38 @@ class TradingCalendar:
             current += timedelta(days=1)
         return days
 
-    def get_previous_trading_day(self, d: date | str) -> date:
-        """Get the previous trading day."""
-        if isinstance(d, str):
-            d = datetime.strptime(d, "%Y-%m-%d").date()
-        current = d - timedelta(days=1)
+    def get_previous_trading_day(self, d: date | str, *, include_current: bool = False) -> date:
+        """Get the previous trading day.
+
+        By default this is strict: a trading day input returns the prior trading day.
+        Set include_current=True when callers want the input date if it already trades.
+        """
+        d = parse_date(d)
+        current = d if include_current else d - timedelta(days=1)
         while not self.is_trading_day(current):
             current -= timedelta(days=1)
         return current
 
-    def get_next_trading_day(self, d: date | str) -> date:
-        """Get the next trading day."""
-        if isinstance(d, str):
-            d = datetime.strptime(d, "%Y-%m-%d").date()
-        current = d + timedelta(days=1)
+    def get_next_trading_day(self, d: date | str, *, include_current: bool = False) -> date:
+        """Get the next trading day.
+
+        By default this is strict: a trading day input returns the following trading day.
+        Set include_current=True when callers want the input date if it already trades.
+        """
+        d = parse_date(d)
+        current = d if include_current else d + timedelta(days=1)
         while not self.is_trading_day(current):
             current += timedelta(days=1)
         return current
+
+    def get_effective_trading_day(self, d: date | str) -> date:
+        """Return d if it trades, otherwise the next trading day."""
+        return self.get_next_trading_day(d, include_current=True)
+
+    def get_next_session_label(self, d: date | str) -> str:
+        """Return a user-facing label for the next A-share trading session."""
+        next_day = self.get_next_trading_day(d)
+        return f"下一交易日（{next_day.isoformat()}）"
 
 
 # Module-level singleton
@@ -136,3 +154,19 @@ def is_trading_day(d: date | str) -> bool:
 
 def get_trading_days(start: date | str, end: date | str) -> list[date]:
     return _default_calendar.get_trading_days(start, end)
+
+
+def get_next_trading_day(d: date | str, *, include_current: bool = False) -> date:
+    return _default_calendar.get_next_trading_day(d, include_current=include_current)
+
+
+def get_previous_trading_day(d: date | str, *, include_current: bool = False) -> date:
+    return _default_calendar.get_previous_trading_day(d, include_current=include_current)
+
+
+def get_effective_trading_day(d: date | str) -> date:
+    return _default_calendar.get_effective_trading_day(d)
+
+
+def get_next_session_label(d: date | str) -> str:
+    return _default_calendar.get_next_session_label(d)

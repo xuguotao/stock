@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from datetime import date
+
+from src.strategy.scanner import TailSessionSignal
+from src.strategy.tail_session.v2_scorer import score_tail_signals
+
+
+def _signal(
+    symbol: str,
+    *,
+    strength: float,
+    volume_ratio: float,
+    tail_return: float,
+) -> TailSessionSignal:
+    return TailSessionSignal(
+        symbol=symbol,
+        trade_date=date(2026, 6, 12),
+        strength=strength,
+        last_price=10.0,
+        volume_ratio=volume_ratio,
+        tail_return=tail_return,
+        reason="fixture",
+    )
+
+
+def test_v2_scorer_assigns_strong_confirmation_for_high_quality_tail_signal() -> None:
+    rows = score_tail_signals([
+        _signal("000001.SZ", strength=0.82, volume_ratio=2.1, tail_return=0.012)
+    ])
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.symbol == "000001.SZ"
+    assert row.layer == "strong"
+    assert row.action == "trade_candidate"
+    assert row.total_score >= 70
+    assert row.breakdown.tail_money >= 70
+    assert row.breakdown.price_action >= 60
+    assert "强确认" in row.explanation
+
+
+def test_v2_scorer_assigns_watchlist_for_moderate_but_tradeable_signal() -> None:
+    rows = score_tail_signals([
+        _signal("000002.SZ", strength=0.48, volume_ratio=1.28, tail_return=0.002)
+    ])
+
+    row = rows[0]
+    assert row.layer == "watchlist"
+    assert row.action == "observe_next_open"
+    assert 45 <= row.total_score < 70
+    assert "观察" in row.explanation
+
+
+def test_v2_scorer_keeps_weak_scoreable_signal_visible() -> None:
+    rows = score_tail_signals([
+        _signal("000003.SZ", strength=0.22, volume_ratio=0.92, tail_return=-0.003)
+    ])
+
+    row = rows[0]
+    assert row.layer == "weak"
+    assert row.action == "no_trade"
+    assert row.total_score < 45
+    assert row.risks

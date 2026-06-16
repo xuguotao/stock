@@ -28,8 +28,22 @@ def _row_value(row: pd.Series, key: str, default: object = "") -> object:
     return row[key] if key in row and pd.notna(row[key]) else default
 
 
+def _sell_rows(report: pd.DataFrame) -> pd.DataFrame:
+    if "卖出建议" not in report.columns:
+        return report.iloc[0:0]
+    return report[report["卖出建议"].isin(["止盈减仓", "止损减仓", "分批减仓"])]
+
+
+def next_trading_day_label(trade_date: str) -> str:
+    """Return the next A-share trading day label for report wording."""
+    scheduler = TradingScheduler()
+    next_day = scheduler.next_trading_day(date.fromisoformat(trade_date))
+    return next_day.isoformat()
+
+
 def build_markdown_report(report: pd.DataFrame, trade_date: str) -> str:
     """Build a concise human-facing Markdown report from the Chinese CSV."""
+    next_trade_label = next_trading_day_label(trade_date)
     actionable = report[report["最终操作建议"].isin(["尾盘加仓", "小额试探"])]
     if actionable.empty:
         summary = "总判断：今天不适合大额尾盘加仓，整体以观察和等待企稳为主。"
@@ -58,6 +72,29 @@ def build_markdown_report(report: pd.DataFrame, trade_date: str) -> str:
             )
         )
 
+    sell_rows = _sell_rows(report)
+    if not sell_rows.empty:
+        lines.extend(
+            [
+                "",
+                "## 尾盘卖出/减仓关注",
+                "",
+                "| 基金 | 代码 | 卖出等级 | 卖出建议 | 卖出原因 | 卖出评分 |",
+                "|---|---:|---:|---|---|---:|",
+            ]
+        )
+        for _, row in sell_rows.iterrows():
+            lines.append(
+                "| {name} | {code} | {grade} | {action} | {reason} | {score} |".format(
+                    name=_row_value(row, "基金名称"),
+                    code=str(_row_value(row, "基金代码")).zfill(6),
+                    grade=_row_value(row, "卖出等级"),
+                    action=_row_value(row, "卖出建议"),
+                    reason=_row_value(row, "卖出原因"),
+                    score=_row_value(row, "卖出评分", "-"),
+                )
+            )
+
     lines.extend(["", "## 逐只依据", ""])
     for _, row in report.iterrows():
         name = _row_value(row, "基金名称")
@@ -71,6 +108,11 @@ def build_markdown_report(report: pd.DataFrame, trade_date: str) -> str:
                     f"信号原因：{_row_value(row, '信号原因')}"
                 ),
                 (
+                    f"- 代理：{_row_value(row, '代理标的', '-')}；"
+                    f"匹配度：{pct(_row_value(row, '代理匹配度', 0.0))}；"
+                    f"匹配等级：{_row_value(row, '代理匹配等级', '-')}"
+                ),
+                (
                     f"- 同类次日上涨/下跌概率：{pct(_row_value(row, '同类次日上涨概率', 0.0))} / "
                     f"{pct(_row_value(row, '同类次日下跌概率', 0.0))}；"
                     f"样本数：{int(float(_row_value(row, '同类样本数', 0)))}"
@@ -81,20 +123,33 @@ def build_markdown_report(report: pd.DataFrame, trade_date: str) -> str:
                     f"跌超1%/2%概率：{pct(_row_value(row, '同类次日跌超1%概率', 0.0))} / "
                     f"{pct(_row_value(row, '同类次日跌超2%概率', 0.0))}"
                 ),
+                (
+                    f"- 预测：3日上涨概率 {pct(_row_value(row, '3日预测上涨概率', 0.0))}，"
+                    f"5日上涨概率 {pct(_row_value(row, '5日预测上涨概率', 0.0))}，"
+                    f"5日中位数收益 {pct(_row_value(row, '5日预测中位数收益', 0.0))}，"
+                    f"5日跌超2%概率 {pct(_row_value(row, '5日预测跌超2%概率', 0.0))}，"
+                    f"评分 {_row_value(row, '预测加仓评分', '-')}"
+                ),
                 f"- 操作：{_row_value(row, '最终操作建议')}（{_row_value(row, '建议原因')}）",
+                (
+                    f"- 卖出：{_row_value(row, '卖出建议', '不卖出')}；"
+                    f"等级：{_row_value(row, '卖出等级', '-')}；"
+                    f"原因：{_row_value(row, '卖出原因', '卖出信号未触发')}"
+                ),
                 "",
             ]
         )
 
     lines.extend(
         [
-            "## 明日观察",
+            f"## 下一交易日观察（{next_trade_label}）",
             "",
             "- 高开不追；只有回踩不破且放量修复时，再考虑第二笔。",
+            "- 若中间隔周末或节假日，周末消息只作为风险变量，不把非交易日涨跌当成验证信号。",
             "- 连续弱势品种先等企稳，不在贴近日内低位时连续摊平。",
-            "- 主题基金优先看同类历史概率，技术信号和最终建议冲突时，以最终建议为准。",
+            "- 技术信号和预测结果冲突时，以未来 3-5 日预测胜率、收益和回撤风险为准。",
             "",
-            "这不是保证收益的投资建议，只用于辅助你做尾盘加仓节奏判断。",
+            "这不是保证收益的投资建议，只用于辅助你做尾盘加仓和卖出节奏判断。",
             "",
         ]
     )

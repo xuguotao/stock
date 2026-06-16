@@ -21,6 +21,7 @@ dependencies = [
     "tqdm>=4.66",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
+    "clickhouse-driver>=0.2.10",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,9 @@ dev = [
 ]
 timesfm = [
     "timesfm[torch]>=2.0.1",
+]
+market = [
+    "mootdx>=0.10",
 ]
 
 [tool.pytest.ini_options]

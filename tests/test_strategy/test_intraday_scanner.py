@@ -86,3 +86,40 @@ def test_intraday_scanner_requires_consecutive_confirmations() -> None:
     assert scanner.confirm(candidates) == []
     confirmed = scanner.confirm(candidates)
     assert [signal.symbol for signal in confirmed] == ["000001.SZ"]
+
+
+def test_intraday_scanner_ignores_bars_after_max_bar_time() -> None:
+    bars = _intraday_bars(tail_volume=1000, tail_close=10.0)
+    bars = pd.concat(
+        [
+            bars,
+            pd.DataFrame(
+                [
+                    {
+                        "datetime": datetime(2025, 6, 3, 14, 45),
+                        "time": datetime(2025, 6, 3, 14, 45).time(),
+                        "symbol": "000001.SZ",
+                        "open": 10.0,
+                        "high": 10.5,
+                        "low": 10.0,
+                        "close": 10.5,
+                        "volume": 5000,
+                        "amount": 52500,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    scanner = IntradayScanner(
+        FakeAggregator(bars),
+        volume_ratio_threshold=1.5,
+        min_tail_return=0.01,
+        confirmation_count=1,
+        max_bar_time=datetime(2025, 6, 3, 14, 40).time(),
+    )
+
+    ranked, candidates = scanner.scan_with_rank(["000001.SZ"], date(2025, 6, 3))
+
+    assert candidates == []
+    assert ranked[0].last_price == 10.0

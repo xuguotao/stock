@@ -1,0 +1,368 @@
+from __future__ import annotations
+
+import sqlite3
+
+from fastapi.testclient import TestClient
+
+from src.web.backend.app import create_app
+from src.web.backend.data_status import inspect_stock_database
+
+
+def _create_stock_db(path) -> None:
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "create table stocks (symbol text, name text, industry text, market text, list_date text, updated_at text)"
+    )
+    conn.execute("create table trade_calendar (date text, is_open integer)")
+    conn.execute(
+        "create table daily_kline (symbol text, date text, open real, high real, low real, close real, volume real, amount real, amplitude real, pct_change real, change real, turnover real)"
+    )
+    conn.execute(
+        "create table minute5_kline (symbol text, datetime text, open real, high real, low real, close real, volume real, amount real)"
+    )
+    conn.executemany(
+        "insert into stocks values (?, ?, ?, ?, ?, ?)",
+        [
+            ("000001", "平安银行", "银行", "SZ", "1991-04-03", "2026-06-12 15:10:00"),
+            ("000004", "*ST国华", "软件", "SZ", "1990-12-01", "2026-06-12 15:10:00"),
+        ],
+    )
+    conn.executemany(
+        "insert into trade_calendar values (?, ?)",
+        [("2026-06-12", 1), ("2026-06-13", 0)],
+    )
+    conn.executemany(
+        "insert into daily_kline values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("000001", "2026-06-11", 10, 10.5, 9.9, 10.2, 1000, 10200, 0, 0, 0, 0),
+            ("000001", "2026-06-12", 10.2, 10.8, 10.1, 10.6, 1200, 12600, 0, 0, 0, 0),
+            ("000004", "2026-06-12", 5, 5.1, 4.9, 5.0, 800, 4000, 0, 0, 0, 0),
+        ],
+    )
+    conn.executemany(
+        "insert into minute5_kline values (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("000001", "2026-06-12 14:55:00", 10.5, 10.7, 10.4, 10.6, 100, 1060),
+            ("000001", "2026-06-12 15:00:00", 10.6, 10.8, 10.5, 10.7, 120, 1284),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_data_status_api_returns_stock_db_coverage(tmp_path) -> None:
+    stock_db = tmp_path / "stock.db"
+    _create_stock_db(stock_db)
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=stock_db,
+        data_status_runner=lambda: inspect_stock_database(stock_db),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/data/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["database"]["exists"] is True
+    assert payload["database"]["path"] == str(stock_db)
+    assert payload["stock_summary"] == {
+        "stock_count": 2,
+        "non_st_stock_count": 1,
+        "st_stock_count": 1,
+    }
+    assert payload["tables"]["daily_kline"]["row_count"] == 3
+    assert payload["tables"]["daily_kline"]["date_range"] == {
+        "start": "2026-06-11",
+        "end": "2026-06-12",
+    }
+    assert payload["tables"]["daily_kline"]["symbol_count"] == 2
+    assert payload["tables"]["minute5_kline"]["date_range"]["end"] == "2026-06-12 15:00:00"
+    assert payload["health"]["daily_latest_date"] == "2026-06-12"
+    assert payload["health"]["minute5_latest_datetime"] == "2026-06-12 15:00:00"
+
+
+def test_data_status_api_reports_missing_database(tmp_path) -> None:
+    stock_db = tmp_path / "missing.db"
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=stock_db,
+        data_status_runner=lambda: inspect_stock_database(stock_db),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/data/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["database"]["exists"] is False
+    assert payload["tables"] == {}
+    assert payload["health"]["status"] == "missing_database"
+
+
+def test_data_sync_api_runs_inline_job_and_returns_refreshed_status(tmp_path) -> None:
+    stock_db = tmp_path / "stock.db"
+    _create_stock_db(stock_db)
+
+    def fake_sync(remote, dest, backup, progress=None):
+        if progress:
+            progress(40, "copying", "同步 stock.db")
+        assert remote == "host:/stock.db"
+        assert dest == stock_db
+        assert backup is True
+        return {
+            "remote": remote,
+            "dest": str(dest),
+            "size_bytes": stock_db.stat().st_size,
+            "integrity": "ok",
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=stock_db,
+        run_jobs_inline=True,
+        stock_db_sync_runner=fake_sync,
+        data_status_runner=lambda: inspect_stock_database(stock_db),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/data/sync-stock-db",
+        json={"remote": "host:/stock.db", "backup": True},
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["kind"] == "stock_db_sync"
+    assert job["status"] == "success"
+    assert job["progress"] == {"percent": 100, "stage": "completed", "message": "旧 Stock DB 同步完成"}
+    assert job["result"]["legacy"] is True
+    assert job["result"]["sync"]["integrity"] == "ok"
+    assert job["result"]["status"]["stock_summary"]["stock_count"] == 2
+
+
+def test_minute5_sync_api_runs_inline_job_and_returns_refreshed_status(tmp_path) -> None:
+    stock_db = tmp_path / "stock.db"
+    _create_stock_db(stock_db)
+
+    def fake_sync(db_path, trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
+        if progress:
+            progress(65, "fetching", "更新 5m 分钟线")
+        assert db_path == stock_db
+        assert trade_date.isoformat() == "2026-06-12"
+        assert limit == 0
+        assert symbols is None
+        assert include_st is False
+        return {
+            "trade_date": "2026-06-12",
+            "target_symbols": 1,
+            "success": 1,
+            "failed": 0,
+            "inserted_rows": 2,
+            "coverage_after": {"symbol_count": 1},
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=stock_db,
+        run_jobs_inline=True,
+        minute5_sync_runner=fake_sync,
+        data_status_runner=lambda: inspect_stock_database(stock_db),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/data/sync-minute5",
+        json={"trade_date": "2026-06-12", "limit": 0},
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["kind"] == "minute5_sync"
+    assert job["status"] == "success"
+    assert job["progress"] == {"percent": 100, "stage": "completed", "message": "5m 分钟线更新完成"}
+    assert job["result"]["sync"]["success"] == 1
+    assert job["result"]["status"]["health"]["minute5_symbol_count"] == 1
+
+
+def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None:
+    stock_db = tmp_path / "stock.db"
+    _create_stock_db(stock_db)
+    status_calls = [
+        {
+            "database": {"exists": True, "type": "clickhouse", "size_bytes": 0},
+            "stock_summary": {"stock_count": 2, "non_st_stock_count": 2, "st_stock_count": 0},
+            "health": {
+                "status": "ok",
+                "daily_latest_date": "2026-06-12",
+                "daily_symbol_count": 2,
+                "minute5_latest_datetime": "2026-06-11 15:00:00",
+                "minute5_symbol_count": 1,
+            },
+            "tables": {},
+        },
+        {
+            "database": {"exists": True, "type": "clickhouse", "size_bytes": 0},
+            "stock_summary": {"stock_count": 2, "non_st_stock_count": 2, "st_stock_count": 0},
+            "health": {
+                "status": "ok",
+                "daily_latest_date": "2026-06-12",
+                "daily_symbol_count": 2,
+                "minute5_latest_datetime": "2026-06-12 15:00:00",
+                "minute5_symbol_count": 2,
+            },
+            "tables": {},
+        },
+    ]
+    sync_calls = []
+
+    def fake_status():
+        return status_calls[min(len(sync_calls), 1)]
+
+    def fake_sync(db_path, trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
+        sync_calls.append({"trade_date": trade_date.isoformat(), "limit": limit, "symbols": symbols})
+        if progress:
+            progress(50, "fetching", "更新 5m 分钟线")
+        if symbols:
+            return {
+                "trade_date": trade_date.isoformat(),
+                "target_symbols": len(symbols),
+                "success": len(symbols),
+                "no_data": 0,
+                "no_data_symbols": [],
+                "failed": 0,
+                "inserted_rows": 48,
+            }
+        return {
+            "trade_date": trade_date.isoformat(),
+            "target_symbols": 2,
+            "success": 1,
+            "no_data": 1,
+            "no_data_symbols": ["000002.SZ"],
+            "failed": 0,
+            "inserted_rows": 48,
+        }
+
+    def fake_tail_runner(payload, progress=None):
+        if progress:
+            progress(95, "strategy_review", "复核尾盘策略")
+        assert payload.trade_date.isoformat() == "2026-06-12"
+        assert payload.ignore_session is True
+        return {
+            "mode": "selection",
+            "trade_date": "2026-06-12",
+            "scanned_count": 2,
+            "selected_count": 1,
+            "ranked_signals": [{"symbol": "000001.SZ"}],
+            "selections": [{"symbol": "000001.SZ"}],
+            "diagnostics": {"empty_reason": ""},
+        }
+
+    class FakeSignalRepository:
+        def save_selection_result(self, *, job_id, result):
+            return {"trade_date": result["trade_date"], "signal_count": 1, "selected_count": 1}
+
+        def compute_and_save_outcomes(self, *, signal_date, symbols):
+            return {"signal_date": signal_date.isoformat(), "outcome_count": 0, "missing_symbols": symbols}
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=stock_db,
+        run_jobs_inline=True,
+        minute5_sync_runner=fake_sync,
+        data_status_runner=fake_status,
+        tail_live_runner=fake_tail_runner,
+        tail_signal_repository=FakeSignalRepository(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/data/daily-maintenance",
+        json={"retry_no_data": True, "run_strategy_review": True, "strategy_limit": 2},
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["kind"] == "daily_maintenance"
+    assert job["status"] == "success"
+    assert [call["symbols"] for call in sync_calls] == [None, ["000002.SZ"]]
+    assert job["result"]["trade_date"] == "2026-06-12"
+    assert job["result"]["retry"]["success"] == 1
+    assert job["result"]["verification"]["minute5_complete_symbols"] == 2
+    assert job["result"]["strategy_review"] == {
+        "mode": "selection",
+        "scanned_count": 2,
+        "ranked_count": 1,
+        "selected_count": 1,
+        "empty_reason": "",
+        "persistence": {
+            "signals": {"trade_date": "2026-06-12", "signal_count": 1, "selected_count": 1},
+            "outcomes": {"signal_date": "2026-06-12", "outcome_count": 0, "missing_symbols": ["000001.SZ"]},
+        },
+    }
+
+
+def test_clickhouse_dataset_build_api_runs_inline_job_and_lists_dataset(tmp_path) -> None:
+    data_root = tmp_path / "research"
+
+    def fake_builder(start, end, output_path, manifest_path=None, symbols=None, limit=0, client=None):
+        import pandas as pd
+
+        pd.DataFrame([
+            {
+                "date": "2026-06-12",
+                "symbol": "000001.SZ",
+                "open": 10.0,
+                "high": 10.5,
+                "low": 9.9,
+                "close": 10.2,
+                "volume": 1000.0,
+                "amount": 10200.0,
+                "adjusted_close": 10.2,
+            }
+        ]).to_parquet(output_path, index=False)
+        manifest = {
+            "dataset_path": str(output_path),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "symbols": ["000001.SZ"],
+            "missing_symbols": [],
+            "symbol_count": 1,
+            "row_count": 1,
+            "source": "clickhouse",
+            "built_at": "2026-06-15T10:00:00",
+        }
+        Path(manifest_path).write_text("{}", encoding="utf-8")
+        return manifest
+
+    from pathlib import Path
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        dataset_root=data_root,
+        run_jobs_inline=True,
+        clickhouse_dataset_builder=fake_builder,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/datasets/build-clickhouse",
+        json={
+            "start": "2026-06-12",
+            "end": "2026-06-12",
+            "name": "daily_clickhouse_test",
+            "symbols": ["000001.SZ"],
+        },
+    )
+
+    assert response.status_code == 200
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+    assert job["kind"] == "dataset_build"
+    assert job["status"] == "success"
+    assert job["result"]["manifest"]["source"] == "clickhouse"
+
+    datasets = client.get("/api/datasets").json()["items"]
+    assert [dataset["id"] for dataset in datasets] == ["daily_clickhouse_test.parquet"]

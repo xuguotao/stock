@@ -55,18 +55,56 @@ def resolve_scan_symbols(
         return [format_symbol(symbol) for symbol in raw_symbols]
 
     if universe == "liquid-cache":
-        ranking = CacheBarRepository(bars_cache_dir).rank_liquid_symbols(
+        ranking = _rank_liquid_symbols_from_source(
+            aggregator=aggregator,
             start=liquidity_start,
             end=liquidity_end,
             limit=limit,
             min_bars=liquidity_min_bars,
             min_end_date=liquidity_min_end_date,
         )
+        if not ranking:
+            ranking = CacheBarRepository(bars_cache_dir).rank_liquid_symbols(
+                start=liquidity_start,
+                end=liquidity_end,
+                limit=limit,
+                min_bars=liquidity_min_bars,
+                min_end_date=liquidity_min_end_date,
+            )
         symbols = [row["symbol"] for row in ranking]
         if symbols:
+            if len(symbols) >= limit:
+                return symbols
+            _append_default_scan_symbols(aggregator, symbols, limit)
             return symbols
 
-    return aggregator.get_csi300_symbols()[:limit]
+    symbols = []
+    _append_default_scan_symbols(aggregator, symbols, limit)
+    return symbols
+
+
+def _rank_liquid_symbols_from_source(
+    *,
+    aggregator: Any,
+    start: date,
+    end: date,
+    limit: int,
+    min_bars: int,
+    min_end_date: date | None,
+) -> list[dict[str, Any]]:
+    ranker = getattr(aggregator, "rank_liquid_symbols", None)
+    if ranker is None:
+        return []
+    try:
+        return ranker(
+            start=start,
+            end=end,
+            limit=limit,
+            min_bars=min_bars,
+            min_end_date=min_end_date,
+        )
+    except Exception:
+        return []
 
 
 def calculate_market_breadth_above_ma20(
@@ -121,3 +159,47 @@ def _quote_prices(quotes: pd.DataFrame | None) -> dict[str, float]:
         if price > 0:
             prices[str(row["symbol"])] = price
     return prices
+
+
+def _append_default_scan_symbols(aggregator: Any, symbols: list[str], limit: int) -> None:
+    seen = set(symbols)
+    for symbol in _default_scan_symbols(aggregator):
+        if symbol in seen:
+            continue
+        symbols.append(symbol)
+        seen.add(symbol)
+        if len(symbols) >= limit:
+            break
+
+
+def _default_scan_symbols(aggregator: Any) -> list[str]:
+    get_stock_list = getattr(aggregator, "get_stock_list", None)
+    if get_stock_list is not None:
+        try:
+            stocks = get_stock_list()
+        except Exception:
+            stocks = []
+        symbols = [
+            stock.symbol
+            for stock in stocks
+            if not getattr(stock, "is_st", False)
+        ]
+        if symbols:
+            return _balance_symbols_by_exchange(symbols)
+    return _balance_symbols_by_exchange(aggregator.get_csi300_symbols())
+
+
+def _balance_symbols_by_exchange(symbols: list[str]) -> list[str]:
+    grouped: dict[str, list[str]] = {}
+    for symbol in symbols:
+        exchange = symbol.rsplit(".", 1)[-1] if "." in symbol else ""
+        grouped.setdefault(exchange, []).append(symbol)
+
+    balanced: list[str] = []
+    while grouped:
+        for exchange in list(grouped):
+            group = grouped[exchange]
+            balanced.append(group.pop(0))
+            if not group:
+                del grouped[exchange]
+    return balanced

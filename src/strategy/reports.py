@@ -54,13 +54,17 @@ def tail_session_selection_rows(signals: list[TailSessionSignal]) -> list[dict[s
     ]
 
 
-def write_tail_session_selection_json(path: str | Path, signals: list[TailSessionSignal]) -> Path:
+def write_tail_session_selection_json(
+    path: str | Path,
+    signals: list[TailSessionSignal],
+    trade_date: date | None = None,
+) -> Path:
     """Write final tail-session selections as JSON."""
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     rows = tail_session_selection_rows(signals)
     payload = {
-        "trade_date": signals[0].trade_date.isoformat() if signals else None,
+        "trade_date": signals[0].trade_date.isoformat() if signals else trade_date.isoformat() if trade_date else None,
         "count": len(signals),
         "symbols": [signal.symbol for signal in signals],
         "selections": rows,

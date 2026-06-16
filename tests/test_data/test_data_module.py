@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
+import types
 from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -248,6 +250,45 @@ class TestDataAggregator:
         assert len(result) == 1
         assert result.iloc[0]["close"] == 10.2
 
+    def test_bars_prefer_clickhouse_source_over_stale_cache(self) -> None:
+        from src.data.aggregator import DataAggregator
+
+        class ClickHouseLikeSource:
+            name = "clickhouse"
+
+            def fetch_bars(self, symbol, start, end, frequency="daily"):
+                return pd.DataFrame({
+                    "date": [start],
+                    "symbol": [symbol],
+                    "open": [10.0],
+                    "high": [10.5],
+                    "low": [9.8],
+                    "close": [10.2],
+                    "volume": [1_000_000],
+                    "amount": [10_200_000],
+                    "adjusted_close": [10.2],
+                })
+
+        agg = DataAggregator([ClickHouseLikeSource()])
+        agg.cache = MagicMock()
+        agg.cache.read_bars.return_value = pd.DataFrame({
+            "date": [date(2026, 6, 15)],
+            "symbol": ["000001.SZ"],
+            "open": [1.0],
+            "high": [1.0],
+            "low": [1.0],
+            "close": [1.0],
+            "volume": [1],
+            "amount": [1],
+            "adjusted_close": [1.0],
+        })
+
+        result = agg.get_bars("000001.SZ", date(2026, 6, 15), date(2026, 6, 15))
+
+        assert result.iloc[0]["close"] == 10.2
+        agg.cache.read_bars.assert_not_called()
+        agg.cache.write_bars.assert_not_called()
+
     def test_all_sources_failed_returns_empty(self) -> None:
         from src.data.aggregator import DataAggregator
         from config.settings import reset_settings
@@ -286,6 +327,92 @@ class TestDataAggregator:
         assert "600519.SH" in symbols
         assert "000001.SZ" in symbols
         assert "300750.SZ" not in symbols
+
+    def test_default_sources_prefer_local_sqlite_when_database_exists(self, monkeypatch, tmp_path: Path) -> None:
+        from src.data.aggregator import DataAggregator
+        from config.settings import reset_settings
+        reset_settings()
+
+        monkeypatch.chdir(tmp_path)
+        db_path = tmp_path / "data" / "stock.db"
+        db_path.parent.mkdir()
+        db_path.touch()
+
+        agg = DataAggregator()
+
+        assert agg.sources[0].name == "clickhouse"
+        assert agg.sources[1].name == "sqlite"
+
+    def test_default_sources_include_clickhouse_when_env_is_configured(self, monkeypatch, tmp_path: Path) -> None:
+        from src.data.aggregator import DataAggregator
+        from config.settings import reset_settings
+        reset_settings()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("STOCK_CLICKHOUSE_HOST", "10.211.49.42")
+        monkeypatch.setenv("STOCK_CLICKHOUSE_USER", "default")
+        monkeypatch.setenv("STOCK_CLICKHOUSE_PASSWORD", "stock123")
+        monkeypatch.setenv("STOCK_CLICKHOUSE_DATABASE", "stock")
+        db_path = tmp_path / "data" / "stock.db"
+        db_path.parent.mkdir()
+        db_path.touch()
+
+        agg = DataAggregator()
+
+        assert [source.name for source in agg.sources[:3]] == ["clickhouse", "sqlite", "tencent"]
+
+    def test_stock_list_prefers_clickhouse_source_over_stale_cache(self) -> None:
+        from src.data.aggregator import DataAggregator
+        from src.data.models import StockInfo
+
+        class ClickHouseLikeSource:
+            name = "clickhouse"
+
+            def fetch_stock_list(self):
+                return [StockInfo(symbol="600000.SH", code="600000", name="浦发银行")]
+
+        agg = DataAggregator([ClickHouseLikeSource()])
+        agg.cache = MagicMock()
+        agg.cache.read_stock_list.return_value = pd.DataFrame([
+            {"symbol": "000001.SZ", "code": "000001", "name": "旧缓存"}
+        ])
+
+        stocks = agg.get_stock_list()
+
+        assert stocks[0].symbol == "600000.SH"
+        agg.cache.read_stock_list.assert_not_called()
+        agg.cache.write_stock_list.assert_not_called()
+
+    def test_stock_list_prefers_sqlite_source_over_stale_cache(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        from src.data.aggregator import DataAggregator
+        from src.data.sqlite_source import SQLiteStockDataSource
+        from config.settings import reset_settings
+        reset_settings()
+
+        db_path = tmp_path / "stock.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "create table stocks (symbol text, name text, industry text, market text, list_date text, updated_at text)"
+        )
+        conn.execute(
+            "insert into stocks values ('000004', '*ST国华', '软件', 'SZ', '1990-12-01', '2026-06-12')"
+        )
+        conn.commit()
+        conn.close()
+
+        agg = DataAggregator([SQLiteStockDataSource(db_path)])
+        agg.cache = MagicMock()
+        agg.cache.read_stock_list.return_value = pd.DataFrame([
+            {"symbol": "000001.SZ", "code": "000001", "name": "旧缓存"}
+        ])
+
+        stocks = agg.get_stock_list()
+
+        assert len(stocks) == 1
+        assert stocks[0].symbol == "000004.SZ"
+        assert stocks[0].is_st is True
 
 
 def test_sina_intraday_bars_returns_dataframe() -> None:
@@ -329,3 +456,106 @@ def test_data_aggregator_get_intraday_bars_uses_source_method() -> None:
 
     assert not result.empty
     assert result.iloc[0]["symbol"] == "000001.SZ"
+
+
+def test_akshare_source_fetches_intraday_bars(monkeypatch) -> None:
+    from src.data.akshare_source import AKShareSource
+
+    fake_akshare = types.SimpleNamespace(
+        stock_zh_a_hist_min_em=lambda **kwargs: pd.DataFrame(
+            [
+                {
+                    "时间": "2026-06-12 14:30:00",
+                    "开盘": 10.0,
+                    "收盘": 10.2,
+                    "最高": 10.3,
+                    "最低": 9.9,
+                    "成交量": 1000,
+                    "成交额": 10200.0,
+                },
+                {
+                    "时间": "2026-06-11 14:30:00",
+                    "开盘": 9.8,
+                    "收盘": 9.9,
+                    "最高": 10.0,
+                    "最低": 9.7,
+                    "成交量": 900,
+                    "成交额": 9000.0,
+                },
+            ]
+        )
+    )
+    monkeypatch.setitem(sys.modules, "akshare", fake_akshare)
+    source = AKShareSource(rate_limit=0.0)
+
+    result = source.fetch_intraday_bars("000001.SZ", date(2026, 6, 12), "5m")
+
+    assert len(result) == 1
+    assert result.iloc[0]["symbol"] == "000001.SZ"
+    assert result.iloc[0]["time"] == pd.Timestamp("2026-06-12 14:30").time()
+    assert result.iloc[0]["close"] == 10.2
+
+
+def test_sqlite_stock_data_source_reads_stock_list_and_daily_bars(tmp_path) -> None:
+    import sqlite3
+
+    from src.data.sqlite_source import SQLiteStockDataSource
+
+    db_path = tmp_path / "stock.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "create table stocks (symbol text, name text, industry text, market text, list_date text, updated_at text)"
+    )
+    conn.execute(
+        "create table daily_kline (symbol text, date text, open real, high real, low real, close real, volume real, amount real, amplitude real, pct_change real, change real, turnover real)"
+    )
+    conn.execute(
+        "insert into stocks values ('000001', '平安银行', '银行', 'SZ', '1991-04-03', '2026-06-12')"
+    )
+    conn.execute(
+        "insert into daily_kline values ('000001', '2026-06-11', 10, 10.5, 9.9, 10.2, 1000, 10200, 0, 0, 0, 0)"
+    )
+    conn.execute(
+        "insert into daily_kline values ('000001', '2026-06-12', 10.2, 10.8, 10.1, 10.6, 1200, 12600, 0, 0, 0, 0)"
+    )
+    conn.commit()
+    conn.close()
+
+    source = SQLiteStockDataSource(db_path)
+
+    stocks = source.fetch_stock_list()
+    bars = source.fetch_bars("000001.SZ", date(2026, 6, 11), date(2026, 6, 12))
+
+    assert stocks == [StockInfo(symbol="000001.SZ", code="000001", name="平安银行", industry="银行", list_date=date(1991, 4, 3))]
+    assert bars["symbol"].tolist() == ["000001.SZ", "000001.SZ"]
+    assert bars["date"].tolist() == [date(2026, 6, 11), date(2026, 6, 12)]
+    assert bars["close"].tolist() == [10.2, 10.6]
+    assert bars["adjusted_close"].tolist() == [10.2, 10.6]
+
+
+def test_sqlite_stock_data_source_reads_5m_intraday_bars(tmp_path) -> None:
+    import sqlite3
+
+    from src.data.sqlite_source import SQLiteStockDataSource
+
+    db_path = tmp_path / "stock.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "create table minute5_kline (symbol text, datetime text, open real, high real, low real, close real, volume real, amount real)"
+    )
+    conn.execute(
+        "insert into minute5_kline values ('000001', '2026-06-12 14:30:00', 10, 10.2, 9.9, 10.1, 1000, 10100)"
+    )
+    conn.execute(
+        "insert into minute5_kline values ('000001', '2026-06-12 14:35:00', 10.1, 10.3, 10.0, 10.2, 1200, 12240)"
+    )
+    conn.commit()
+    conn.close()
+
+    source = SQLiteStockDataSource(db_path)
+
+    result = source.fetch_intraday_bars("000001.SZ", date(2026, 6, 12), "5m")
+
+    assert result["symbol"].tolist() == ["000001.SZ", "000001.SZ"]
+    assert result.iloc[0]["time"] == pd.Timestamp("2026-06-12 14:30").time()
+    assert result.iloc[-1]["close"] == 10.2

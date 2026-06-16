@@ -87,6 +87,27 @@
           <el-button @click="refreshSelectedJob">刷新任务</el-button>
         </div>
 
+        <div v-if="maintenanceSummary(selectedJob)" class="maintenance-summary">
+          <h3 class="sub-title">维护摘要</h3>
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="交易日">{{ maintenanceSummary(selectedJob)?.tradeDate }}</el-descriptions-item>
+            <el-descriptions-item label="分钟覆盖">{{ maintenanceSummary(selectedJob)?.minute5Latest }}</el-descriptions-item>
+            <el-descriptions-item label="首次成功">{{ maintenanceSummary(selectedJob)?.syncSuccess }}</el-descriptions-item>
+            <el-descriptions-item label="首次无数据">{{ maintenanceSummary(selectedJob)?.syncNoData }}</el-descriptions-item>
+            <el-descriptions-item label="重试成功">{{ maintenanceSummary(selectedJob)?.retrySuccess }}</el-descriptions-item>
+            <el-descriptions-item label="策略复核">{{ maintenanceSummary(selectedJob)?.strategy }}</el-descriptions-item>
+          </el-descriptions>
+        </div>
+        <div v-if="datasetSummary(selectedJob)" class="maintenance-summary">
+          <h3 class="sub-title">数据集摘要</h3>
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="数据集">{{ datasetSummary(selectedJob)?.datasetId }}</el-descriptions-item>
+            <el-descriptions-item label="来源">{{ datasetSummary(selectedJob)?.source }}</el-descriptions-item>
+            <el-descriptions-item label="行数">{{ datasetSummary(selectedJob)?.rows }}</el-descriptions-item>
+            <el-descriptions-item label="标的数">{{ datasetSummary(selectedJob)?.symbols }}</el-descriptions-item>
+          </el-descriptions>
+        </div>
+
         <h3 class="sub-title">参数</h3>
         <pre class="json-preview">{{ formatJson(selectedJob.params) }}</pre>
 
@@ -148,7 +169,37 @@ function resultPage(job: JobRecord | null) {
   if (job.kind === 'tail_session_live_selection') return 'tail-live'
   if (job.kind === 'tail_session_backtest') return 'backtest'
   if (job.kind === 'fund_tail_advice') return 'fund-tail'
+  if (job.kind === 'daily_maintenance' || job.kind === 'minute5_sync' || job.kind === 'stock_db_sync' || job.kind === 'dataset_build') return 'data'
   return ''
+}
+
+function maintenanceSummary(job: JobRecord | null) {
+  if (!job || job.kind !== 'daily_maintenance' || !job.result) return null
+  const result = job.result as Record<string, any>
+  const sync = (result.sync ?? {}) as Record<string, any>
+  const retry = (result.retry ?? {}) as Record<string, any>
+  const verification = (result.verification ?? {}) as Record<string, any>
+  const strategy = (result.strategy_review ?? {}) as Record<string, any>
+  return {
+    tradeDate: String(result.trade_date ?? '-'),
+    minute5Latest: `${verification.minute5_latest_datetime ?? '-'} / ${verification.minute5_complete_symbols ?? '-'}`,
+    syncSuccess: String(sync.success ?? '-'),
+    syncNoData: String(sync.no_data ?? '-'),
+    retrySuccess: retry.success == null ? '-' : String(retry.success),
+    strategy: strategy.mode ? `${strategy.mode}，排序 ${strategy.ranked_count ?? '-'}，入选 ${strategy.selected_count ?? '-'}` : '-'
+  }
+}
+
+function datasetSummary(job: JobRecord | null) {
+  if (!job || job.kind !== 'dataset_build' || !job.result) return null
+  const result = job.result as Record<string, any>
+  const manifest = (result.manifest ?? {}) as Record<string, any>
+  return {
+    datasetId: String(result.dataset_id ?? '-'),
+    source: String(manifest.source ?? '-'),
+    rows: String(manifest.row_count ?? '-'),
+    symbols: String(manifest.symbol_count ?? '-')
+  }
 }
 
 async function refreshSelectedJob() {

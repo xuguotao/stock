@@ -16,6 +16,10 @@ def test_build_markdown_report_summarizes_actions_in_chinese():
                 "操作等级": "C",
                 "最终操作建议": "等待企稳",
                 "建议原因": "连续弱势需要确认",
+                "卖出等级": "B",
+                "卖出建议": "分批减仓",
+                "卖出原因": "未来风险收益比差",
+                "卖出评分": 61.2,
                 "同类样本数": 29,
                 "同类次日上涨概率": 0.5862,
                 "同类次日下跌概率": 0.4138,
@@ -50,5 +54,36 @@ def test_build_markdown_report_summarizes_actions_in_chinese():
     assert "# 基金尾盘操作建议 - 2026-06-11" in markdown
     assert "总判断：今天不适合大额尾盘加仓" in markdown
     assert "| 华夏中证500指数增强C | 007995 | -1.08% | C | 等待企稳 |" in markdown
+    assert "## 尾盘卖出/减仓关注" in markdown
+    assert "| 华夏中证500指数增强C | 007995 | B | 分批减仓 | 未来风险收益比差 | 61.2 |" in markdown
     assert "同类次日上涨/下跌概率：58.62% / 41.38%" in markdown
     assert "这不是保证收益的投资建议" in markdown
+
+
+def test_build_markdown_report_uses_next_trading_day_for_friday_report():
+    report = pd.DataFrame(
+        [
+            {
+                "基金名称": "华夏中证500指数增强C",
+                "基金代码": "007995",
+                "今日代理涨跌率": 0.0105,
+                "技术信号": "加仓",
+                "信号原因": "趋势向上且相对强势",
+                "操作等级": "A",
+                "最终操作建议": "尾盘加仓",
+                "建议原因": "预测优势较强",
+                "同类样本数": 168,
+                "同类次日上涨概率": 0.5655,
+                "同类次日下跌概率": 0.4226,
+                "同类次日平均收益": 0.0015,
+                "同类次日中位数收益": 0.0016,
+                "同类次日跌超1%概率": 0.0714,
+                "同类次日跌超2%概率": 0.0119,
+            }
+        ]
+    )
+
+    markdown = build_markdown_report(report, trade_date="2026-06-12")
+
+    assert "## 下一交易日观察（2026-06-15）" in markdown
+    assert "## 明日观察" not in markdown

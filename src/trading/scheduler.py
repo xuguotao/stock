@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Callable
 
-from src.core.calendar import TradingCalendar, is_trading_day
+from src.core.calendar import TradingCalendar
 
 
 class TradingScheduler:
@@ -49,13 +49,21 @@ class TradingScheduler:
         return (time(9, 15) <= now <= time(9, 25) or
                 time(14, 57) <= now <= time(15, 0))
 
-    def next_trading_day(self, d: date | None = None) -> date:
+    def next_trading_day(self, d: date | None = None, *, include_current: bool = False) -> date:
         """Get next trading day."""
-        return self.calendar.get_next_trading_day(d or date.today())
+        return self.calendar.get_next_trading_day(d or date.today(), include_current=include_current)
 
-    def prev_trading_day(self, d: date | None = None) -> date:
+    def prev_trading_day(self, d: date | None = None, *, include_current: bool = False) -> date:
         """Get previous trading day."""
-        return self.calendar.get_previous_trading_day(d or date.today())
+        return self.calendar.get_previous_trading_day(d or date.today(), include_current=include_current)
+
+    def effective_trading_day(self, d: date | None = None) -> date:
+        """Return d if it trades, otherwise the next trading day."""
+        return self.calendar.get_effective_trading_day(d or date.today())
+
+    def next_session_label(self, d: date | None = None) -> str:
+        """Return a Chinese label for the next trading session after d."""
+        return self.calendar.get_next_session_label(d or date.today())
 
     def is_rebalance_day(
         self,

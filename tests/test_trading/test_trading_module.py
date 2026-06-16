@@ -258,6 +258,27 @@ class TestTradingScheduler:
         weekdays = [d for d in days if d.weekday() < 5]
         assert len(days) == len(weekdays)
 
+    def test_next_trading_day_is_strict_by_default(self) -> None:
+        scheduler = TradingScheduler()
+        assert scheduler.next_trading_day(date(2026, 6, 12)) == date(2026, 6, 15)
+
+    def test_next_trading_day_can_include_current_trading_day(self) -> None:
+        scheduler = TradingScheduler()
+        assert scheduler.next_trading_day(date(2026, 6, 12), include_current=True) == date(2026, 6, 12)
+
+    def test_effective_trading_day_moves_weekend_to_monday(self) -> None:
+        scheduler = TradingScheduler()
+        assert scheduler.effective_trading_day(date(2026, 6, 13)) == date(2026, 6, 15)
+        assert scheduler.effective_trading_day(date(2026, 6, 14)) == date(2026, 6, 15)
+
+    def test_effective_trading_day_skips_holiday_period(self) -> None:
+        scheduler = TradingScheduler()
+        assert scheduler.effective_trading_day(date(2026, 6, 19)) == date(2026, 6, 22)
+
+    def test_next_session_label_uses_next_trading_day_not_calendar_day(self) -> None:
+        scheduler = TradingScheduler()
+        assert scheduler.next_session_label(date(2026, 6, 12)) == "下一交易日（2026-06-15）"
+
     def test_is_tail_session_returns_true_in_tail_window(self) -> None:
         scheduler = TradingScheduler()
         # 14:30 is in tail session

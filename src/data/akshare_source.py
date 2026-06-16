@@ -98,6 +98,54 @@ def _fetch_bars_sina(code: str, start: date, end: date) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
 
 
+def _intraday_period(frequency: str) -> str | None:
+    return {
+        "1m": "1",
+        "5m": "5",
+        "15m": "15",
+        "30m": "30",
+        "60m": "60",
+    }.get(frequency)
+
+
+def _parse_akshare_intraday_bars(
+    df: pd.DataFrame,
+    symbol: str,
+    trade_date: date,
+) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    col_map = {
+        "时间": "datetime",
+        "日期": "datetime",
+        "开盘": "open",
+        "最高": "high",
+        "最低": "low",
+        "收盘": "close",
+        "成交量": "volume",
+        "成交额": "amount",
+    }
+    prepared = df.rename(columns=col_map).copy()
+    if "datetime" not in prepared.columns:
+        return pd.DataFrame()
+
+    prepared["datetime"] = pd.to_datetime(prepared["datetime"], errors="coerce")
+    prepared = prepared[prepared["datetime"].dt.date == trade_date].copy()
+    if prepared.empty:
+        return pd.DataFrame()
+
+    for column in ["open", "high", "low", "close", "volume", "amount"]:
+        if column not in prepared.columns:
+            prepared[column] = 0.0
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce").fillna(0.0)
+
+    prepared["time"] = prepared["datetime"].dt.time
+    prepared["symbol"] = format_symbol(symbol)
+    columns = ["time", "datetime", "open", "high", "low", "close", "volume", "amount", "symbol"]
+    return prepared[columns].sort_values("datetime").reset_index(drop=True)
+
+
 class AKShareSource(DataSourceBase):
     """AKShare data source with rate limiting and error handling."""
 
@@ -243,6 +291,36 @@ class AKShareSource(DataSourceBase):
             df["timestamp"] = pd.Timestamp.now()
 
         return df
+
+    def fetch_intraday_bars(
+        self,
+        symbol: str,
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        """Fetch intraday minute bars from East Money via AKShare."""
+        import akshare as ak
+
+        period = _intraday_period(frequency)
+        if period is None:
+            return pd.DataFrame()
+
+        code = symbol.split(".")[0].zfill(6)
+        self._wait_for_rate_limit()
+
+        try:
+            df = ak.stock_zh_a_hist_min_em(
+                symbol=code,
+                start_date=f"{trade_date.isoformat()} 09:30:00",
+                end_date=f"{trade_date.isoformat()} 15:00:00",
+                period=period,
+                adjust="",
+            )
+        except Exception as e:
+            logger.warning(f"AKShare fetch_intraday_bars failed for {symbol}: {e}")
+            return pd.DataFrame()
+
+        return _parse_akshare_intraday_bars(df, symbol, trade_date)
 
     # ── Financials ─────────────────────────────────────────────
 

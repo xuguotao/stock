@@ -1,0 +1,66 @@
+from pathlib import Path
+
+
+def test_fund_tail_table_supports_grade_sorting_and_filtering() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert ':default-sort="{ prop: \'操作等级\', order: \'ascending\' }"' in source
+    assert 'prop="操作等级"' in source
+    assert ':filters="gradeFilters"' in source
+    assert ':filter-method="filterGrade"' in source
+
+
+def test_fund_tail_table_exposes_prediction_confidence_columns() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    for label in [
+        "代理标的",
+        "匹配度",
+        "评分",
+        "3日胜率",
+        "5日胜率",
+        "5日中位收益",
+        "跌超2%",
+        "样本/可信度",
+        "近5日",
+        "20日回撤",
+        "涨跌分位",
+    ]:
+        assert f'label="{label}"' in source
+    assert "predictionConfidence" in source
+    assert "confidenceType" in source
+
+
+def test_fund_tail_table_exposes_sell_advice_columns() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    for label in [
+        "卖出等级",
+        "卖出建议",
+        "卖出评分",
+        "卖出原因",
+    ]:
+        assert f'label="{label}"' in source
+    assert "sellScoreType" in source
+
+
+def test_fund_tail_page_shows_report_update_time_and_chinese_data_labels() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert "报告更新" in source
+    assert "formatDateTime(report.report_updated_at)" in source
+    assert 'label="净值日期"' in source
+    assert 'label="代理行情"' in source
+    assert 'label="NAV"' not in source
+    assert 'label="Proxy"' not in source
+
+
+def test_fund_tail_page_exposes_watchlist_management_panel() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert "基金池管理" in source
+    assert "持有中" in source
+    assert "准备买入" in source
+    assert "参与建议" in source
+    assert "持仓成本" in source
+    assert "watchlistStatusText" in source

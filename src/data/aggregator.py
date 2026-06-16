@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 
@@ -33,14 +34,32 @@ class DataAggregator:
         if sources is None:
             # SinaSource works reliably behind proxy; AKShare as fallback
             from src.data.sina_source import SinaSource
+            sources = []
+            from src.data.clickhouse_source import ClickHouseStockDataSource
+            sources.append(ClickHouseStockDataSource.from_env() or ClickHouseStockDataSource())
+            sqlite_path = Path("data/stock.db")
+            if sqlite_path.exists():
+                from src.data.sqlite_source import SQLiteStockDataSource
+                sources.append(SQLiteStockDataSource(sqlite_path))
+            from src.data.mootdx_source import MootdxSource, is_mootdx_available
+            if is_mootdx_available():
+                sources.append(MootdxSource(rate_limit=0.1))
+            from src.data.tencent_source import TencentQuoteSource
+            sources.append(TencentQuoteSource(rate_limit=0.2))
             try:
                 from src.data.akshare_source import AKShareSource
-                sources = [SinaSource(rate_limit=0.2), AKShareSource(rate_limit=0.3)]
+                sources.extend([SinaSource(rate_limit=0.2), AKShareSource(rate_limit=0.3)])
             except ImportError:
-                sources = [SinaSource(rate_limit=0.2)]
+                sources.append(SinaSource(rate_limit=0.2))
 
         self.sources = sources
         self.cache = DataCache()
+
+    def _prefer_source_over_cache(self) -> bool:
+        """Return true when the first source should be treated as authoritative."""
+        return bool(
+            self.sources and getattr(self.sources[0], "name", "") in {"clickhouse", "sqlite"}
+        )
 
     def get_bars(
         self,
@@ -54,8 +73,9 @@ class DataAggregator:
 
         Tries cache first, then each data source in priority order.
         """
+        prefer_source = self._prefer_source_over_cache()
         # Check cache
-        if use_cache:
+        if use_cache and not prefer_source:
             cached = self.cache.read_bars(symbol, start, end)
             if cached is not None and not cached.empty:
                 return cached
@@ -66,7 +86,7 @@ class DataAggregator:
                 df = source.fetch_bars(symbol, start, end, frequency)
                 if df is not None and not df.empty:
                     # Cache result
-                    if use_cache:
+                    if use_cache and not prefer_source:
                         self.cache.write_bars(df, symbol, start, end)
                     return df
             except Exception as e:
@@ -100,7 +120,8 @@ class DataAggregator:
 
     def get_stock_list(self, use_cache: bool = True) -> list[StockInfo]:
         """Get stock list with cache."""
-        if use_cache:
+        prefer_source = self._prefer_source_over_cache()
+        if use_cache and not prefer_source:
             cached = self.cache.read_stock_list()
             if cached is not None and not cached.empty:
                 return [
@@ -117,7 +138,7 @@ class DataAggregator:
                 stocks = source.fetch_stock_list()
                 if stocks:
                     # Cache
-                    if use_cache:
+                    if use_cache and not prefer_source:
                         df = pd.DataFrame([
                             {"symbol": s.symbol, "code": s.code, "name": s.name}
                             for s in stocks
@@ -142,6 +163,34 @@ class DataAggregator:
                 continue
 
         return pd.DataFrame()
+
+    def rank_liquid_symbols(
+        self,
+        start: date,
+        end: date,
+        limit: int,
+        min_bars: int,
+        min_end_date: date | None = None,
+    ) -> list[dict]:
+        """Rank liquid symbols through configured authoritative sources."""
+        for source in self.sources:
+            ranker = getattr(source, "rank_liquid_symbols", None)
+            if ranker is None:
+                continue
+            try:
+                ranking = ranker(
+                    start=start,
+                    end=end,
+                    limit=limit,
+                    min_bars=min_bars,
+                    min_end_date=min_end_date,
+                )
+                if ranking:
+                    return ranking
+            except Exception as e:
+                logger.warning(f"Source {source.name} liquid ranking failed: {e}")
+                continue
+        return []
 
     def get_intraday_bars(
         self,

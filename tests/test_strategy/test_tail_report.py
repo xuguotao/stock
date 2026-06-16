@@ -119,3 +119,16 @@ def test_write_tail_session_selection_outputs_json_and_csv(tmp_path) -> None:
     assert payload["count"] == 2
     assert payload["symbols"] == ["000333.SZ", "600519.SH"]
     assert csv["symbol"].tolist() == ["000333.SZ", "600519.SH"]
+
+
+def test_write_tail_session_selection_json_keeps_trade_date_when_empty(tmp_path) -> None:
+    json_path = write_tail_session_selection_json(
+        tmp_path / "selection.json",
+        [],
+        trade_date=date(2026, 6, 16),
+    )
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["trade_date"] == "2026-06-16"
+    assert payload["count"] == 0
+    assert payload["symbols"] == []

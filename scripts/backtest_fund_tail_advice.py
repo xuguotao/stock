@@ -19,6 +19,8 @@ from src.research.fund_tail_backtest import (
     classify_tail_signals,
     evaluate_latest_condition,
     evaluate_forward_returns,
+    evaluate_proxy_fit,
+    evaluate_prediction_profile,
     normalize_akshare_cni_index,
     normalize_akshare_index,
     normalize_akshare_nav,
@@ -66,6 +68,34 @@ PROXY_INDEXES = {
     "004851": ("csindex", "399989", "sz399989"),  # 医疗主题
     "005827": ("csindex", "000300", "sh000300"),  # 沪深300
 }
+
+PROXY_NAMES = {
+    "399396": "国证食品",
+    "QQQ": "纳斯达克100/QQQ",
+    "000905": "中证500",
+    "399330": "深证100",
+    "000300": "沪深300",
+    "399989": "中证医疗",
+    "399976": "中证新能源汽车",
+    "000827": "中证环保",
+    "399006": "创业板指",
+}
+
+
+def proxy_info_for(code: str) -> dict[str, object]:
+    spec = PROXY_INDEXES.get(code)
+    if spec is None:
+        return {
+            "proxy_provider": "nav",
+            "proxy_code": code,
+            "proxy_name": "基金净值",
+        }
+    provider, proxy_code, *_ = spec
+    return {
+        "proxy_provider": provider,
+        "proxy_code": proxy_code,
+        "proxy_name": PROXY_NAMES.get(proxy_code, proxy_code),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -230,7 +260,20 @@ def main() -> None:
         signals = classify_tail_signals(proxy, benchmark=benchmark)
         metrics = evaluate_forward_returns(signals, nav)
         condition = evaluate_latest_condition(signals, nav)
-        rows.append(summarize_latest_signal(name, code, signals, metrics, condition))
+        prediction = evaluate_prediction_profile(signals, nav)
+        proxy_fit = evaluate_proxy_fit(nav, proxy)
+        rows.append(
+            summarize_latest_signal(
+                name,
+                code,
+                signals,
+                metrics,
+                condition,
+                prediction,
+                proxy_info_for(code),
+                proxy_fit,
+            )
+        )
 
     report = pd.DataFrame(rows)
     raw_report_path = Path(args.raw_report)
