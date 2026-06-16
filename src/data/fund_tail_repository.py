@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import pandas as pd
@@ -16,15 +17,25 @@ class ClickHouseFundTailRepository:
 
     def __init__(self, client: Any | None = None) -> None:
         self._client = client
+        self._lock = RLock()
 
     @property
     def client(self) -> Any:
-        if self._client is None:
-            self._client = ClickHouseStockDataSource()._client_instance()
-        return self._client
+        with self._lock:
+            if self._client is None:
+                self._client = ClickHouseStockDataSource()._client_instance()
+            return self._client
+
+    def _execute(self, query: str, params: Any | None = None) -> Any:
+        # clickhouse-driver Client uses a single connection and is not safe for
+        # simultaneous execute calls from FastAPI worker threads.
+        with self._lock:
+            if params is None:
+                return self.client.execute(query)
+            return self.client.execute(query, params)
 
     def ensure_tables(self) -> None:
-        self.client.execute(
+        self._execute(
             """
             create table if not exists fund_tail_nav (
                 fund_code String,
@@ -37,7 +48,7 @@ class ClickHouseFundTailRepository:
             order by (fund_code, date)
             """
         )
-        self.client.execute(
+        self._execute(
             """
             create table if not exists fund_tail_proxy (
                 fund_code String,
@@ -52,7 +63,7 @@ class ClickHouseFundTailRepository:
             order by (fund_code, date)
             """
         )
-        self.client.execute(
+        self._execute(
             """
             create table if not exists fund_tail_benchmark (
                 date Date,
@@ -66,7 +77,7 @@ class ClickHouseFundTailRepository:
         )
 
     def ensure_watchlist_table(self) -> None:
-        self.client.execute(
+        self._execute(
             """
             create table if not exists fund_watchlist (
                 fund_code String,
@@ -90,7 +101,7 @@ class ClickHouseFundTailRepository:
 
     def list_watchlist(self) -> list[dict[str, Any]]:
         self.ensure_watchlist_table()
-        rows = self.client.execute(
+        rows = self._execute(
             """
             select
                 fund_code,
@@ -125,7 +136,7 @@ class ClickHouseFundTailRepository:
             _float_or_none(item.get("position_return_pct")),
             str(item.get("note") or ""),
         )
-        self.client.execute(
+        self._execute(
             """
             insert into fund_watchlist (
                 fund_code,
@@ -147,7 +158,7 @@ class ClickHouseFundTailRepository:
 
     def delete_watchlist_item(self, fund_code: str) -> dict[str, int]:
         self.ensure_watchlist_table()
-        self.client.execute(
+        self._execute(
             "delete from fund_watchlist where fund_code = %(fund_code)s",
             {"fund_code": str(fund_code).zfill(6)},
         )
@@ -159,7 +170,7 @@ class ClickHouseFundTailRepository:
         proxy_specs: dict[str, tuple[Any, ...]] | None = None,
     ) -> dict[str, int]:
         self.ensure_watchlist_table()
-        count = self.client.execute("select count() from fund_watchlist")
+        count = self._execute("select count() from fund_watchlist")
         existing_count = int(count[0][0]) if count else 0
         if existing_count > 0:
             return {"inserted": 0}
@@ -234,17 +245,17 @@ class ClickHouseFundTailRepository:
             )
 
         if nav_rows:
-            self.client.execute(
+            self._execute(
                 "insert into fund_tail_nav (fund_code, fund_name, date, close) values",
                 nav_rows,
             )
         if proxy_rows:
-            self.client.execute(
+            self._execute(
                 "insert into fund_tail_proxy (fund_code, proxy_provider, proxy_code, date, close, volume) values",
                 proxy_rows,
             )
         if benchmark_rows:
-            self.client.execute(
+            self._execute(
                 "insert into fund_tail_benchmark (date, close, volume) values",
                 benchmark_rows,
             )
@@ -264,7 +275,7 @@ class ClickHouseFundTailRepository:
         proxy_specs = proxy_specs or {}
         nav_dates = {
             str(code): _date_string(latest)
-            for code, _name, latest in self.client.execute(
+            for code, _name, latest in self._execute(
                 """
                 select fund_code, any(fund_name), max(date)
                 from fund_tail_nav
@@ -274,7 +285,7 @@ class ClickHouseFundTailRepository:
         }
         proxy_dates = {
             str(code): _date_string(latest)
-            for code, _provider, _proxy_code, latest in self.client.execute(
+            for code, _provider, _proxy_code, latest in self._execute(
                 """
                 select fund_code, any(proxy_provider), any(proxy_code), max(date)
                 from fund_tail_proxy
@@ -301,7 +312,7 @@ class ClickHouseFundTailRepository:
 
     def read_nav(self, fund_code: str) -> pd.DataFrame:
         self.ensure_tables()
-        rows = self.client.execute(
+        rows = self._execute(
             """
             select date, close
             from fund_tail_nav
@@ -314,7 +325,7 @@ class ClickHouseFundTailRepository:
 
     def read_proxy(self, fund_code: str) -> pd.DataFrame:
         self.ensure_tables()
-        rows = self.client.execute(
+        rows = self._execute(
             """
             select date, close, volume
             from fund_tail_proxy
@@ -327,7 +338,7 @@ class ClickHouseFundTailRepository:
 
     def read_benchmark(self) -> pd.DataFrame | None:
         self.ensure_tables()
-        rows = self.client.execute(
+        rows = self._execute(
             """
             select date, close, volume
             from fund_tail_benchmark

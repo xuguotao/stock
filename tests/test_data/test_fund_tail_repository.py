@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +43,22 @@ class FakeClickHouseClient:
         return []
 
 
+class ConcurrentSensitiveFakeClickHouseClient(FakeClickHouseClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = False
+
+    def execute(self, query, params=None):
+        if self.active:
+            raise RuntimeError("simultaneous execute")
+        self.active = True
+        try:
+            time.sleep(0.01)
+            return super().execute(query, params)
+        finally:
+            self.active = False
+
+
 def test_import_csv_directory_writes_nav_proxy_and_benchmark_rows(tmp_path: Path) -> None:
     data_dir = tmp_path / "fund_tail"
     data_dir.mkdir()
@@ -77,6 +95,23 @@ def test_repository_reads_series_and_universe_status() -> None:
     assert nav["close"].tolist() == [1.2, 1.21]
     assert proxy["volume"].tolist() == [10.0, 12.0]
     assert benchmark["close"].tolist() == [4000.0]
+
+
+def test_repository_serializes_clickhouse_execute_calls() -> None:
+    client = ConcurrentSensitiveFakeClickHouseClient()
+    repo = ClickHouseFundTailRepository(client=client)
+
+    def read_universe() -> list[dict]:
+        return repo.list_universe({"001632": "天弘中证食品饮料ETF联接C"})
+
+    def read_watchlist() -> list[dict]:
+        return repo.list_watchlist()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda fn: fn(), [read_universe, read_watchlist]))
+
+    assert results[0][0]["code"] == "001632"
+    assert results[1] == []
 
 
 def test_watchlist_crud_and_seed_from_static_funds() -> None:
