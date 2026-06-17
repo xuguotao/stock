@@ -315,7 +315,7 @@ class ClickHouseFundTailRepository:
         rows = self._execute(
             """
             select date, close
-            from fund_tail_nav
+            from fund_tail_nav final
             where fund_code = %(fund_code)s
             order by date
             """,
@@ -328,7 +328,7 @@ class ClickHouseFundTailRepository:
         rows = self._execute(
             """
             select date, close, volume
-            from fund_tail_proxy
+            from fund_tail_proxy final
             where fund_code = %(fund_code)s
             order by date
             """,
@@ -341,7 +341,7 @@ class ClickHouseFundTailRepository:
         rows = self._execute(
             """
             select date, close, volume
-            from fund_tail_benchmark
+            from fund_tail_benchmark final
             order by date
             """
         )

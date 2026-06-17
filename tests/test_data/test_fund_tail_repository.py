@@ -97,6 +97,24 @@ def test_repository_reads_series_and_universe_status() -> None:
     assert benchmark["close"].tolist() == [4000.0]
 
 
+def test_repository_reads_final_rows_for_reimported_series() -> None:
+    client = FakeClickHouseClient()
+    repo = ClickHouseFundTailRepository(client=client)
+
+    repo.read_nav("001632")
+    repo.read_proxy("001632")
+    repo.read_benchmark()
+
+    read_queries = [
+        " ".join(command[0].lower().split())
+        for command in client.commands
+        if command[0].lower().strip().startswith("select")
+    ]
+    assert any("from fund_tail_nav final" in query for query in read_queries)
+    assert any("from fund_tail_proxy final" in query for query in read_queries)
+    assert any("from fund_tail_benchmark final" in query for query in read_queries)
+
+
 def test_repository_serializes_clickhouse_execute_calls() -> None:
     client = ConcurrentSensitiveFakeClickHouseClient()
     repo = ClickHouseFundTailRepository(client=client)
