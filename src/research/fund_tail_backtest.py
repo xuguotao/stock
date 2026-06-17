@@ -545,6 +545,13 @@ def assign_sell_decision(
             "sell_reason": "overextended_forward_edge_negative",
             "sell_score": max(sell_score, 70.0),
         }
+    if reason == "overextended_do_not_chase" and latest_return >= 0.02 and return_rank >= 0.95:
+        return {
+            "sell_grade": "C",
+            "sell_action": "small_take_profit",
+            "sell_reason": "overextended_lock_profit",
+            "sell_score": max(sell_score, 50.0),
+        }
     if (
         reason in {"weak_below_trend", "sharp_selloff"}
         and return_5d < 0
@@ -859,11 +866,13 @@ CHINESE_VALUE_MAP = {
     "prediction_edge_moderate": "预测优势一般",
     "prediction_edge_strong": "预测优势较强",
     "take_profit_reduce": "止盈减仓",
+    "small_take_profit": "小比例止盈",
     "stop_loss_reduce": "止损减仓",
     "reduce_observe": "分批减仓",
     "hold_watch_sell": "持有观察",
     "do_not_sell": "不卖出",
     "overextended_forward_edge_negative": "涨幅过大且未来收益转弱",
+    "overextended_lock_profit": "涨幅过大，盈利仓落袋为安",
     "weak_trend_downside_risk": "弱势趋势且下行风险高",
     "pullback_rebound_probability_ok": "回调但反弹概率仍可",
     "forward_risk_reward_poor": "未来风险收益比差",

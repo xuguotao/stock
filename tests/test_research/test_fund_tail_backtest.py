@@ -222,6 +222,36 @@ def test_assigns_take_profit_sell_when_overextended_and_forward_edge_turns_negat
     assert decision["sell_score"] >= 70
 
 
+def test_assigns_small_take_profit_when_overextended_but_forward_edge_positive():
+    signals = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-06-16"]),
+            "signal": ["watch"],
+            "reason": ["overextended_do_not_chase"],
+            "daily_return": [0.0314],
+            "return_5d": [0.039],
+            "ma20_deviation": [0.028],
+            "daily_return_rank_252d": [0.9921],
+        }
+    )
+    prediction = {
+        "prediction_score": 73.58,
+        "prediction_h3_count": 7,
+        "prediction_h3_up_prob": 0.8571,
+        "prediction_h5_count": 7,
+        "prediction_h5_up_prob": 0.8571,
+        "prediction_h5_median_return": 0.0366,
+        "prediction_h5_down_gt_2pct": 0.1429,
+    }
+
+    decision = assign_sell_decision(signals, prediction=prediction)
+
+    assert decision["sell_grade"] == "C"
+    assert decision["sell_action"] == "small_take_profit"
+    assert decision["sell_reason"] == "overextended_lock_profit"
+    assert decision["sell_score"] >= 50
+
+
 def test_assigns_stop_loss_sell_when_weak_trend_has_downside_risk():
     signals = pd.DataFrame(
         {

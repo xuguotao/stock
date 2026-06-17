@@ -60,6 +60,39 @@ def test_build_markdown_report_summarizes_actions_in_chinese():
     assert "这不是保证收益的投资建议" in markdown
 
 
+def test_build_markdown_report_includes_small_take_profit_rows():
+    report = pd.DataFrame(
+        [
+            {
+                "基金名称": "华宝纳斯达克精选股票(QDII)C",
+                "基金代码": "017437",
+                "今日代理涨跌率": "3.14%",
+                "技术信号": "观察",
+                "信号原因": "涨幅过大不追高",
+                "操作等级": "C",
+                "最终操作建议": "等待回踩",
+                "建议原因": "最新代理指数涨幅过大",
+                "卖出等级": "C",
+                "卖出建议": "小比例止盈",
+                "卖出原因": "涨幅过大，盈利仓落袋为安",
+                "卖出评分": 50.0,
+                "同类样本数": 8,
+                "同类次日上涨概率": 0.875,
+                "同类次日下跌概率": 0.125,
+                "同类次日平均收益": 0.0065,
+                "同类次日中位数收益": 0.0095,
+                "同类次日跌超1%概率": 0.125,
+                "同类次日跌超2%概率": 0.125,
+            }
+        ]
+    )
+
+    markdown = build_markdown_report(report, trade_date="2026-06-16")
+
+    assert "## 尾盘卖出/减仓关注" in markdown
+    assert "| 华宝纳斯达克精选股票(QDII)C | 017437 | C | 小比例止盈 | 涨幅过大，盈利仓落袋为安 | 50.0 |" in markdown
+
+
 def test_build_markdown_report_uses_next_trading_day_for_friday_report():
     report = pd.DataFrame(
         [

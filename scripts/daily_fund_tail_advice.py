@@ -31,7 +31,7 @@ def _row_value(row: pd.Series, key: str, default: object = "") -> object:
 def _sell_rows(report: pd.DataFrame) -> pd.DataFrame:
     if "卖出建议" not in report.columns:
         return report.iloc[0:0]
-    return report[report["卖出建议"].isin(["止盈减仓", "止损减仓", "分批减仓"])]
+    return report[report["卖出建议"].isin(["止盈减仓", "小比例止盈", "止损减仓", "分批减仓"])]
 
 
 def next_trading_day_label(trade_date: str) -> str:
