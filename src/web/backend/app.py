@@ -27,6 +27,7 @@ from src.web.backend.data_status import (
     persist_clickhouse_quality_snapshot,
 )
 from src.web.backend.data_health_repair import build_data_health_repair_plan
+from src.web.backend.data_reliability import build_data_reliability_report
 from src.web.backend.datasets import DatasetService
 from src.web.backend.fund_tail import (
     FundTailAdviceRequest,
@@ -348,6 +349,19 @@ def create_app(
     @app.get("/api/data/health-repair-plan")
     def get_data_health_repair_plan() -> dict[str, Any]:
         return build_data_health_repair_plan(app.state.data_status_runner())
+
+    @app.get("/api/data/reliability")
+    def get_data_reliability() -> dict[str, Any]:
+        status = app.state.data_status_runner()
+        repair_plan = build_data_health_repair_plan(status)
+        report = build_data_reliability_report(
+            status=status,
+            minute5_monitor=app.state.minute5_monitor.status(),
+            quote_monitor=app.state.quote_snapshot_monitor.status(),
+            scheduler=app.state.data_ops_scheduler.status(),
+            repair_plan=repair_plan,
+        )
+        return {**report, "data_status": status, "repair_plan": repair_plan}
 
     @app.post("/api/data/health-repair")
     def create_data_health_repair(

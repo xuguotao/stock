@@ -115,6 +115,8 @@ def test_data_center_page_uses_operations_console_layout() -> None:
     source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
 
     assert "数据总览" in source
+    assert "数据可靠性总控" in source
+    assert "当前告警" in source
     assert "数据资产地图" in source
     assert "数据健康矩阵" in source
     assert "更新任务中心" in source
@@ -176,3 +178,21 @@ def test_data_center_page_exposes_health_repair_plan_actions() -> None:
     assert "pollHealthRepairJob" in source
     assert "getDataHealthRepairPlan" in client
     assert "repairDataHealth" in client
+
+
+def test_data_center_page_uses_combined_reliability_status_endpoint() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+    load_data_body = source.split("async function loadData()", 1)[1].split("async function loadRepairPlan()", 1)[0]
+    refresh_body = source.split("async function refreshDataStatus()", 1)[1].split("async function loadMinute5Monitor()", 1)[0]
+
+    assert "getDataReliability" in client
+    assert "DataReliabilityReport" in client
+    assert "data_status: DataStatusResponse" in client
+    assert "repair_plan: DataHealthRepairPlan" in client
+    assert "dataStatus.value = reliabilityResponse.data_status" in load_data_body
+    assert "repairPlan.value = reliabilityResponse.repair_plan" in load_data_body
+    assert "api.getDataStatus()" not in load_data_body
+    assert "api.getDataHealthRepairPlan()" not in load_data_body
+    assert "api.getDataReliability()" in refresh_body
+    assert "api.getDataStatus()" not in refresh_body

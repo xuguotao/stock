@@ -213,6 +213,48 @@ def test_data_health_repair_plan_api_returns_actionable_warnings(tmp_path) -> No
     assert payload["actions"][0]["trade_date"] == "2026-06-12"
 
 
+def test_data_reliability_api_returns_dashboard_report(tmp_path) -> None:
+    status = {
+        "health": {"daily_latest_date": "2026-06-12"},
+        "quality": {
+            "status": "warning",
+            "issues": ["minute5_kline_missing_1_symbols"],
+            "daily": {"status": "ok", "latest_date": "2026-06-12", "missing_symbols": 0},
+            "minute5": {
+                "status": "warning",
+                "latest_datetime": "2026-06-12 14:55:00",
+                "missing_symbols": 1,
+                "covered_symbols": 1,
+                "expected_symbols": 2,
+                "coverage_ratio": 0.5,
+            },
+            "quote_snapshots": {"status": "ok", "issues": []},
+            "scheduled_checks": {"completeness_30d": {"affected_symbols": 0}},
+        },
+    }
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        data_status_runner=lambda: status,
+        auto_start_minute5_monitor=False,
+        auto_start_quote_snapshot_monitor=False,
+        auto_start_data_ops_scheduler=False,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/data/reliability")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["rows"] == 4
+    assert payload["data_status"] == status
+    assert payload["repair_plan"]["summary"]["auto_repair_count"] >= 1
+    assert any(action["key"] == "minute5_sync" for action in payload["repair_plan"]["actions"])
+    assert {row["key"] for row in payload["rows"]} == {"daily", "minute5", "quote_snapshots", "health_checks"}
+    minute5 = next(row for row in payload["rows"] if row["key"] == "minute5")
+    assert minute5["health"] == "warning"
+    assert minute5["coverage"] == "1 / 2（50.00%）"
+
+
 def test_data_health_repair_api_runs_inline_auto_repairs(tmp_path) -> None:
     stock_db = tmp_path / "stock.db"
     _create_stock_db(stock_db)

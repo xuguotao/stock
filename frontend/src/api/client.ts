@@ -263,6 +263,33 @@ export interface DataHealthRepairPayload {
   action_keys?: string[] | null
 }
 
+export interface DataReliabilityRow {
+  key: string
+  name: string
+  source: string
+  update_mechanism: string
+  automation: string
+  health: string
+  latest?: string | null
+  coverage: string
+  repair: string
+  issues: string[]
+}
+
+export interface DataReliabilityReport {
+  status: string
+  summary: {
+    rows: number
+    warning_rows: number
+    automation_gaps: number
+    auto_repair_count: number
+    manual_count: number
+  }
+  rows: DataReliabilityRow[]
+  data_status: DataStatusResponse
+  repair_plan: DataHealthRepairPlan
+}
+
 export interface StockDbSyncPayload {
   remote?: string
   backup?: boolean
@@ -763,6 +790,9 @@ export const api = {
   },
   getDataHealthRepairPlan() {
     return request<DataHealthRepairPlan>('/api/data/health-repair-plan')
+  },
+  getDataReliability() {
+    return request<DataReliabilityReport>('/api/data/reliability')
   },
   repairDataHealth(payload: DataHealthRepairPayload = {}) {
     return request<BacktestSubmitResponse>('/api/data/health-repair', {

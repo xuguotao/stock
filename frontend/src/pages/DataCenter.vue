@@ -87,6 +87,41 @@
       </div>
     </div>
 
+    <div class="panel">
+      <div class="section-header no-top-margin">
+        <div>
+          <h2 class="page-title">数据可靠性总控</h2>
+          <p class="section-subtitle">从数据源、自动更新、健康检查和修复机制四个维度审计核心链路</p>
+        </div>
+        <el-tag :type="qualityTagType(reliabilityReport?.status)" effect="plain">
+          {{ reliabilityReport?.status ?? '-' }}
+        </el-tag>
+      </div>
+      <el-table :data="reliabilityReport?.rows ?? []" empty-text="暂无可靠性审计信息">
+        <el-table-column prop="name" label="数据链路" min-width="120" />
+        <el-table-column prop="source" label="数据源" min-width="240" show-overflow-tooltip />
+        <el-table-column prop="update_mechanism" label="自动更新" min-width="240" show-overflow-tooltip />
+        <el-table-column label="自动化" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.automation === 'running' || row.automation === 'scheduled' ? 'success' : 'warning'" effect="plain">
+              {{ row.automation }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="健康" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="qualityTagType(row.health)" effect="plain">{{ row.health }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="latest" label="最新" min-width="150" />
+        <el-table-column prop="coverage" label="完整度" min-width="150" />
+        <el-table-column prop="repair" label="修复机制" min-width="220" show-overflow-tooltip />
+        <el-table-column label="当前告警" min-width="260" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.issues.length ? row.issues.join('，') : '无' }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <div class="ops-grid">
       <div class="panel">
         <div class="section-header no-top-margin">
@@ -534,7 +569,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataStatusResponse, type DatasetDetail, type DatasetSummary, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus } from '../api/client'
+import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataReliabilityReport, type DataStatusResponse, type DatasetDetail, type DatasetSummary, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus } from '../api/client'
 
 const datasets = ref<DatasetSummary[]>([])
 const detail = ref<DatasetDetail | null>(null)
@@ -556,6 +591,7 @@ const minute5Monitor = ref<Minute5MonitorStatus | null>(null)
 const quoteSnapshotMonitor = ref<QuoteSnapshotMonitorStatus | null>(null)
 const dataOpsScheduler = ref<DataOpsSchedulerStatus | null>(null)
 const repairPlan = ref<DataHealthRepairPlan | null>(null)
+const reliabilityReport = ref<DataReliabilityReport | null>(null)
 const minute5TradeDate = ref(todayLabel())
 let operationalRefreshTimer: number | null = null
 let dataStatusRefreshTimer: number | null = null
@@ -902,15 +938,16 @@ const dataOpsSchedulerText = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const [statusResponse, datasetsResponse, monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse] = await Promise.all([
-      api.getDataStatus(),
+    const [reliabilityResponse, datasetsResponse, monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse] = await Promise.all([
+      api.getDataReliability(),
       api.listDatasets(),
       api.getMinute5Monitor(),
       api.getQuoteSnapshotMonitor(),
       api.getDataOpsScheduler()
     ])
-    dataStatus.value = statusResponse
-    repairPlan.value = await api.getDataHealthRepairPlan()
+    reliabilityReport.value = reliabilityResponse
+    dataStatus.value = reliabilityResponse.data_status
+    repairPlan.value = reliabilityResponse.repair_plan
     datasets.value = datasetsResponse.items
     minute5Monitor.value = monitorResponse
     quoteSnapshotMonitor.value = quoteSnapshotMonitorResponse
@@ -953,7 +990,10 @@ async function refreshOperationalStatus() {
 
 async function refreshDataStatus() {
   try {
-    dataStatus.value = await api.getDataStatus()
+    const reliabilityResponse = await api.getDataReliability()
+    reliabilityReport.value = reliabilityResponse
+    dataStatus.value = reliabilityResponse.data_status
+    repairPlan.value = reliabilityResponse.repair_plan
   } catch {
     // Keep the last known data status on transient refresh failures.
   }
