@@ -408,6 +408,19 @@ export interface FundTailAdvicePayload {
   download_start_date?: string
 }
 
+export interface FundTailOpportunityPayload {
+  trade_date: string
+}
+
+export interface FundTailOpportunityResponse {
+  rows: Record<string, string>[]
+  markdown: string
+  report_path: string
+  markdown_path: string
+  report_updated_at?: string | null
+  markdown_updated_at?: string | null
+}
+
 export type FundWatchlistStatus = 'holding' | 'candidate' | 'watching' | 'paused'
 export type FundWatchlistPriority = 'core' | 'normal' | 'low'
 export type FundWatchlistType = 'broad_index' | 'consumer' | 'medical' | 'overseas' | 'bond' | 'sector' | 'other'
@@ -744,6 +757,9 @@ export const api = {
   getFundTailReport() {
     return request<FundTailReportResponse>('/api/fund-tail/report')
   },
+  getFundTailOpportunities() {
+    return request<FundTailOpportunityResponse>('/api/fund-tail/opportunities/latest')
+  },
   submitFundTailAdvice(payload: FundTailAdvicePayload) {
     return request<BacktestSubmitResponse>('/api/fund-tail/advice', {
       method: 'POST',
@@ -752,6 +768,12 @@ export const api = {
   },
   refreshFundTailProxy(payload: { trade_date: string }) {
     return request<FundTailProxyRefreshResponse>('/api/fund-tail/refresh-proxy', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  },
+  submitFundTailOpportunities(payload: FundTailOpportunityPayload) {
+    return request<BacktestSubmitResponse>('/api/fund-tail/opportunities', {
       method: 'POST',
       body: JSON.stringify(payload)
     })

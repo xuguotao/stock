@@ -135,3 +135,15 @@ def test_fund_tail_advice_refresh_button_regenerates_advice_without_job_id() -> 
     assert "刷新行情并重算建议" in source
     assert ':disabled="!activeJobId"' not in source
     assert '@click="runAdvice"' in source
+
+
+def test_fund_tail_page_exposes_opportunity_discovery_panel() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    for text in ["机会发现", "机会类型", "机会等级", "加入观察池"]:
+        assert text in source
+    assert "runOpportunityDiscovery" in source
+    assert "addOpportunityToWatchlist" in source
+    assert "submitFundTailOpportunities" in client
+    assert "getFundTailOpportunities" in client
