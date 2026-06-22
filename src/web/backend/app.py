@@ -20,6 +20,7 @@ from src.web.backend.datasets import DatasetService
 from src.web.backend.fund_tail import (
     FundTailAdviceRequest,
     FundTailDownloader,
+    FundTailOpportunityRequest,
     FundTailPaths,
     FundWatchlistItemRequest,
     delete_fund_watchlist_item,
@@ -27,7 +28,9 @@ from src.web.backend.fund_tail import (
     list_fund_universe,
     list_fund_watchlist,
     load_latest_fund_tail_report,
+    load_latest_fund_tail_opportunities,
     run_local_fund_tail_advice,
+    run_local_fund_tail_opportunities,
     upsert_fund_watchlist_item,
 )
 from src.web.backend.jobs import JobStore
@@ -79,6 +82,9 @@ def create_app(
     fund_tail_raw_report_path: str | Path = "reports/fund_tail_backtest_raw.csv",
     fund_tail_advice_dir: str | Path = "reports/fund_tail_advice",
     fund_tail_markdown_path: str | Path = "reports/fund_tail_advice/latest.md",
+    fund_tail_opportunity_candidate_path: str | Path = "config/fund_tail_candidates.csv",
+    fund_tail_opportunity_report_path: str | Path = "reports/fund_tail_opportunities.csv",
+    fund_tail_opportunity_markdown_path: str | Path = "reports/fund_tail_opportunities/latest.md",
     fund_tail_repository=None,
     stock_db_path: str | Path = "data/stock.db",
     run_jobs_inline: bool = False,
@@ -100,6 +106,9 @@ def create_app(
         raw_report_path=Path(fund_tail_raw_report_path),
         advice_dir=Path(fund_tail_advice_dir),
         markdown_path=Path(fund_tail_markdown_path),
+        opportunity_candidate_path=Path(fund_tail_opportunity_candidate_path),
+        opportunity_report_path=Path(fund_tail_opportunity_report_path),
+        opportunity_markdown_path=Path(fund_tail_opportunity_markdown_path),
     )
     app.state.job_store = store
     app.state.dataset_service = datasets
@@ -276,6 +285,13 @@ def create_app(
             fund_tail_paths.markdown_path,
         )
 
+    @app.get("/api/fund-tail/opportunities/latest")
+    def get_fund_tail_opportunities() -> dict[str, Any]:
+        return load_latest_fund_tail_opportunities(
+            fund_tail_paths.opportunity_report_path,
+            fund_tail_paths.opportunity_markdown_path,
+        )
+
     @app.get("/api/fund-tail/watchlist")
     def get_fund_tail_watchlist() -> dict[str, Any]:
         if app.state.fund_tail_repository is None:
@@ -325,6 +341,33 @@ def create_app(
                 job.id,
                 payload,
                 app.state.fund_tail_downloader,
+                app.state.fund_tail_repository,
+            )
+
+        return {"job_id": job.id}
+
+    @app.post("/api/fund-tail/opportunities")
+    def create_fund_tail_opportunities(
+        payload: FundTailOpportunityRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, Any]:
+        job = store.create_job("fund_tail_opportunities", payload.model_dump(mode="json"))
+
+        if app.state.run_jobs_inline:
+            _run_fund_tail_opportunities_job(
+                store,
+                fund_tail_paths,
+                job.id,
+                payload,
+                app.state.fund_tail_repository,
+            )
+        else:
+            background_tasks.add_task(
+                _run_fund_tail_opportunities_job,
+                store,
+                fund_tail_paths,
+                job.id,
+                payload,
                 app.state.fund_tail_repository,
             )
 
@@ -434,6 +477,31 @@ def _run_fund_tail_advice_job(
         store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "任务失败"))
         return
     store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "建议生成完成"))
+
+
+def _run_fund_tail_opportunities_job(
+    store: JobStore,
+    paths: FundTailPaths,
+    job_id: str,
+    payload: FundTailOpportunityRequest,
+    repository,
+) -> None:
+    store.update_job(job_id, status="running", progress=_progress(10, "starting", "发现基金尾盘机会"))
+    try:
+        result = run_local_fund_tail_opportunities(
+            paths,
+            payload,
+            repository=repository,
+            progress=lambda percent, stage, message: store.update_job(
+                job_id,
+                status="running",
+                progress=_progress(percent, stage, message),
+            ),
+        )
+    except Exception as exc:
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "任务失败"))
+        return
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "机会发现完成"))
 
 
 def _run_tail_live_selection_job(

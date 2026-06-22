@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from scripts.backtest_fund_tail_advice import FUNDS, PROXY_INDEXES, download_inputs, proxy_info_for
 from scripts.daily_fund_tail_advice import build_markdown_report
+from scripts.discover_fund_tail_opportunities import discover_opportunities
 from src.research.fund_tail_backtest import (
     classify_tail_signals,
     evaluate_forward_returns,
@@ -33,6 +34,12 @@ class FundTailAdviceRequest(BaseModel):
     fund_codes: list[str] | None = Field(default=None)
     refresh_data: bool = Field(default=True)
     download_start_date: date = Field(default=date(2025, 1, 1))
+
+
+class FundTailOpportunityRequest(BaseModel):
+    """Request body for local fund-tail opportunity discovery jobs."""
+
+    trade_date: date
 
 
 class FundWatchlistItemRequest(BaseModel):
@@ -92,6 +99,9 @@ class FundTailPaths:
     raw_report_path: Path = Path("reports/fund_tail_backtest_raw.csv")
     advice_dir: Path = Path("reports/fund_tail_advice")
     markdown_path: Path = Path("reports/fund_tail_advice/latest.md")
+    opportunity_candidate_path: Path = Path("config/fund_tail_candidates.csv")
+    opportunity_report_path: Path = Path("reports/fund_tail_opportunities.csv")
+    opportunity_markdown_path: Path = Path("reports/fund_tail_opportunities/latest.md")
 
 
 def list_fund_universe(data_dir: str | Path) -> list[dict[str, Any]]:
@@ -157,6 +167,51 @@ def load_latest_fund_tail_report(
         "report_updated_at": _path_updated_at(report),
         "markdown_updated_at": _path_updated_at(markdown),
     }
+
+
+def load_latest_fund_tail_opportunities(
+    report_path: str | Path,
+    markdown_path: str | Path,
+) -> dict[str, Any]:
+    """Load the latest opportunity discovery CSV and Markdown report."""
+    report = Path(report_path)
+    markdown = Path(markdown_path)
+    rows: list[dict[str, Any]] = []
+    if report.exists():
+        rows = pd.read_csv(report, dtype={"基金代码": str}).fillna("").to_dict(orient="records")
+    return {
+        "rows": rows,
+        "markdown": markdown.read_text(encoding="utf-8") if markdown.exists() else "",
+        "report_path": str(report),
+        "markdown_path": str(markdown),
+        "report_updated_at": _path_updated_at(report),
+        "markdown_updated_at": _path_updated_at(markdown),
+    }
+
+
+def run_local_fund_tail_opportunities(
+    paths: FundTailPaths,
+    request: FundTailOpportunityRequest,
+    *,
+    repository=None,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """Generate opportunity discovery rows from the latest fund-tail advice report."""
+    _report_progress(progress, 30, "loading_report", "读取基金尾盘建议")
+    watchlist_codes = _watchlist_codes(repository)
+    _report_progress(progress, 65, "ranking_opportunities", "筛选基金尾盘机会")
+    result = discover_opportunities(
+        trade_date=request.trade_date.isoformat(),
+        advice_report=paths.report_path,
+        candidate_file=paths.opportunity_candidate_path,
+        report=paths.opportunity_report_path,
+        markdown=paths.opportunity_markdown_path,
+        watchlist_codes=watchlist_codes,
+    )
+    _report_progress(progress, 90, "writing_report", "写入基金机会报告")
+    result["report_updated_at"] = _path_updated_at(paths.opportunity_report_path)
+    result["markdown_updated_at"] = _path_updated_at(paths.opportunity_markdown_path)
+    return result
 
 
 def run_local_fund_tail_advice(
@@ -253,6 +308,13 @@ def _fund_names(repository=None) -> dict[str, str]:
     for item in repository.list_watchlist():
         names[str(item["fund_code"]).zfill(6)] = str(item["fund_name"])
     return names
+
+
+def _watchlist_codes(repository=None) -> set[str]:
+    if repository is None:
+        return set()
+    repository.seed_watchlist_from_static_funds(FUNDS, proxy_specs=PROXY_INDEXES)
+    return {str(item["fund_code"]).zfill(6) for item in repository.list_watchlist()}
 
 
 def _selected_funds(

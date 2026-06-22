@@ -179,6 +179,35 @@ def test_fund_tail_api_loads_latest_report(tmp_path) -> None:
     assert response.json()["report_updated_at"]
 
 
+def test_fund_tail_api_loads_latest_opportunities(tmp_path) -> None:
+    report_path = tmp_path / "fund_tail_opportunities.csv"
+    markdown_path = tmp_path / "opportunities.md"
+    pd.DataFrame(
+        [
+            {
+                "基金名称": "华夏中证500指数增强C",
+                "基金代码": "007995",
+                "机会类型": "新开仓候选",
+                "机会建议": "可小额新开仓",
+            }
+        ]
+    ).to_csv(report_path, index=False)
+    markdown_path.write_text("# 基金尾盘机会发现\n", encoding="utf-8")
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_opportunity_report_path=report_path,
+        fund_tail_opportunity_markdown_path=markdown_path,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/fund-tail/opportunities/latest")
+
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["基金代码"] == "007995"
+    assert response.json()["markdown"] == "# 基金尾盘机会发现\n"
+    assert response.json()["report_updated_at"]
+
+
 def test_fund_tail_api_runs_local_advice_job(tmp_path) -> None:
     data_dir = tmp_path / "fund_tail"
     data_dir.mkdir()
@@ -217,6 +246,58 @@ def test_fund_tail_api_runs_local_advice_job(tmp_path) -> None:
     assert job["result"]["row_count"] == 4
     assert "# 基金尾盘操作建议 - 2026-02-09" in job["result"]["markdown"]
     assert job["result"]["storage"] == "clickhouse"
+
+
+def test_fund_tail_api_runs_opportunity_discovery_job(tmp_path) -> None:
+    advice_report = tmp_path / "fund_tail_backtest.csv"
+    candidates = tmp_path / "candidates.csv"
+    pd.DataFrame(
+        [
+            {
+                "基金代码": "000311",
+                "基金名称": "景顺长城沪深300增强A",
+                "操作等级": "A",
+                "最终操作建议": "尾盘加仓",
+                "建议原因": "预测优势较强",
+                "预测加仓评分": 72.5,
+                "5日预测上涨概率": 0.68,
+                "5日预测中位数收益": 0.012,
+                "5日预测跌超2%概率": 0.06,
+                "代理匹配等级": "高",
+                "代理匹配度": 0.97,
+                "今日代理涨跌率": "0.85%",
+            }
+        ]
+    ).to_csv(advice_report, index=False)
+    candidates.write_text(
+        "\n".join(
+            [
+                "fund_code,fund_name,fund_type,candidate_tier,proxy_provider,proxy_code,fee_tag,min_holding_days,enabled,tail_strategy_eligible,exclude_reason",
+                "000311,景顺长城沪深300增强A,broad_index,preferred,csindex,000300,低费率,7,true,true,",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_report_path=advice_report,
+        fund_tail_opportunity_candidate_path=candidates,
+        fund_tail_opportunity_report_path=tmp_path / "opportunities.csv",
+        fund_tail_opportunity_markdown_path=tmp_path / "opportunities.md",
+        run_jobs_inline=True,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/fund-tail/opportunities",
+        json={"trade_date": "2026-06-22"},
+    )
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert job["result"]["rows"][0]["机会类型"] == "新开仓候选"
+    assert job["result"]["rows"][0]["机会建议"] == "可小额新开仓"
 
 
 def test_fund_tail_advice_uses_watchlist_when_codes_are_omitted(tmp_path) -> None:

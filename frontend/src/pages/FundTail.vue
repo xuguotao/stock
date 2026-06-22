@@ -220,6 +220,64 @@
 
     <div class="panel">
       <div class="page-header panel-title-row">
+        <div>
+          <h2 class="page-title">机会发现</h2>
+          <div class="metric-label">从候选基金池中筛出适合尾盘观察或小额试探的基金</div>
+        </div>
+        <div class="toolbar">
+          <el-tag effect="plain">{{ opportunityReport.rows.length }}</el-tag>
+          <el-button :loading="opportunitySubmitting" type="primary" @click="runOpportunityDiscovery">
+            生成机会
+          </el-button>
+        </div>
+      </div>
+      <el-table :data="opportunityRows" height="420" :default-sort="{ prop: '预测加仓评分', order: 'descending' }">
+        <el-table-column prop="基金代码" label="代码" width="86" fixed />
+        <el-table-column prop="基金名称" label="基金" min-width="220" fixed show-overflow-tooltip />
+        <el-table-column prop="机会类型" label="机会类型" width="124" />
+        <el-table-column prop="机会等级" label="机会等级" width="104" sortable />
+        <el-table-column prop="机会建议" label="机会建议" width="140" />
+        <el-table-column prop="候选层级" label="候选层级" width="104" />
+        <el-table-column prop="费率标签" label="费率" width="104" />
+        <el-table-column prop="最短观察周期" label="观察周期" width="104" />
+        <el-table-column prop="预测加仓评分" label="评分" width="92" sortable>
+          <template #default="{ row }">
+            <el-tag :type="scoreType(row['预测加仓评分'])" effect="plain">
+              {{ formatNumber(row['预测加仓评分']) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="5日胜率" width="100" sortable sort-by="5日预测上涨概率">
+          <template #default="{ row }">{{ formatPercent(row['5日预测上涨概率']) }}</template>
+        </el-table-column>
+        <el-table-column label="5日中位收益" width="120" sortable sort-by="5日预测中位数收益">
+          <template #default="{ row }">{{ formatPercent(row['5日预测中位数收益']) }}</template>
+        </el-table-column>
+        <el-table-column label="跌超2%" width="96" sortable sort-by="5日预测跌超2%概率">
+          <template #default="{ row }">
+            <el-tag :type="riskType(row['5日预测跌超2%概率'])" effect="plain">
+              {{ formatPercent(row['5日预测跌超2%概率']) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="机会原因" label="机会原因" min-width="180" show-overflow-tooltip />
+        <el-table-column label="操作" width="128" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              :disabled="row['是否已在观察池'] === '是' || row['机会类型'] === '明确排除'"
+              @click="addOpportunityToWatchlist(row)"
+            >
+              加入观察池
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div class="panel">
+      <div class="page-header panel-title-row">
         <h2 class="page-title">Markdown 报告</h2>
         <el-tag v-if="job" :type="job.status === 'success' ? 'success' : job.status === 'failed' ? 'danger' : 'warning'">
           {{ job.status }}
@@ -353,7 +411,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type FundTailDataStatusItem, type FundTailReportResponse, type FundTailUniverseItem, type FundWatchlistItem, type JobRecord, type JobStatus } from '../api/client'
+import { api, type FundTailDataStatusItem, type FundTailOpportunityResponse, type FundTailReportResponse, type FundTailUniverseItem, type FundWatchlistItem, type JobRecord, type JobStatus } from '../api/client'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -373,8 +431,17 @@ const report = ref<FundTailReportResponse>({
   report_updated_at: null,
   markdown_updated_at: null
 })
+const opportunityReport = ref<FundTailOpportunityResponse>({
+  rows: [],
+  markdown: '',
+  report_path: '',
+  markdown_path: '',
+  report_updated_at: null,
+  markdown_updated_at: null
+})
 const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
+const opportunitySubmitting = ref(false)
 const tradeDate = ref(new Date().toISOString().slice(0, 10))
 const refreshData = ref(true)
 const props = defineProps<{
@@ -407,6 +474,7 @@ const adviceRows = computed(() => report.value.rows.map((row) => {
     数据状态: fundDataState(status)
   }
 }))
+const opportunityRows = computed(() => opportunityReport.value.rows)
 const latestProxyDate = computed(() => latestDate(dataStatus.value.map((item) => item.latest_proxy_date)))
 const staleProxyCount = computed(() => dataStatus.value.filter((item) => !isFreshForTradeDate(item.latest_proxy_date)).length)
 const normalDataCount = computed(() => dataStatus.value.filter((item) => fundDataState(item) === '正常').length)
@@ -420,13 +488,15 @@ const jobProgressStatus = computed(() => {
 async function loadAll() {
   loading.value = true
   try {
-    const [universeResponse, watchlistResponse, reportResponse] = await Promise.all([
+    const [universeResponse, watchlistResponse, reportResponse, opportunityResponse] = await Promise.all([
       api.listFundTailUniverse(),
       api.listFundTailWatchlist(),
-      api.getFundTailReport()
+      api.getFundTailReport(),
+      api.getFundTailOpportunities()
     ])
     universe.value = universeResponse.items
     watchlist.value = watchlistResponse.items
+    opportunityReport.value = opportunityResponse
     report.value = {
       ...reportResponse,
       data_refreshed: report.value.data_refreshed ?? reportResponse.data_refreshed,
@@ -531,6 +601,61 @@ async function runAdvice() {
   }
 }
 
+async function runOpportunityDiscovery() {
+  opportunitySubmitting.value = true
+  try {
+    const response = await api.submitFundTailOpportunities({
+      trade_date: tradeDate.value
+    })
+    const completed = await pollJobUntilDone(response.job_id, 'opportunity')
+    if (completed) {
+      await loadAll()
+      ElMessage.success('基金机会发现已生成')
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '机会发现提交失败')
+  } finally {
+    opportunitySubmitting.value = false
+  }
+}
+
+async function addOpportunityToWatchlist(row: AdviceRow) {
+  const code = String(row['基金代码'] ?? '').padStart(6, '0')
+  const name = String(row['基金名称'] ?? '')
+  if (!/^\d{6}$/.test(code) || !name) {
+    ElMessage.error('机会行缺少基金代码或名称')
+    return
+  }
+  const payload: FundWatchlistItem = {
+    fund_code: code,
+    fund_name: name,
+    status: 'candidate',
+    priority: row['机会等级'] === 'A' ? 'core' : 'normal',
+    fund_type: fundTypeFromOpportunity(row),
+    enabled: true,
+    include_in_advice: true,
+    position_cost: null,
+    position_amount: null,
+    position_return_pct: null,
+    note: `机会发现：${String(row['机会建议'] ?? '')}；${String(row['机会原因'] ?? '')}`
+  }
+  try {
+    await api.upsertFundTailWatchlistItem(code, payload)
+    await loadWatchlist()
+    opportunityReport.value = {
+      ...opportunityReport.value,
+      rows: opportunityReport.value.rows.map((item) => (
+        String(item['基金代码'] ?? '').padStart(6, '0') === code
+          ? { ...item, 是否已在观察池: '是', 机会类型: '已在观察池' }
+          : item
+      ))
+    }
+    ElMessage.success('已加入观察池')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加入观察池失败')
+  }
+}
+
 async function refreshJob() {
   if (!activeJobId.value) return
   job.value = await api.getJob(activeJobId.value)
@@ -563,11 +688,12 @@ function applyJobResult(value: Record<string, unknown>) {
   }
 }
 
-async function pollJobUntilDone(jobId: string) {
+async function pollJobUntilDone(jobId: string, resultType: 'advice' | 'opportunity' = 'advice') {
   for (let attempt = 0; attempt < 180; attempt += 1) {
     job.value = await api.getJob(jobId)
     if (job.value.status === 'success' && job.value.result) {
-      applyJobResult(job.value.result)
+      if (resultType === 'opportunity') applyOpportunityResult(job.value.result)
+      else applyJobResult(job.value.result)
       return true
     }
     if (job.value.status === 'failed') {
@@ -578,6 +704,28 @@ async function pollJobUntilDone(jobId: string) {
   }
   ElMessage.warning('任务仍在运行，请稍后刷新')
   return false
+}
+
+function applyOpportunityResult(value: Record<string, unknown>) {
+  const result = value as unknown as FundTailOpportunityResponse
+  opportunityReport.value = {
+    rows: result.rows ?? [],
+    markdown: result.markdown ?? '',
+    report_path: result.report_path ?? '',
+    markdown_path: result.markdown_path ?? '',
+    report_updated_at: result.report_updated_at ?? null,
+    markdown_updated_at: result.markdown_updated_at ?? null
+  }
+}
+
+function fundTypeFromOpportunity(row: AdviceRow) {
+  const label = String(row['基金类型标签'] ?? '')
+  if (label === '宽基') return 'broad_index'
+  if (label === '消费') return 'consumer'
+  if (label === '医药') return 'medical'
+  if (label === '海外') return 'overseas'
+  if (label === '行业') return 'sector'
+  return 'other'
 }
 
 function latestDate(values: Array<string | null>) {

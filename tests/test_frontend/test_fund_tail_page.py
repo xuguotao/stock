@@ -84,3 +84,15 @@ def test_fund_tail_watchlist_position_fields_use_plain_inputs() -> None:
     assert 'label="持仓成本"' not in source
     assert 'label="持仓收益率"' not in source
     assert "el-input-number" not in source
+
+
+def test_fund_tail_page_exposes_opportunity_discovery_panel() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    for text in ["机会发现", "机会类型", "机会等级", "加入观察池"]:
+        assert text in source
+    assert "runOpportunityDiscovery" in source
+    assert "addOpportunityToWatchlist" in source
+    assert "submitFundTailOpportunities" in client
+    assert "getFundTailOpportunities" in client
