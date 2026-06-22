@@ -30,6 +30,7 @@ def test_tail_live_selection_links_symbols_to_stock_trend() -> None:
     assert "@click=\"openStockTrend(row.symbol)\"" in source
     assert "window.open(stockTrendUrl(symbol), '_blank', 'noopener,noreferrer')" in source
     assert "page: 'stock-trend'" in source
+    assert "granularity: '5m'" in source
     assert "initialPage" in app_source
     assert "URLSearchParams" in app_source
     assert "StockTrend" in app_source

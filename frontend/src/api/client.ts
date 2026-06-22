@@ -616,10 +616,12 @@ export interface StockTrendResponse {
   symbol: string
   name: string
   trade_date: string
+  granularity: string
   latest_price: number | null
   latest_intraday_time: string | null
   quote?: Record<string, number | string | null>
   metrics: Record<string, number | null>
+  tail_evidence?: Record<string, number | string | null>
   daily: Array<Record<string, number | string | null>>
   intraday: Array<Record<string, number | string | null>>
 }
@@ -689,9 +691,10 @@ export const api = {
   getDataStatus() {
     return request<DataStatusResponse>('/api/data/status')
   },
-  getStockTrend(symbol: string, tradeDate?: string, dailyWindow = 90) {
+  getStockTrend(symbol: string, tradeDate?: string, dailyWindow = 90, granularity = '5m') {
     const params = new URLSearchParams({ daily_window: String(dailyWindow) })
     if (tradeDate) params.set('trade_date', tradeDate)
+    params.set('granularity', granularity)
     return request<StockTrendResponse>(`/api/stocks/${encodeURIComponent(symbol)}/trend?${params.toString()}`)
   },
   getWatchlistMonitorReport(tradeDate?: string) {

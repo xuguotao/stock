@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.core.constants import format_symbol
 from src.data.aggregator import DataAggregator
+from src.strategy.scanner import IntradayScanner, TailSessionSignal
 
 
 def analyze_stock_trend(
@@ -16,14 +17,16 @@ def analyze_stock_trend(
     *,
     trade_date: date | None = None,
     daily_window: int = 90,
+    granularity: str = "5m",
 ) -> dict[str, Any]:
     """Build daily and intraday trend data for a single stock."""
     normalized_symbol = format_symbol(symbol)
+    intraday_granularity = _normalize_granularity(granularity)
     end = trade_date or date.today()
     start = end - timedelta(days=max(30, daily_window * 2))
     aggregator = DataAggregator()
     daily = aggregator.get_bars(normalized_symbol, start, end, "daily")
-    intraday = aggregator.get_intraday_bars(normalized_symbol, end, "5m")
+    intraday = aggregator.get_intraday_bars(normalized_symbol, end, intraday_granularity)
     stock_name = _stock_name(aggregator, normalized_symbol)
     quote = _latest_quote(aggregator, normalized_symbol, end)
     if quote.get("name"):
@@ -33,18 +36,25 @@ def analyze_stock_trend(
     intraday_rows = _intraday_rows(intraday)
     latest_price = quote.get("price") if quote.get("price") is not None else _latest_price(daily_rows, intraday_rows)
     metrics = _metrics(daily_rows, intraday_rows)
+    tail_evidence = _tail_evidence(aggregator, normalized_symbol, end, intraday, intraday_granularity)
 
     return {
         "symbol": normalized_symbol,
         "name": stock_name,
         "trade_date": end.isoformat(),
+        "granularity": intraday_granularity,
         "latest_price": latest_price,
         "latest_intraday_time": intraday_rows[-1]["time"] if intraday_rows else None,
         "quote": quote,
         "metrics": metrics,
+        "tail_evidence": tail_evidence,
         "daily": daily_rows,
         "intraday": intraday_rows,
     }
+
+
+def _normalize_granularity(value: str) -> str:
+    return value if value in {"1m", "5m"} else "5m"
 
 
 def _stock_name(aggregator: DataAggregator, symbol: str) -> str:
@@ -119,8 +129,48 @@ def _metrics(daily: list[dict[str, Any]], intraday: list[dict[str, Any]]) -> dic
     }
 
 
+def _tail_evidence(
+    aggregator: DataAggregator,
+    symbol: str,
+    trade_date: date,
+    intraday: pd.DataFrame,
+    granularity: str,
+) -> dict[str, Any]:
+    scanner = IntradayScanner(aggregator, frequency=granularity)
+    # Reuse scanner scoring so this evidence matches tail live selection.
+    signal = scanner._score_symbol(symbol, trade_date, intraday)  # noqa: SLF001
+    mode = "tail_window"
+    if signal is None:
+        signal = scanner._score_recent_window(symbol, trade_date, intraday, preview_window_bars=6)  # noqa: SLF001
+        mode = "recent_preview"
+    if signal is None:
+        return {
+            "status": "missing",
+            "source": granularity,
+            "mode": mode,
+            "reason": "分钟数据不足，无法计算尾盘策略证据",
+        }
+    return _tail_signal_evidence(signal, source=granularity, mode=mode)
+
+
+def _tail_signal_evidence(signal: TailSessionSignal, *, source: str, mode: str) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "source": source,
+        "mode": mode,
+        "strength": round(float(signal.strength), 6),
+        "last_price": round(float(signal.last_price), 6),
+        "volume_ratio": round(float(signal.volume_ratio), 6),
+        "tail_return": round(float(signal.tail_return), 6),
+        "tail_high_return": round(float(signal.tail_high_return), 6),
+        "pullback_from_high": round(float(signal.pullback_from_high), 6),
+        "close_position": round(float(signal.close_position), 6),
+        "reason": signal.reason,
+    }
+
+
 def _latest_quote(aggregator: DataAggregator, symbol: str, trade_date: date) -> dict[str, Any]:
-    for source in aggregator.sources:
+    for source in getattr(aggregator, "sources", []):
         fetcher = getattr(source, "fetch_latest_quote_snapshots", None)
         if fetcher is None:
             continue

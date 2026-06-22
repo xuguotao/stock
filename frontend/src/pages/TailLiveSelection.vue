@@ -973,7 +973,7 @@ function openStockTrend(symbol: string) {
 }
 
 function stockTrendUrl(symbol: string) {
-  const params = new URLSearchParams({ page: 'stock-trend', symbol })
+  const params = new URLSearchParams({ page: 'stock-trend', symbol, granularity: '5m', trade_date: form.value.trade_date })
   return `${window.location.origin}${window.location.pathname}?${params.toString()}`
 }
 

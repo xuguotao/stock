@@ -331,8 +331,18 @@ def create_app(
         return app.state.data_status_runner()
 
     @app.get("/api/stocks/{symbol}/trend")
-    def get_stock_trend(symbol: str, trade_date: date | None = None, daily_window: int = 90) -> dict[str, Any]:
-        return app.state.stock_trend_runner(symbol, trade_date=trade_date, daily_window=daily_window)
+    def get_stock_trend(
+        symbol: str,
+        trade_date: date | None = None,
+        daily_window: int = 90,
+        granularity: str = "5m",
+    ) -> dict[str, Any]:
+        return app.state.stock_trend_runner(
+            symbol,
+            trade_date=trade_date,
+            daily_window=daily_window,
+            granularity=granularity,
+        )
 
     @app.get("/api/watchlist-monitor/report")
     def get_watchlist_monitor_report(trade_date: date | None = None) -> dict[str, Any]:
