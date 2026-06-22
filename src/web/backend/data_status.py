@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,10 @@ CLICKHOUSE_TABLE_SPECS = {
 QUOTE_SNAPSHOT_EXPECTED_INTERVAL_SECONDS = 10
 QUOTE_SNAPSHOT_RAW_RETENTION_DAYS = 120
 QUOTE_SNAPSHOT_AGGREGATE_RETENTION_DAYS = 1095
+QUOTE_MARKET_MORNING_START = time(9, 30)
+QUOTE_MARKET_MORNING_END = time(11, 30)
+QUOTE_MARKET_AFTERNOON_START = time(13, 0)
+QUOTE_MARKET_AFTERNOON_END = time(15, 0)
 QUOTE_SNAPSHOT_ROLLUPS = {
     "1m": {"table": "stock_quote_snapshots_1m", "bucket_seconds": 60},
     "5m": {"table": "stock_quote_snapshots_5m", "bucket_seconds": 300},
@@ -1201,7 +1205,7 @@ def _quote_snapshot_interval_stats(
     except Exception:  # noqa: BLE001 - keep data quality inspection best-effort.
         rows = []
     parsed = [_coerce_datetime(row[0]) for row in rows]
-    timestamps = sorted(value for value in parsed if value is not None)
+    timestamps = sorted(value for value in parsed if value is not None and _is_quote_market_session(value))
     observed = len(timestamps)
     if observed < 2:
         return {
@@ -1211,13 +1215,17 @@ def _quote_snapshot_interval_stats(
             "missing_rate": 0.0,
             "actual_avg_interval_seconds": None,
         }
-    span_seconds = max(0.0, (timestamps[-1] - timestamps[0]).total_seconds())
-    expected_rounds = int(span_seconds // expected_interval_seconds) + 1
-    missing_rounds = max(0, expected_rounds - observed)
-    gaps = [
-        (timestamps[index] - timestamps[index - 1]).total_seconds()
-        for index in range(1, observed)
-    ]
+    missing_rounds = 0
+    gaps = []
+    for index in range(1, observed):
+        previous = timestamps[index - 1]
+        current = timestamps[index]
+        if not _same_quote_market_segment(previous, current):
+            continue
+        gap = max(0.0, (current - previous).total_seconds())
+        gaps.append(gap)
+        missing_rounds += max(0, round(gap / expected_interval_seconds) - 1)
+    expected_rounds = observed + missing_rounds
     return {
         "observed_rounds": observed,
         "expected_rounds": expected_rounds,
@@ -1225,6 +1233,28 @@ def _quote_snapshot_interval_stats(
         "missing_rate": round(missing_rounds / expected_rounds, 6) if expected_rounds else 0.0,
         "actual_avg_interval_seconds": round(sum(gaps) / len(gaps), 3) if gaps else None,
     }
+
+
+def _is_quote_market_session(value: datetime) -> bool:
+    current = value.time()
+    return (
+        QUOTE_MARKET_MORNING_START <= current <= QUOTE_MARKET_MORNING_END
+        or QUOTE_MARKET_AFTERNOON_START <= current <= QUOTE_MARKET_AFTERNOON_END
+    )
+
+
+def _same_quote_market_segment(left: datetime, right: datetime) -> bool:
+    if left.date() != right.date():
+        return False
+    left_time = left.time()
+    right_time = right.time()
+    return (
+        QUOTE_MARKET_MORNING_START <= left_time <= QUOTE_MARKET_MORNING_END
+        and QUOTE_MARKET_MORNING_START <= right_time <= QUOTE_MARKET_MORNING_END
+    ) or (
+        QUOTE_MARKET_AFTERNOON_START <= left_time <= QUOTE_MARKET_AFTERNOON_END
+        and QUOTE_MARKET_AFTERNOON_START <= right_time <= QUOTE_MARKET_AFTERNOON_END
+    )
 
 
 def _coverage_ratio(covered: int, expected: int) -> float:

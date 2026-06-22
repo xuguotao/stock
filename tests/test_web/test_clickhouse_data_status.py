@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from src.web.backend.data_status import inspect_clickhouse_database, persist_clickhouse_quality_snapshot
+from src.web.backend.data_status import (
+    _quote_snapshot_interval_stats,
+    inspect_clickhouse_database,
+    persist_clickhouse_quality_snapshot,
+)
 
 
 class FakeClickHouseClient:
@@ -129,6 +133,30 @@ class PartiallyBrokenClickHouseClient(FakeClickHouseClient):
         if "from index_daily" in normalized:
             raise RuntimeError("missing column")
         return super().execute(query, params)
+
+
+def test_quote_snapshot_interval_stats_ignores_non_trading_session_gaps() -> None:
+    class FakeSnapshotClient:
+        def execute(self, query, params=None):
+            return [
+                (datetime(2026, 6, 22, 23, 20, 57), 2),
+                (datetime(2026, 6, 22, 15, 0, 0), 2),
+                (datetime(2026, 6, 22, 14, 59, 50), 2),
+                (datetime(2026, 6, 22, 14, 59, 40), 2),
+                (datetime(2026, 6, 22, 11, 30, 0), 2),
+                (datetime(2026, 6, 22, 11, 29, 50), 2),
+            ]
+
+    stats = _quote_snapshot_interval_stats(
+        client=FakeSnapshotClient(),
+        expected_interval_seconds=10,
+    )
+
+    assert stats["observed_rounds"] == 5
+    assert stats["expected_rounds"] == 5
+    assert stats["missing_rounds"] == 0
+    assert stats["missing_rate"] == 0.0
+    assert stats["actual_avg_interval_seconds"] == 10.0
 
 
 def test_inspect_clickhouse_database_returns_coverage() -> None:
