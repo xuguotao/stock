@@ -29,6 +29,11 @@ from src.research.fund_tail_backtest import (
     summarize_latest_signal,
     to_chinese_report,
 )
+from src.research.fund_tail_opportunities import (
+    FundCandidate,
+    filter_eligible_candidates,
+    load_candidates,
+)
 
 
 FUNDS = {
@@ -73,8 +78,11 @@ PROXY_NAMES = {
     "399396": "国证食品",
     "QQQ": "纳斯达克100/QQQ",
     "000905": "中证500",
+    "000852": "中证1000",
     "399330": "深证100",
     "000300": "沪深300",
+    "000016": "上证50",
+    "000688": "科创50",
     "399989": "中证医疗",
     "399976": "中证新能源汽车",
     "000827": "中证环保",
@@ -82,8 +90,70 @@ PROXY_NAMES = {
 }
 
 
-def proxy_info_for(code: str) -> dict[str, object]:
-    spec = PROXY_INDEXES.get(code)
+ProxySpec = tuple[str, str] | tuple[str, str, str]
+
+
+def load_fund_universe(
+    candidate_file: str | Path | None = None,
+) -> tuple[dict[str, str], dict[str, ProxySpec], dict[str, str]]:
+    """Load fund names and proxy mappings, defaulting to the built-in watchlist."""
+    if candidate_file is None:
+        return dict(FUNDS), dict(PROXY_INDEXES), dict(PROXY_NAMES)
+
+    candidates = filter_eligible_candidates(load_candidates(candidate_file))
+    funds: dict[str, str] = {}
+    proxy_indexes: dict[str, ProxySpec] = {}
+    proxy_names = dict(PROXY_NAMES)
+    for candidate in candidates:
+        funds[candidate.fund_code] = candidate.fund_name
+        spec = proxy_spec_for_candidate(candidate)
+        if spec is not None:
+            proxy_indexes[candidate.fund_code] = spec
+            proxy_names.setdefault(candidate.proxy_code, proxy_name_for(candidate))
+    return funds, proxy_indexes, proxy_names
+
+
+def proxy_spec_for_candidate(candidate: FundCandidate) -> ProxySpec | None:
+    """Convert a candidate row into a downloadable proxy specification."""
+    provider = candidate.proxy_provider
+    proxy_code = candidate.proxy_code.strip()
+    if provider in {"", "nav"} or not proxy_code:
+        return None
+    realtime_symbol = realtime_symbol_for(provider, proxy_code)
+    if realtime_symbol:
+        return provider, proxy_code, realtime_symbol
+    return provider, proxy_code
+
+
+def realtime_symbol_for(provider: str, proxy_code: str) -> str:
+    """Return the Sina realtime symbol for index proxies when available."""
+    if provider == "cni":
+        return f"sz{proxy_code}"
+    if provider == "csindex":
+        if proxy_code.startswith(("399", "159", "160", "161", "162")):
+            return f"sz{proxy_code}"
+        return f"sh{proxy_code}"
+    return ""
+
+
+def proxy_name_for(candidate: FundCandidate) -> str:
+    if candidate.proxy_code in PROXY_NAMES:
+        return PROXY_NAMES[candidate.proxy_code]
+    if candidate.proxy_provider == "us_sina":
+        return candidate.proxy_code
+    if candidate.proxy_provider == "nav":
+        return "基金净值"
+    return f"{candidate.proxy_provider}:{candidate.proxy_code}"
+
+
+def proxy_info_for(
+    code: str,
+    proxy_indexes: dict[str, ProxySpec] | None = None,
+    proxy_names: dict[str, str] | None = None,
+) -> dict[str, object]:
+    proxy_indexes = proxy_indexes or PROXY_INDEXES
+    proxy_names = proxy_names or PROXY_NAMES
+    spec = proxy_indexes.get(code)
     if spec is None:
         return {
             "proxy_provider": "nav",
@@ -94,7 +164,7 @@ def proxy_info_for(code: str) -> dict[str, object]:
     return {
         "proxy_provider": provider,
         "proxy_code": proxy_code,
-        "proxy_name": PROXY_NAMES.get(proxy_code, proxy_code),
+        "proxy_name": proxy_names.get(proxy_code, proxy_code),
     }
 
 
@@ -131,6 +201,11 @@ def parse_args() -> argparse.Namespace:
         "--end-date",
         default="20500101",
         help="End date for proxy index download when --download is used.",
+    )
+    parser.add_argument(
+        "--candidate-file",
+        default=None,
+        help="Optional candidate CSV. When provided, backtest this fund universe instead of the built-in watchlist.",
     )
     return parser.parse_args()
 
@@ -188,11 +263,20 @@ def download_sina_realtime_index(sina_symbol: str) -> pd.DataFrame:
     )
 
 
-def download_inputs(data_dir: Path, start_date: str, end_date: str) -> None:
+def download_inputs(
+    data_dir: Path,
+    start_date: str,
+    end_date: str,
+    *,
+    funds: dict[str, str] | None = None,
+    proxy_indexes: dict[str, ProxySpec] | None = None,
+) -> None:
     import akshare as ak
 
+    funds = funds or FUNDS
+    proxy_indexes = proxy_indexes or PROXY_INDEXES
     data_dir.mkdir(parents=True, exist_ok=True)
-    for code in FUNDS:
+    for code in funds:
         nav = ak.fund_open_fund_info_em(
             symbol=code,
             indicator="单位净值走势",
@@ -201,7 +285,7 @@ def download_inputs(data_dir: Path, start_date: str, end_date: str) -> None:
         nav_series = normalize_akshare_nav(nav)
         nav_series.to_csv(data_dir / f"{code}_nav.csv", index=False)
 
-        proxy_spec = PROXY_INDEXES.get(code)
+        proxy_spec = proxy_indexes.get(code)
         if proxy_spec is None:
             nav_series.to_csv(data_dir / f"{code}_proxy.csv", index=False)
             continue
@@ -245,14 +329,21 @@ def download_inputs(data_dir: Path, start_date: str, end_date: str) -> None:
 def main() -> None:
     args = parse_args()
     data_dir = Path(args.data_dir)
+    funds, proxy_indexes, proxy_names = load_fund_universe(args.candidate_file)
     if args.download:
-        download_inputs(data_dir, args.start_date, args.end_date)
+        download_inputs(
+            data_dir,
+            args.start_date,
+            args.end_date,
+            funds=funds,
+            proxy_indexes=proxy_indexes,
+        )
 
     benchmark_path = data_dir / "benchmark.csv"
     benchmark = read_csv(benchmark_path) if benchmark_path.exists() else None
 
     rows = []
-    for code, name in FUNDS.items():
+    for code, name in funds.items():
         proxy = read_csv(data_dir / f"{code}_proxy.csv")
         nav_path = data_dir / f"{code}_nav.csv"
         nav = read_csv(nav_path) if nav_path.exists() else proxy
@@ -270,7 +361,7 @@ def main() -> None:
                 metrics,
                 condition,
                 prediction,
-                proxy_info_for(code),
+                proxy_info_for(code, proxy_indexes=proxy_indexes, proxy_names=proxy_names),
                 proxy_fit,
             )
         )

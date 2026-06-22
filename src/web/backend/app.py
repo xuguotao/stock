@@ -31,6 +31,7 @@ from src.web.backend.fund_tail import (
     FundTailAdviceRequest,
     FundTailDownloader,
     FundTailOpportunityRequest,
+    FundTailOpportunityRefresher,
     FundTailPaths,
     FundTailProxyRefresher,
     PROXY_INDEXES,
@@ -123,6 +124,9 @@ def create_app(
     fund_tail_advice_dir: str | Path = "reports/fund_tail_advice",
     fund_tail_markdown_path: str | Path = "reports/fund_tail_advice/latest.md",
     fund_tail_opportunity_candidate_path: str | Path = "config/fund_tail_candidates.csv",
+    fund_tail_opportunity_data_dir: str | Path = "data/fund_tail_opportunities",
+    fund_tail_opportunity_advice_report_path: str | Path = "reports/fund_tail_opportunity_backtest.csv",
+    fund_tail_opportunity_raw_report_path: str | Path = "reports/fund_tail_opportunity_backtest_raw.csv",
     fund_tail_opportunity_report_path: str | Path = "reports/fund_tail_opportunities.csv",
     fund_tail_opportunity_markdown_path: str | Path = "reports/fund_tail_opportunities/latest.md",
     fund_tail_repository=None,
@@ -132,6 +136,7 @@ def create_app(
     tail_replay_runner=run_tail_replay_backtest,
     fund_tail_downloader: FundTailDownloader | None = None,
     fund_tail_proxy_refresher: FundTailProxyRefresher | None = None,
+    fund_tail_opportunity_refresher: FundTailOpportunityRefresher | None = None,
     stock_db_sync_runner=sync_stock_database,
     minute5_sync_runner=sync_clickhouse_minute5_kline,
     minute5_monitor_session_checker=None,
@@ -197,6 +202,9 @@ def create_app(
         advice_dir=Path(fund_tail_advice_dir),
         markdown_path=Path(fund_tail_markdown_path),
         opportunity_candidate_path=Path(fund_tail_opportunity_candidate_path),
+        opportunity_data_dir=Path(fund_tail_opportunity_data_dir),
+        opportunity_advice_report_path=Path(fund_tail_opportunity_advice_report_path),
+        opportunity_raw_report_path=Path(fund_tail_opportunity_raw_report_path),
         opportunity_report_path=Path(fund_tail_opportunity_report_path),
         opportunity_markdown_path=Path(fund_tail_opportunity_markdown_path),
     )
@@ -213,6 +221,7 @@ def create_app(
         if fund_tail_proxy_refresher is not None
         else _default_fund_tail_proxy_refresher if fund_tail_downloader is None else None
     )
+    app.state.fund_tail_opportunity_refresher = fund_tail_opportunity_refresher
     app.state.fund_tail_repository = (
         fund_tail_repository
         if fund_tail_repository is not None
@@ -609,6 +618,7 @@ def create_app(
                 job.id,
                 payload,
                 app.state.fund_tail_repository,
+                app.state.fund_tail_opportunity_refresher,
             )
         else:
             background_tasks.add_task(
@@ -618,6 +628,7 @@ def create_app(
                 job.id,
                 payload,
                 app.state.fund_tail_repository,
+                app.state.fund_tail_opportunity_refresher,
             )
 
         return {"job_id": job.id}
@@ -780,6 +791,7 @@ def _run_fund_tail_opportunities_job(
     job_id: str,
     payload: FundTailOpportunityRequest,
     repository,
+    opportunity_refresher,
 ) -> None:
     store.update_job(job_id, status="running", progress=_progress(10, "starting", "发现基金尾盘机会"))
     try:
@@ -787,6 +799,7 @@ def _run_fund_tail_opportunities_job(
             paths,
             payload,
             repository=repository,
+            opportunity_refresher=opportunity_refresher,
             progress=lambda percent, stage, message: store.update_job(
                 job_id,
                 status="running",

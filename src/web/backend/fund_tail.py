@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from scripts.backtest_fund_tail_advice import FUNDS, PROXY_INDEXES, download_inputs, proxy_info_for
 from scripts.daily_fund_tail_advice import build_markdown_report
-from scripts.discover_fund_tail_opportunities import discover_opportunities
+from scripts.discover_fund_tail_opportunities import discover_opportunities, refresh_candidate_advice
 from src.research.fund_tail_backtest import (
     classify_tail_signals,
     evaluate_forward_returns,
@@ -25,6 +25,7 @@ from src.research.fund_tail_backtest import (
 
 FundTailDownloader = Callable[[Path, str, str], None]
 FundTailProxyRefresher = Callable[..., dict[str, Any]]
+FundTailOpportunityRefresher = Callable[..., None]
 ProgressCallback = Callable[[int, str, str], None]
 
 
@@ -101,6 +102,9 @@ class FundTailPaths:
     advice_dir: Path = Path("reports/fund_tail_advice")
     markdown_path: Path = Path("reports/fund_tail_advice/latest.md")
     opportunity_candidate_path: Path = Path("config/fund_tail_candidates.csv")
+    opportunity_data_dir: Path = Path("data/fund_tail_opportunities")
+    opportunity_advice_report_path: Path = Path("reports/fund_tail_opportunity_backtest.csv")
+    opportunity_raw_report_path: Path = Path("reports/fund_tail_opportunity_backtest_raw.csv")
     opportunity_report_path: Path = Path("reports/fund_tail_opportunities.csv")
     opportunity_markdown_path: Path = Path("reports/fund_tail_opportunities/latest.md")
 
@@ -200,15 +204,27 @@ def run_local_fund_tail_opportunities(
     request: FundTailOpportunityRequest,
     *,
     repository=None,
+    opportunity_refresher: FundTailOpportunityRefresher | None = None,
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """Generate opportunity discovery rows from the latest fund-tail advice report."""
-    _report_progress(progress, 30, "loading_report", "读取基金尾盘建议")
+    """Generate opportunity discovery rows from a refreshed candidate-universe report."""
+    refresher = opportunity_refresher or refresh_candidate_advice
+    _report_progress(progress, 25, "refreshing_candidate_report", "刷新基金候选池建议")
+    refresher(
+        trade_date=request.trade_date.isoformat(),
+        candidate_file=paths.opportunity_candidate_path,
+        data_dir=paths.opportunity_data_dir,
+        advice_report=paths.opportunity_advice_report_path,
+        raw_advice_report=paths.opportunity_raw_report_path,
+        start_date="20250101",
+        end_date=request.trade_date.strftime("%Y%m%d"),
+    )
+    _report_progress(progress, 55, "loading_report", "读取基金候选池建议")
     watchlist_codes = _watchlist_codes(repository)
-    _report_progress(progress, 65, "ranking_opportunities", "筛选基金尾盘机会")
+    _report_progress(progress, 75, "ranking_opportunities", "筛选基金尾盘机会")
     result = discover_opportunities(
         trade_date=request.trade_date.isoformat(),
-        advice_report=paths.report_path,
+        advice_report=paths.opportunity_advice_report_path,
         candidate_file=paths.opportunity_candidate_path,
         report=paths.opportunity_report_path,
         markdown=paths.opportunity_markdown_path,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -26,10 +27,50 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Discover fund tail-session opportunities.")
     parser.add_argument("--trade-date", default=date.today().isoformat(), help="Trade date YYYY-MM-DD.")
     parser.add_argument("--advice-report", default="reports/fund_tail_backtest.csv")
+    parser.add_argument("--raw-advice-report", default="reports/fund_tail_opportunity_backtest_raw.csv")
     parser.add_argument("--candidate-file", default="config/fund_tail_candidates.csv")
+    parser.add_argument("--data-dir", default="data/fund_tail_opportunities")
+    parser.add_argument("--start-date", default="20250101", help="Backtest start date YYYYMMDD.")
+    parser.add_argument("--end-date", default=None, help="Backtest end date YYYYMMDD. Defaults to --trade-date.")
+    parser.add_argument(
+        "--refresh-advice",
+        action="store_true",
+        help="Download and generate an advice report for the candidate universe before discovering opportunities.",
+    )
     parser.add_argument("--report", default="reports/fund_tail_opportunities.csv")
     parser.add_argument("--markdown", default="reports/fund_tail_opportunities/latest.md")
     return parser.parse_args()
+
+
+def refresh_candidate_advice(
+    *,
+    trade_date: str,
+    candidate_file: str | Path,
+    data_dir: str | Path,
+    advice_report: str | Path,
+    raw_advice_report: str | Path,
+    start_date: str,
+    end_date: str | None,
+) -> None:
+    actual_end_date = end_date or trade_date.replace("-", "")
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "backtest_fund_tail_advice.py"),
+        "--download",
+        "--candidate-file",
+        str(candidate_file),
+        "--data-dir",
+        str(data_dir),
+        "--report",
+        str(advice_report),
+        "--raw-report",
+        str(raw_advice_report),
+        "--start-date",
+        start_date,
+        "--end-date",
+        actual_end_date,
+    ]
+    subprocess.run(cmd, cwd=ROOT, check=True)
 
 
 def discover_opportunities(
@@ -66,6 +107,16 @@ def discover_opportunities(
 
 def main() -> None:
     args = parse_args()
+    if args.refresh_advice:
+        refresh_candidate_advice(
+            trade_date=args.trade_date,
+            candidate_file=args.candidate_file,
+            data_dir=args.data_dir,
+            advice_report=args.advice_report,
+            raw_advice_report=args.raw_advice_report,
+            start_date=args.start_date,
+            end_date=args.end_date,
+        )
     result = discover_opportunities(
         trade_date=args.trade_date,
         advice_report=args.advice_report,

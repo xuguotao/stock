@@ -312,26 +312,21 @@ def test_fund_tail_api_runs_local_advice_job(tmp_path) -> None:
 
 
 def test_fund_tail_api_runs_opportunity_discovery_job(tmp_path) -> None:
-    advice_report = tmp_path / "fund_tail_backtest.csv"
+    daily_advice_report = tmp_path / "fund_tail_backtest.csv"
+    opportunity_advice_report = tmp_path / "fund_tail_opportunity_backtest.csv"
+    raw_opportunity_advice_report = tmp_path / "fund_tail_opportunity_backtest_raw.csv"
     candidates = tmp_path / "candidates.csv"
     pd.DataFrame(
         [
             {
-                "基金代码": "000311",
-                "基金名称": "景顺长城沪深300增强A",
-                "操作等级": "A",
-                "最终操作建议": "尾盘加仓",
-                "建议原因": "预测优势较强",
-                "预测加仓评分": 72.5,
-                "5日预测上涨概率": 0.68,
-                "5日预测中位数收益": 0.012,
-                "5日预测跌超2%概率": 0.06,
-                "代理匹配等级": "高",
-                "代理匹配度": 0.97,
-                "今日代理涨跌率": "0.85%",
+                "基金代码": "001632",
+                "基金名称": "天弘中证食品饮料ETF联接C",
+                "操作等级": "D",
+                "最终操作建议": "不加仓",
+                "建议原因": "日常观察池旧报告不应参与机会发现",
             }
         ]
-    ).to_csv(advice_report, index=False)
+    ).to_csv(daily_advice_report, index=False)
     candidates.write_text(
         "\n".join(
             [
@@ -341,12 +336,39 @@ def test_fund_tail_api_runs_opportunity_discovery_job(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
+
+    def fake_opportunity_refresher(**kwargs):
+        assert kwargs["advice_report"] == opportunity_advice_report
+        pd.DataFrame(
+            [
+                {
+                    "基金代码": "000311",
+                    "基金名称": "景顺长城沪深300增强A",
+                    "操作等级": "A",
+                    "最终操作建议": "尾盘加仓",
+                    "建议原因": "预测优势较强",
+                    "预测加仓评分": 72.5,
+                    "5日预测上涨概率": 0.68,
+                    "5日预测中位数收益": 0.012,
+                    "5日预测跌超2%概率": 0.06,
+                    "代理匹配等级": "高",
+                    "代理匹配度": 0.97,
+                    "今日代理涨跌率": "0.85%",
+                }
+            ]
+        ).to_csv(kwargs["advice_report"], index=False)
+        pd.DataFrame().to_csv(kwargs["raw_advice_report"], index=False)
+
     app = create_app(
         db_path=tmp_path / "jobs.sqlite3",
-        fund_tail_report_path=advice_report,
+        fund_tail_report_path=daily_advice_report,
         fund_tail_opportunity_candidate_path=candidates,
+        fund_tail_opportunity_data_dir=tmp_path / "opportunity_data",
+        fund_tail_opportunity_advice_report_path=opportunity_advice_report,
+        fund_tail_opportunity_raw_report_path=raw_opportunity_advice_report,
         fund_tail_opportunity_report_path=tmp_path / "opportunities.csv",
         fund_tail_opportunity_markdown_path=tmp_path / "opportunities.md",
+        fund_tail_opportunity_refresher=fake_opportunity_refresher,
         run_jobs_inline=True,
     )
     client = TestClient(app)
