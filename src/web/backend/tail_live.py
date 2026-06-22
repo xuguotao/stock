@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
@@ -32,8 +33,8 @@ class TailLiveSelectionRequest(BaseModel):
 
     trade_date: date = Field(default_factory=date.today)
     symbols: list[str] | None = None
-    limit: int = Field(default=200, ge=1, le=500)
-    universe: Literal["default", "liquid-cache"] = "liquid-cache"
+    limit: int = Field(default=0, ge=0, le=6000)
+    universe: Literal["default", "liquid-cache"] = "default"
     bars_cache_dir: str = "data/cache/bars"
     liquidity_start: date | None = None
     liquidity_end: date | None = None
@@ -42,10 +43,11 @@ class TailLiveSelectionRequest(BaseModel):
     min_market_breadth_above_ma20: float | None = Field(default=None, ge=0, le=1)
     confirmations: int = Field(default=1, ge=1, le=10)
     preview_window_bars: int = Field(default=6, ge=2, le=48)
-    top_n: int = Field(default=5, ge=1, le=50)
+    top_n: int = Field(default=2, ge=1, le=50)
     min_strength: float | None = Field(default=None, ge=0, le=1)
     as_of_time: time | None = None
     ignore_session: bool = False
+    auto_sync_minute5: bool = True
     output_dir: str = "reports/tail_session"
 
 
@@ -61,7 +63,9 @@ def run_tail_live_selection(
     if not scheduler.is_trading_day(request.trade_date):
         raise ValueError(f"{request.trade_date.isoformat()} is not a trading day.")
 
+    timings: dict[str, float] = {}
     _report_progress(progress, 10, "resolving_universe", "解析今日扫描股票池")
+    stage_started = perf_counter()
     aggregator = DataAggregator()
     liquidity_start = request.liquidity_start or request.trade_date - timedelta(days=548)
     liquidity_end = request.liquidity_end or request.trade_date
@@ -78,17 +82,16 @@ def run_tail_live_selection(
     )
     intraday_coverage = _intraday_coverage(aggregator, symbols, request.trade_date)
     scan_as_of_time = _scan_as_of_time(request, scheduler)
+    data_freshness = _data_freshness(intraday_coverage, scan_as_of_time=scan_as_of_time)
+    timings["resolve_and_coverage"] = _elapsed(stage_started)
 
     _report_progress(progress, 30, "market_breadth", "计算市场宽度过滤")
+    stage_started = perf_counter()
     breadth_result = None
     candidates = []
     confirmed = []
     selected = []
-    quotes = (
-        aggregator.get_realtime_quotes(symbols)
-        if request.min_market_breadth_above_ma20 is not None and symbols
-        else None
-    )
+    quotes, quote_status = _safe_realtime_quotes(aggregator, symbols)
     if request.min_market_breadth_above_ma20 is not None:
         breadth_result = calculate_market_breadth_above_ma20(
             symbols=symbols,
@@ -107,10 +110,15 @@ def run_tail_live_selection(
                 breadth_result=breadth_result,
                 blocked_by_market_breadth=True,
                 scan_as_of_time=scan_as_of_time,
+                data_freshness=data_freshness,
+                quote_status=quote_status,
+                stage_timings=timings,
                 progress=progress,
             )
+    timings["quote_and_breadth"] = _elapsed(stage_started)
 
     _report_progress(progress, 55, "scanning_intraday", "扫描尾盘分钟信号")
+    stage_started = perf_counter()
     scanner = IntradayScanner(
         aggregator,
         confirmation_count=request.confirmations,
@@ -133,6 +141,7 @@ def run_tail_live_selection(
         top_n=request.top_n,
         min_strength=request.min_strength,
     )
+    timings["scan_intraday"] = _elapsed(stage_started)
     return _write_live_selection_result(
         request=request,
         symbols=symbols,
@@ -145,6 +154,10 @@ def run_tail_live_selection(
         breadth_result=breadth_result,
         blocked_by_market_breadth=False,
         scan_as_of_time=scan_as_of_time,
+        quotes=quotes,
+        data_freshness=data_freshness,
+        quote_status=quote_status,
+        stage_timings=timings,
         progress=progress,
     )
 
@@ -162,18 +175,26 @@ def _write_live_selection_result(
     breadth_result: Any | None,
     blocked_by_market_breadth: bool,
     scan_as_of_time: time | None,
+    quotes: Any | None = None,
+    data_freshness: dict[str, Any] | None = None,
+    quote_status: dict[str, Any] | None = None,
+    stage_timings: dict[str, float] | None = None,
     progress: ProgressCallback | None,
 ) -> dict[str, Any]:
     _report_progress(progress, 80, "writing_outputs", "写入选股结果文件")
+    stage_started = perf_counter()
     layered_signals = score_tail_signals(ranked_pool or [])
     layered_by_symbol = {row.symbol: row for row in layered_signals}
     mode = _result_mode_from_signal_mode(signal_mode)
     preview_signals = selected if mode == "preview" else []
+    tradability_by_symbol = _tradability_by_symbol(quotes)
+    stale_final_data = _is_stale_for_final_selection(data_freshness)
     final_selected = _final_trade_candidates(
         confirmed,
         top_n=request.top_n,
         min_strength=request.min_strength,
-    ) if mode == "selection" else []
+        tradability_by_symbol=tradability_by_symbol,
+    ) if mode == "selection" and not stale_final_data else []
 
     output_dir = Path(request.output_dir)
     json_path = output_dir / "latest_selection.json"
@@ -202,7 +223,11 @@ def _write_live_selection_result(
         blocked_by_market_breadth=blocked_by_market_breadth,
         requested_scan_limit=request.limit,
         scan_as_of_time=scan_as_of_time,
+        data_freshness=data_freshness,
+        quote_status=quote_status,
     )
+    timings = dict(stage_timings or {})
+    timings["write_outputs"] = _elapsed(stage_started)
     return {
         "mode": mode,
         "trade_date": request.trade_date.isoformat(),
@@ -230,6 +255,7 @@ def _write_live_selection_result(
             top_n=request.top_n,
             min_strength=request.min_strength,
             layered_by_symbol=layered_by_symbol,
+            tradability_by_symbol=tradability_by_symbol,
         ),
         "signal_layers": _signal_layer_counts(layered_signals),
         "watchlist_signals": _layered_rows(layered_signals, "watchlist", mode=mode),
@@ -243,6 +269,7 @@ def _write_live_selection_result(
         "diagnostics": diagnostics,
         "precheck_rows": _precheck_rows(intraday_coverage) if mode == "precheck" else [],
         "strategy_rules": _strategy_rules(request),
+        "stage_timings": timings,
     }
 
 
@@ -255,17 +282,116 @@ def _final_trade_candidates(
     *,
     top_n: int,
     min_strength: float | None,
+    tradability_by_symbol: dict[str, dict[str, Any]] | None = None,
 ) -> list[Any]:
     layered = score_tail_signals(confirmed)
     trade_candidates = [
         row.signal for row in layered
         if row.layer == "strong" and row.action == "trade_candidate"
+        and _is_buyable(row.signal.symbol, tradability_by_symbol)
     ]
     return select_tail_session_signals(
         trade_candidates,
         top_n=top_n,
         min_strength=min_strength,
     )
+
+
+def _safe_realtime_quotes(aggregator: Any, symbols: list[str]) -> tuple[Any | None, dict[str, Any]]:
+    if not symbols:
+        return None, {"status": "empty_universe", "requested_symbols": 0, "covered_symbols": 0, "coverage_ratio": 0.0}
+    getter = getattr(aggregator, "get_realtime_quotes", None)
+    if getter is None:
+        return None, {"status": "unavailable", "requested_symbols": len(symbols), "covered_symbols": 0, "coverage_ratio": 0.0}
+    try:
+        quotes = getter(symbols)
+    except Exception as exc:
+        return None, {
+            "status": "failed",
+            "requested_symbols": len(symbols),
+            "covered_symbols": 0,
+            "coverage_ratio": 0.0,
+            "error": str(exc),
+        }
+    if quotes is None or getattr(quotes, "empty", True) or "symbol" not in quotes.columns:
+        return quotes, {
+            "status": "missing",
+            "requested_symbols": len(symbols),
+            "covered_symbols": 0,
+            "coverage_ratio": 0.0,
+        }
+    covered = len(set(str(symbol) for symbol in quotes["symbol"].dropna()))
+    ratio = covered / len(symbols) if symbols else 0.0
+    status = "ok" if ratio >= 0.95 else "partial"
+    return quotes, {
+        "status": status,
+        "requested_symbols": len(symbols),
+        "covered_symbols": covered,
+        "coverage_ratio": ratio,
+    }
+
+
+def _tradability_by_symbol(quotes: Any | None) -> dict[str, dict[str, Any]]:
+    if quotes is None or getattr(quotes, "empty", True) or "symbol" not in quotes.columns:
+        return {}
+    result = {}
+    for _, row in quotes.iterrows():
+        symbol = str(row.get("symbol", ""))
+        if not symbol:
+            continue
+        price = _float_or_none(row.get("price"))
+        limit_up = _float_or_none(row.get("limit_up"))
+        limit_up_distance = (limit_up / price - 1.0) if price and limit_up else None
+        buyable = True
+        reason = None
+        execution_flag = "executable"
+        score = 100
+        if price is not None and limit_up is not None and limit_up > 0 and price >= limit_up * 0.997:
+            buyable = False
+            reason = "limit_up_not_buyable"
+            execution_flag = "blocked_limit_up"
+            score = 20
+        elif limit_up_distance is not None and limit_up_distance <= 0.02:
+            execution_flag = "near_limit_up"
+            score = 65
+        result[symbol] = {
+            "buyable": buyable,
+            "reason": reason,
+            "price": price,
+            "limit_up": limit_up,
+            "limit_up_distance": limit_up_distance,
+            "execution_flag": execution_flag,
+            "score": score,
+        }
+    return result
+
+
+def _is_buyable(symbol: str, tradability_by_symbol: dict[str, dict[str, Any]] | None) -> bool:
+    if not tradability_by_symbol or symbol not in tradability_by_symbol:
+        return True
+    return bool(tradability_by_symbol[symbol].get("buyable", True))
+
+
+def _default_tradability() -> dict[str, Any]:
+    return {
+        "buyable": True,
+        "reason": None,
+        "price": None,
+        "limit_up": None,
+        "limit_up_distance": None,
+        "execution_flag": "unknown",
+        "score": 50,
+    }
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    return number
 
 
 def _ranked_signal_rows(
@@ -278,6 +404,7 @@ def _ranked_signal_rows(
     top_n: int,
     min_strength: float | None,
     layered_by_symbol: dict[str, LayeredSignal] | None = None,
+    tradability_by_symbol: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     ordered = select_tail_session_signals(confirmed, top_n=None, min_strength=None)
     if not ordered and ranked_pool:
@@ -298,6 +425,10 @@ def _ranked_signal_rows(
                 filter_reason = "below_candidate_threshold"
             elif min_strength is not None and signal.strength < min_strength:
                 filter_reason = "below_min_strength"
+            elif not _is_buyable(signal.symbol, tradability_by_symbol):
+                filter_reason = (tradability_by_symbol or {}).get(signal.symbol, {}).get("reason") or "not_buyable"
+            elif layered is not None and _has_pullback_risk(layered):
+                filter_reason = "tail_pullback_risk"
             elif layered is not None and layered.action != "trade_candidate":
                 filter_reason = "v2_not_trade_candidate"
             elif index > top_n:
@@ -313,9 +444,31 @@ def _ranked_signal_rows(
             "rank": index,
             "status": status,
             "filter_reason": filter_reason,
+            "tradability": (tradability_by_symbol or {}).get(signal.symbol, _default_tradability()),
+            "score_breakdown": _score_breakdown(signal, layered),
         })
         rows.append(row)
     return rows
+
+
+def _score_breakdown(signal: Any, layered: LayeredSignal | None) -> dict[str, Any]:
+    volume_component = min(100.0, max(0.0, float(signal.volume_ratio) / 2.5 * 100))
+    return_component = min(100.0, max(0.0, float(signal.tail_return) / 0.03 * 100))
+    pullback_penalty = min(50.0, abs(min(0.0, float(getattr(signal, "pullback_from_high", 0.0)))) * 500)
+    strength_component = min(100.0, max(0.0, float(signal.strength) * 100))
+    return {
+        "strength": round(strength_component, 2),
+        "volume_ratio": round(volume_component, 2),
+        "tail_return": round(return_component, 2),
+        "pullback_penalty": round(pullback_penalty, 2),
+        "v2_total": layered.total_score if layered is not None else None,
+        "v2_breakdown": {
+            "tail_money": layered.breakdown.tail_money,
+            "price_action": layered.breakdown.price_action,
+            "liquidity": layered.breakdown.liquidity,
+            "risk_control": layered.breakdown.risk_control,
+        } if layered is not None else None,
+    }
 
 
 def _signal_rows_with_credibility(
@@ -327,10 +480,36 @@ def _signal_rows_with_credibility(
     rows = tail_session_selection_rows(signals)
     for row, signal in zip(rows, signals, strict=False):
         row["credibility"] = _credibility(signal, mode=mode)
+        row["next_day_plan"] = _next_day_plan(signal, mode=mode)
         layered = (layered_by_symbol or {}).get(signal.symbol)
         if layered is not None:
             row.update(_v2_fields(layered))
     return rows
+
+
+def _next_day_plan(signal: Any, *, mode: str) -> dict[str, Any]:
+    if mode == "preview":
+        return {
+            "entry_policy": "wait_tail_confirmation",
+            "gap_stop_return": None,
+            "intraday_stop_return": None,
+            "take_profit_return": None,
+            "rules": ["盘中预演不执行，必须等 14:50 后正式尾盘确认。"],
+        }
+    return {
+        "entry_policy": "next_open_or_no_chase",
+        "sell_policy": "open_or_morning_strength",
+        "gap_stop_return": -0.015,
+        "intraday_stop_return": -0.03,
+        "take_profit_return": 0.05,
+        "rules": [
+            "次日优先按开盘和早盘强弱处理，不默认持有到收盘。",
+            "次日低开超过 1.5% 不加仓，优先退出或放弃。",
+            "持有后相对尾盘信号价回撤超过 3% 触发止损。",
+            "次日冲高超过 5% 后不能继续放量维持，分批止盈。",
+            "涨停或接近涨停无法买入时，不追单，保留为策略命中记录。",
+        ],
+    }
 
 
 def _layered_rows(
@@ -374,6 +553,10 @@ def _v2_fields(layered: LayeredSignal) -> dict[str, Any]:
             "risk_control": layered.breakdown.risk_control,
         },
     }
+
+
+def _has_pullback_risk(layered: LayeredSignal) -> bool:
+    return any("冲高回落" in risk for risk in layered.risks)
 
 
 def _credibility(signal: Any, *, mode: str) -> dict[str, Any]:
@@ -577,6 +760,8 @@ def _diagnostics(
     blocked_by_market_breadth: bool,
     requested_scan_limit: int,
     scan_as_of_time: time | None,
+    data_freshness: dict[str, Any] | None = None,
+    quote_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     reason = None
     message = None
@@ -584,6 +769,13 @@ def _diagnostics(
     if not symbols:
         reason = "scan_universe_empty"
         message = "没有解析到可扫描股票，请检查股票池、缓存目录或手动输入股票。"
+    elif (data_freshness or {}).get("status") == "stale" and _is_stale_for_final_selection(data_freshness):
+        reason = "data_stale"
+        message = (
+            f"当前分钟数据最新到 {(data_freshness or {}).get('latest_time') or '-'}，"
+            f"低于本次运行目标 {(data_freshness or {}).get('target_time') or '-'}；"
+            "本次结果降级为数据过期，不生成最终可交易选股。"
+        )
     elif blocked_by_market_breadth:
         reason = "blocked_by_market_breadth"
         message = "市场宽度未达到阈值，本次按风控规则不扫描尾盘信号。"
@@ -635,7 +827,57 @@ def _diagnostics(
         "market_breadth": _market_breadth_row(breadth_result),
         "requested_scan_limit": requested_scan_limit,
         "resolved_scan_count": len(symbols),
+        "data_freshness": data_freshness or {},
+        "quote_status": quote_status or {},
     }
+
+
+def _data_freshness(
+    intraday_coverage: dict[str, Any],
+    *,
+    scan_as_of_time: time | None,
+) -> dict[str, Any]:
+    latest = _coerce_time(intraday_coverage.get("latest_time"))
+    target = scan_as_of_time
+    if latest is None:
+        return {
+            "status": "missing",
+            "latest_time": None,
+            "target_time": target.isoformat() if target else None,
+            "lag_minutes": None,
+            "tradable": False,
+        }
+    if target is None:
+        return {
+            "status": "fresh",
+            "latest_time": latest.isoformat(),
+            "target_time": None,
+            "lag_minutes": 0,
+            "tradable": latest >= FINAL_SELECTION_START,
+        }
+    lag_minutes = _minutes_between(latest, target)
+    return {
+        "status": "fresh" if latest >= target else "stale",
+        "latest_time": latest.isoformat(),
+        "target_time": target.isoformat(),
+        "lag_minutes": lag_minutes,
+        "tradable": latest >= target and latest >= FINAL_SELECTION_START,
+    }
+
+
+def _is_stale_for_final_selection(data_freshness: dict[str, Any] | None) -> bool:
+    if not data_freshness or data_freshness.get("status") != "stale":
+        return False
+    target = _coerce_time(data_freshness.get("target_time"))
+    return target is not None and target >= FINAL_SELECTION_START
+
+
+def _minutes_between(start: time, end: time) -> int:
+    return (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute)
+
+
+def _elapsed(started_at: float) -> float:
+    return round(max(0.0, perf_counter() - started_at), 4)
 
 
 def _latest_time_before_final_selection(

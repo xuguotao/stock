@@ -73,7 +73,7 @@ def resolve_scan_symbols(
             )
         symbols = [row["symbol"] for row in ranking]
         if symbols:
-            if len(symbols) >= limit:
+            if limit <= 0 or len(symbols) >= limit:
                 return symbols
             _append_default_scan_symbols(aggregator, symbols, limit)
             return symbols
@@ -168,7 +168,7 @@ def _append_default_scan_symbols(aggregator: Any, symbols: list[str], limit: int
             continue
         symbols.append(symbol)
         seen.add(symbol)
-        if len(symbols) >= limit:
+        if limit > 0 and len(symbols) >= limit:
             break
 
 

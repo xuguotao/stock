@@ -217,6 +217,9 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
         },
     ]
     sync_calls = []
+    repair_calls = []
+    index_calls = []
+    quality_calls = []
 
     def fake_status():
         return status_calls[min(len(sync_calls), 1)]
@@ -260,6 +263,18 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
             "diagnostics": {"empty_reason": ""},
         }
 
+    def fake_daily_repair(*, trade_date):
+        repair_calls.append(trade_date.isoformat())
+        return {"trade_date": trade_date.isoformat(), "inserted_rows": 1}
+
+    def fake_index_sync(*, start, end):
+        index_calls.append({"start": start.isoformat(), "end": end.isoformat()})
+        return {"start": start.isoformat(), "end": end.isoformat(), "inserted_rows": 2, "failures": []}
+
+    def fake_quality_snapshot(*, quality=None):
+        quality_calls.append(quality)
+        return {"checked_at": "2026-06-12 16:00:00", "rows": 4}
+
     class FakeSignalRepository:
         def save_selection_result(self, *, job_id, result):
             return {"trade_date": result["trade_date"], "signal_count": 1, "selected_count": 1}
@@ -275,6 +290,9 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
         data_status_runner=fake_status,
         tail_live_runner=fake_tail_runner,
         tail_signal_repository=FakeSignalRepository(),
+        daily_repair_runner=fake_daily_repair,
+        index_daily_sync_runner=fake_index_sync,
+        quality_snapshot_writer=fake_quality_snapshot,
     )
     client = TestClient(app)
 
@@ -291,6 +309,17 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
     assert [call["symbols"] for call in sync_calls] == [None, ["000002.SZ"]]
     assert job["result"]["trade_date"] == "2026-06-12"
     assert job["result"]["retry"]["success"] == 1
+    assert repair_calls == ["2026-06-12"]
+    assert index_calls == [{"start": "2026-06-06", "end": "2026-06-12"}]
+    assert len(quality_calls) == 1
+    assert job["result"]["daily_repair"] == {"trade_date": "2026-06-12", "inserted_rows": 1}
+    assert job["result"]["index_daily"] == {
+        "start": "2026-06-06",
+        "end": "2026-06-12",
+        "inserted_rows": 2,
+        "failures": [],
+    }
+    assert job["result"]["health_snapshot"] == {"checked_at": "2026-06-12 16:00:00", "rows": 4}
     assert job["result"]["verification"]["minute5_complete_symbols"] == 2
     assert job["result"]["strategy_review"] == {
         "mode": "selection",
@@ -303,6 +332,35 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
             "outcomes": {"signal_date": "2026-06-12", "outcome_count": 0, "missing_symbols": ["000001.SZ"]},
         },
     }
+
+
+def test_data_ops_scheduler_endpoint_can_run_maintenance_once(tmp_path) -> None:
+    maintenance_calls = []
+
+    def fake_auto_maintenance():
+        maintenance_calls.append("run")
+        return {"job_id": "auto-1", "status": "success"}
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        run_jobs_inline=True,
+        auto_start_minute5_monitor=False,
+        auto_start_quote_snapshot_monitor=False,
+        auto_start_data_ops_scheduler=False,
+        data_ops_maintenance_runner=fake_auto_maintenance,
+    )
+    client = TestClient(app)
+
+    initial = client.get("/api/data/ops-scheduler").json()
+    assert initial["running"] is False
+    assert initial["tasks"]["post_close_maintenance"]["enabled"] is True
+
+    response = client.post("/api/data/ops-scheduler/run-once")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["last_result"] == {"job_id": "auto-1", "status": "success"}
+    assert maintenance_calls == ["run"]
 
 
 def test_clickhouse_dataset_build_api_runs_inline_job_and_lists_dataset(tmp_path) -> None:

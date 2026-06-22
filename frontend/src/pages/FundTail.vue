@@ -4,9 +4,8 @@
       <h1 class="page-title">基金尾盘</h1>
       <div class="toolbar">
         <el-date-picker v-model="tradeDate" type="date" value-format="YYYY-MM-DD" />
-        <el-switch v-model="refreshData" active-text="刷新数据" />
-        <el-button :loading="submitting" type="primary" @click="runAdvice">生成建议</el-button>
-        <el-button :loading="loading" @click="loadAll">刷新</el-button>
+        <el-button :loading="submitting" type="primary" @click="runAdvice">刷新行情并生成建议</el-button>
+        <el-button :loading="loading" @click="loadAll">刷新页面</el-button>
       </div>
     </div>
 
@@ -34,6 +33,49 @@
       <div class="metric-card">
         <div class="metric-label">报告更新</div>
         <div class="metric-value">{{ formatDateTime(report.report_updated_at) }}</div>
+      </div>
+    </div>
+
+    <div class="panel compact-panel">
+      <div class="page-header panel-title-row">
+        <h2 class="page-title">数据可信度</h2>
+        <div class="toolbar">
+          <el-tag :type="trustStatus.type" effect="plain">{{ trustStatus.text }}</el-tag>
+          <el-tag effect="plain">报告 {{ formatDateTime(report.report_updated_at) }}</el-tag>
+        </div>
+      </div>
+      <div class="fund-trust-grid">
+        <div class="fund-trust-item">
+          <div class="metric-label">代理行情</div>
+          <div class="fund-trust-value">{{ proxyFreshCount }}/{{ dataStatus.length }}</div>
+          <div class="fund-trust-sub">最新 {{ latestProxyDate ?? '-' }}</div>
+        </div>
+        <div class="fund-trust-item">
+          <div class="metric-label">基金净值</div>
+          <div class="fund-trust-value">{{ navAvailableCount }}/{{ dataStatus.length }}</div>
+          <div class="fund-trust-sub">最新 {{ latestNavDate ?? '-' }}</div>
+        </div>
+        <div class="fund-trust-item">
+          <div class="metric-label">建议结果</div>
+          <div class="fund-trust-value">{{ actionableRows.length }} / {{ sellAlertRows.length }} / {{ watchRows.length }}</div>
+          <div class="fund-trust-sub">可操作 / 减仓提醒 / 观察等待</div>
+        </div>
+        <div class="fund-trust-item">
+          <div class="metric-label">数据问题</div>
+          <div class="fund-trust-value">{{ dataIssueRows.length }}</div>
+          <div class="fund-trust-sub">{{ staleProxyCount ? `代理滞后 ${staleProxyCount}` : '代理行情正常' }}</div>
+        </div>
+        <div class="fund-trust-item">
+          <div class="metric-label">数据源</div>
+          <div class="fund-trust-value">{{ proxyRefreshSource }}</div>
+          <div class="fund-trust-sub">{{ proxyRefreshTime }}</div>
+        </div>
+      </div>
+      <div class="fund-action-strip">
+        <el-tag type="success" effect="plain">可操作 {{ actionableRows.length }}</el-tag>
+        <el-tag type="warning" effect="plain">减仓提醒 {{ sellAlertRows.length }}</el-tag>
+        <el-tag type="info" effect="plain">观察等待 {{ watchRows.length }}</el-tag>
+        <el-tag :type="dataIssueRows.length ? 'danger' : 'success'" effect="plain">数据问题 {{ dataIssueRows.length }}</el-tag>
       </div>
     </div>
 
@@ -90,17 +132,29 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="成本净值" width="104" align="right">
-          <template #default="{ row }">{{ row.status === 'holding' ? formatOptionalNumber(row.position_cost) : '-' }}</template>
+        <el-table-column label="最新净值" width="104" align="right">
+          <template #default="{ row }">{{ formatOptionalNumber(row.latest_nav) }}</template>
         </el-table-column>
-        <el-table-column label="持仓金额" width="112" align="right">
-          <template #default="{ row }">{{ row.status === 'holding' ? formatMoney(row.position_amount) : '-' }}</template>
-        </el-table-column>
-        <el-table-column label="浮盈亏%" width="104" align="right">
+        <el-table-column label="代理涨跌" width="104" align="right">
           <template #default="{ row }">
-            <span :class="returnClass(row.position_return_pct)">
-              {{ row.status === 'holding' ? formatOptionalPercent(row.position_return_pct) : '-' }}
+            <span :class="returnClass(row.proxy_return_pct)">
+              {{ formatOptionalPercent(row.proxy_return_pct) }}
             </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="预估涨跌" width="104" align="right">
+          <template #default="{ row }">
+            <span :class="returnClass(row.estimated_change_pct)">
+              {{ formatOptionalPercent(row.estimated_change_pct) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="数据日期" width="152">
+          <template #default="{ row }">
+            <div class="fund-date-stack">
+              <span>净值 {{ row.latest_nav_date || '-' }}</span>
+              <span>代理 {{ row.latest_proxy_date || '-' }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="note" label="备注" min-width="180" show-overflow-tooltip />
@@ -116,7 +170,7 @@
     <div class="panel">
       <div class="page-header panel-title-row">
         <h2 class="page-title">基金尾盘建议</h2>
-        <el-button :disabled="!activeJobId" @click="refreshJob">刷新任务</el-button>
+        <el-button :loading="submitting" @click="runAdvice">刷新行情并重算建议</el-button>
       </div>
       <el-table :data="adviceRows" height="520" :default-sort="{ prop: '操作等级', order: 'ascending' }">
         <el-table-column prop="基金代码" label="代码" width="86" fixed />
@@ -351,7 +405,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type FundTailDataStatusItem, type FundTailReportResponse, type FundTailUniverseItem, type FundWatchlistItem, type JobRecord, type JobStatus } from '../api/client'
 
@@ -367,6 +421,7 @@ const report = ref<FundTailReportResponse>({
   rows: [],
   markdown: '',
   data_refreshed: false,
+  proxy_refresh: null,
   data_status: [],
   report_path: '',
   markdown_path: '',
@@ -376,7 +431,7 @@ const report = ref<FundTailReportResponse>({
 const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
 const tradeDate = ref(new Date().toISOString().slice(0, 10))
-const refreshData = ref(true)
+const proxyRefreshTimer = ref<number | null>(null)
 const props = defineProps<{
   jobId?: string
 }>()
@@ -391,13 +446,13 @@ type WatchlistForm = Omit<FundWatchlistItem, 'position_return_pct'> & {
   position_return_pct: number | null
 }
 
-const dataStatus = computed<FundTailDataStatusItem[]>(() => report.value.data_status?.length ? report.value.data_status : universe.value)
+const dataStatus = computed<FundTailDataStatusItem[]>(() => universe.value.length ? universe.value : report.value.data_status ?? [])
 const filteredWatchlist = computed(() => {
   if (watchlistStatusFilter.value === 'all') return watchlist.value
   return watchlist.value.filter((item) => item.status === watchlistStatusFilter.value)
 })
 const dataStatusByCode = computed(() => new Map(dataStatus.value.map((item) => [item.code, item])))
-const adviceRows = computed(() => report.value.rows.map((row) => {
+const adviceRows = computed<AdviceRow[]>(() => report.value.rows.map((row) => {
   const code = String(row['基金代码'] ?? '')
   const status = dataStatusByCode.value.get(code)
   return {
@@ -405,11 +460,33 @@ const adviceRows = computed(() => report.value.rows.map((row) => {
     NAV日期: status?.latest_nav_date ?? '',
     Proxy日期: status?.latest_proxy_date ?? '',
     数据状态: fundDataState(status)
-  }
+  } as AdviceRow
 }))
 const latestProxyDate = computed(() => latestDate(dataStatus.value.map((item) => item.latest_proxy_date)))
+const latestNavDate = computed(() => latestDate(dataStatus.value.map((item) => item.latest_nav_date)))
+const proxyFreshCount = computed(() => dataStatus.value.filter((item) => isFreshForTradeDate(item.latest_proxy_date)).length)
+const navAvailableCount = computed(() => dataStatus.value.filter((item) => item.has_nav && Boolean(item.latest_nav_date)).length)
 const staleProxyCount = computed(() => dataStatus.value.filter((item) => !isFreshForTradeDate(item.latest_proxy_date)).length)
 const normalDataCount = computed(() => dataStatus.value.filter((item) => fundDataState(item) === '正常').length)
+const actionableRows = computed(() => adviceRows.value.filter((row) => ['尾盘加仓', '小额试探'].includes(String(row['最终操作建议'] ?? ''))))
+const sellAlertRows = computed(() => adviceRows.value.filter((row) => {
+  const advice = String(row['卖出建议'] ?? '')
+  return advice !== '' && advice !== '不卖出'
+}))
+const dataIssueRows = computed(() => adviceRows.value.filter((row) => String(row['数据状态'] ?? '') !== '正常'))
+const watchRows = computed(() => adviceRows.value.filter((row) => {
+  const code = String(row['基金代码'] ?? '')
+  return !actionableRows.value.some((item) => String(item['基金代码'] ?? '') === code)
+    && !sellAlertRows.value.some((item) => String(item['基金代码'] ?? '') === code)
+    && !dataIssueRows.value.some((item) => String(item['基金代码'] ?? '') === code)
+}))
+const trustStatus = computed(() => {
+  if (!dataStatus.value.length) return { type: 'info' as const, text: '等待数据' }
+  if (staleProxyCount.value > 0 || dataIssueRows.value.length > 0) return { type: 'warning' as const, text: '需要核对' }
+  return { type: 'success' as const, text: '可用' }
+})
+const proxyRefreshSource = computed(() => String(report.value.proxy_refresh?.source ?? (report.value.data_refreshed ? 'legacy' : '-')))
+const proxyRefreshTime = computed(() => String(report.value.proxy_refresh?.latest_timestamp ?? '最新刷新时间 -'))
 const jobProgressPercent = computed(() => Math.max(0, Math.min(100, Number(job.value?.progress?.percent ?? 0))))
 const jobProgressStatus = computed(() => {
   if (job.value?.status === 'success') return 'success'
@@ -429,14 +506,40 @@ async function loadAll() {
     watchlist.value = watchlistResponse.items
     report.value = {
       ...reportResponse,
-      data_refreshed: report.value.data_refreshed ?? reportResponse.data_refreshed,
-      data_status: report.value.data_status?.length ? report.value.data_status : reportResponse.data_status
+      data_refreshed: reportResponse.data_refreshed ?? false,
+      proxy_refresh: reportResponse.proxy_refresh ?? null,
+      data_status: reportResponse.data_status ?? universeResponse.items
     }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载基金尾盘数据失败')
   } finally {
     loading.value = false
   }
+}
+
+async function refreshProxyData(silent = false) {
+  try {
+    const response = await api.refreshFundTailProxy({ trade_date: tradeDate.value })
+    universe.value = response.universe
+    watchlist.value = response.items
+    report.value = {
+      ...report.value,
+      data_refreshed: true,
+      proxy_refresh: response.proxy_refresh
+    }
+    if (!silent) ElMessage.success('基金代理行情已刷新')
+  } catch (error) {
+    if (!silent) ElMessage.error(error instanceof Error ? error.message : '刷新基金代理行情失败')
+  }
+}
+
+function startAutoProxyRefresh() {
+  if (proxyRefreshTimer.value !== null) {
+    window.clearInterval(proxyRefreshTimer.value)
+  }
+  proxyRefreshTimer.value = window.setInterval(() => {
+    void refreshProxyData(true)
+  }, 60_000)
 }
 
 function emptyWatchlistForm(): WatchlistForm {
@@ -516,7 +619,7 @@ async function runAdvice() {
   try {
     const response = await api.submitFundTailAdvice({
       trade_date: tradeDate.value,
-      refresh_data: refreshData.value
+      refresh_data: true
     })
     activeJobId.value = response.job_id
     const completed = await pollJobUntilDone(response.job_id)
@@ -555,6 +658,7 @@ function applyJobResult(value: Record<string, unknown>) {
     rows: result.rows ?? [],
     markdown: result.markdown ?? '',
     data_refreshed: result.data_refreshed ?? false,
+    proxy_refresh: result.proxy_refresh ?? null,
     data_status: result.data_status ?? [],
     report_path: result.report_path ?? '',
     markdown_path: result.markdown_path ?? '',
@@ -786,5 +890,16 @@ watch(
   { immediate: true }
 )
 
-onMounted(loadAll)
+onMounted(async () => {
+  await loadAll()
+  await refreshProxyData(true)
+  startAutoProxyRefresh()
+})
+
+onBeforeUnmount(() => {
+  if (proxyRefreshTimer.value !== null) {
+    window.clearInterval(proxyRefreshTimer.value)
+    proxyRefreshTimer.value = null
+  }
+})
 </script>

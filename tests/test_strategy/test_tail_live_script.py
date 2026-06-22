@@ -225,6 +225,36 @@ def test_resolve_scan_symbols_balances_default_pool_across_exchanges(tmp_path) -
     assert symbols == ["000001.SZ", "600000.SH", "000002.SZ", "600004.SH"]
 
 
+def test_resolve_scan_symbols_limit_zero_uses_full_non_st_market(tmp_path) -> None:
+    from src.data.models import StockInfo
+
+    class FullMarketAggregator:
+        def get_stock_list(self):
+            return [
+                StockInfo(symbol="000001.SZ", code="000001", name="平安银行"),
+                StockInfo(symbol="600000.SH", code="600000", name="浦发银行"),
+                StockInfo(symbol="000004.SZ", code="000004", name="*ST国华", is_st=True),
+                StockInfo(symbol="300750.SZ", code="300750", name="宁德时代"),
+            ]
+
+        def get_csi300_symbols(self):
+            return ["000001.SZ"]
+
+    symbols = resolve_scan_symbols(
+        aggregator=FullMarketAggregator(),
+        raw_symbols=None,
+        limit=0,
+        universe="default",
+        bars_cache_dir=tmp_path,
+        liquidity_start=date(2025, 1, 1),
+        liquidity_end=date(2025, 1, 10),
+        liquidity_min_bars=2,
+        liquidity_min_end_date=None,
+    )
+
+    assert symbols == ["000001.SZ", "600000.SH", "300750.SZ"]
+
+
 def test_resolve_scan_symbols_falls_back_to_default_pool_when_liquid_cache_empty(tmp_path) -> None:
     symbols = resolve_scan_symbols(
         aggregator=FakeAggregator(),

@@ -19,6 +19,9 @@ class TailSessionSignal:
     volume_ratio: float
     tail_return: float
     reason: str
+    tail_high_return: float = 0.0
+    pullback_from_high: float = 0.0
+    close_position: float = 1.0
 
 
 class IntradayScanner:
@@ -63,8 +66,9 @@ class IntradayScanner:
         """Return scoreable scanned symbols and threshold-passing candidates in one pass."""
         scored = []
         candidates = []
+        bars_by_symbol = self._intraday_bars_by_symbol(symbols, trade_date)
         for symbol in symbols:
-            bars = self.aggregator.get_intraday_bars(symbol, trade_date, self.frequency)
+            bars = bars_by_symbol.get(symbol, pd.DataFrame())
             bars = self._bars_until_max_time(bars)
             scored_signal = self._score_symbol(symbol, trade_date, bars)
             if scored_signal is None:
@@ -94,8 +98,9 @@ class IntradayScanner:
         """Return provisional signals using the latest available intraday bars."""
         scored = []
         candidates = []
+        bars_by_symbol = self._intraday_bars_by_symbol(symbols, trade_date)
         for symbol in symbols:
-            bars = self.aggregator.get_intraday_bars(symbol, trade_date, self.frequency)
+            bars = bars_by_symbol.get(symbol, pd.DataFrame())
             bars = self._bars_until_max_time(bars)
             scored_signal = self._score_recent_window(symbol, trade_date, bars, preview_window_bars)
             if scored_signal is None:
@@ -115,6 +120,17 @@ class IntradayScanner:
             reverse=True,
         )
         return ranked, candidates
+
+    def _intraday_bars_by_symbol(self, symbols: list[str], trade_date: date) -> dict[str, pd.DataFrame]:
+        batch_fetcher = getattr(self.aggregator, "get_intraday_bars_batch", None)
+        if batch_fetcher is not None:
+            bars = batch_fetcher(symbols, trade_date, self.frequency)
+            if bars is not None and not bars.empty and "symbol" in bars.columns:
+                return {symbol: frame.copy() for symbol, frame in bars.groupby("symbol", sort=False)}
+        return {
+            symbol: self.aggregator.get_intraday_bars(symbol, trade_date, self.frequency)
+            for symbol in symbols
+        }
 
     def confirm(self, candidates: list[TailSessionSignal]) -> list[TailSessionSignal]:
         """Require a symbol to pass several consecutive scans before trading."""
@@ -197,6 +213,11 @@ class IntradayScanner:
             return None
 
         tail_return = (last_close - first_open) / first_open
+        tail_high = float(tail["high"].max()) if "high" in tail.columns else max(float(tail["close"].max()), last_close)
+        tail_low = float(tail["low"].min()) if "low" in tail.columns else min(float(tail["close"].min()), last_close)
+        tail_high_return = (tail_high - first_open) / first_open if first_open > 0 else 0.0
+        pullback_from_high = (last_close - tail_high) / tail_high if tail_high > 0 else 0.0
+        close_position = (last_close - tail_low) / (tail_high - tail_low) if tail_high > tail_low else 1.0
         strength = min(1.0, 0.5 * (volume_ratio / self.volume_ratio_threshold) + 10 * max(tail_return, 0))
         return TailSessionSignal(
             symbol=symbol,
@@ -205,7 +226,13 @@ class IntradayScanner:
             last_price=last_close,
             volume_ratio=volume_ratio,
             tail_return=tail_return,
-            reason=f"tail price-volume confirmation: volume_ratio={volume_ratio:.2f}, return={tail_return:.2%}",
+            reason=(
+                f"tail price-volume confirmation: volume_ratio={volume_ratio:.2f}, "
+                f"return={tail_return:.2%}, pullback={pullback_from_high:.2%}"
+            ),
+            tail_high_return=tail_high_return,
+            pullback_from_high=pullback_from_high,
+            close_position=close_position,
         )
 
     def _score_recent_window(
@@ -242,6 +269,11 @@ class IntradayScanner:
 
         volume_ratio = preview_volume / base_volume
         preview_return = (last_close - first_open) / first_open
+        preview_high = float(preview["high"].max()) if "high" in preview.columns else max(float(preview["close"].max()), last_close)
+        preview_low = float(preview["low"].min()) if "low" in preview.columns else min(float(preview["close"].min()), last_close)
+        preview_high_return = (preview_high - first_open) / first_open if first_open > 0 else 0.0
+        pullback_from_high = (last_close - preview_high) / preview_high if preview_high > 0 else 0.0
+        close_position = (last_close - preview_low) / (preview_high - preview_low) if preview_high > preview_low else 1.0
         strength = min(1.0, 0.5 * (volume_ratio / self.volume_ratio_threshold) + 10 * max(preview_return, 0))
         return TailSessionSignal(
             symbol=symbol,
@@ -251,4 +283,7 @@ class IntradayScanner:
             volume_ratio=volume_ratio,
             tail_return=preview_return,
             reason=f"intraday preview: volume_ratio={volume_ratio:.2f}, return={preview_return:.2%}",
+            tail_high_return=preview_high_return,
+            pullback_from_high=pullback_from_high,
+            close_position=close_position,
         )

@@ -4,6 +4,7 @@
       <h1 class="page-title">今日尾盘选股</h1>
       <div class="toolbar">
         <el-button :loading="submitting" type="primary" @click="submit">运行选股</el-button>
+        <el-button :loading="loadingDataHealth" @click="loadDataHealth">刷新健康度</el-button>
         <el-button :disabled="!activeJobId" @click="refreshJob">刷新结果</el-button>
       </div>
     </div>
@@ -24,14 +25,15 @@
           <el-col :span="6">
             <el-form-item label="股票池">
               <el-select v-model="form.universe">
-                <el-option label="本地流动性池" value="liquid-cache" />
-                <el-option label="默认池" value="default" />
+                <el-option label="全市场非ST" value="default" />
+                <el-option label="流动性排序池" value="liquid-cache" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="6">
             <el-form-item label="扫描数量">
-              <el-input-number v-model="form.limit" :min="1" :max="500" />
+              <el-input-number v-model="form.limit" :min="0" :max="6000" />
+              <div class="form-item-hint">{{ scanLimitDisplayText }}</div>
             </el-form-item>
           </el-col>
           <el-col :span="6">
@@ -88,12 +90,80 @@
             </el-form-item>
           </el-col>
           <el-col :span="6">
+            <el-form-item label="运行前补数据">
+              <el-switch v-model="form.auto_sync_minute5" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="6">
             <el-form-item label="输出目录">
               <el-input v-model="form.output_dir" />
             </el-form-item>
           </el-col>
         </el-row>
       </el-form>
+    </div>
+
+    <div class="panel compact-panel">
+      <div class="page-header panel-title-row">
+        <h2 class="page-title">选股数据健康度</h2>
+        <div class="toolbar">
+          <el-tag :type="qualityTagType(dataHealth?.quality?.status)" effect="plain">
+            {{ dataHealth?.quality?.status ?? 'loading' }}
+          </el-tag>
+          <el-tag effect="plain">{{ dataHealthUpdateText }}</el-tag>
+        </div>
+      </div>
+      <div class="health-status-grid">
+        <div class="health-status-item" v-for="item in dataHealthItems" :key="item.label">
+          <div class="health-status-head">
+            <span class="health-status-label">{{ item.label }}</span>
+            <el-tag :type="qualityTagType(item.status)" effect="plain" size="small">{{ item.status }}</el-tag>
+          </div>
+          <div class="health-status-value">{{ item.value }}</div>
+        </div>
+      </div>
+      <div v-if="dataHealthIssues.length" class="diagnostic-message muted">
+        异常：{{ dataHealthIssues.join('，') }}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="page-header panel-title-row">
+        <h2 class="page-title">运行记录</h2>
+        <div class="toolbar">
+          <el-tag effect="plain">{{ runHistory.length }}</el-tag>
+          <el-button :loading="loadingHistory" @click="loadRunHistory">刷新记录</el-button>
+        </div>
+      </div>
+      <el-table
+        :data="runHistory"
+        height="260"
+        highlight-current-row
+        empty-text="暂无运行记录"
+        @row-click="selectRunHistory"
+      >
+        <el-table-column label="运行时间" min-width="170">
+          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="交易日" width="120">
+          <template #default="{ row }">{{ row.params?.trade_date ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="statusType(row.status)" effect="plain">{{ row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="模式" width="110">
+          <template #default="{ row }">{{ row.result?.mode ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column label="扫描/入选" width="120" align="right">
+          <template #default="{ row }">{{ runHistorySummary(row) }}</template>
+        </el-table-column>
+        <el-table-column label="进度" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.progress?.message ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="id" label="任务ID" min-width="240" show-overflow-tooltip />
+      </el-table>
     </div>
 
     <div v-if="job" class="panel compact-panel">
@@ -111,10 +181,12 @@
       </div>
     </div>
 
-    <div v-if="result" class="metric-grid">
-      <div class="metric-card" v-for="item in summaryItems" :key="item.label">
-        <div class="metric-label">{{ item.label }}</div>
-        <div class="metric-value">{{ item.value }}</div>
+    <div v-if="result" class="panel compact-panel">
+      <div class="result-status-grid">
+        <div class="result-status-item" v-for="item in summaryItems" :key="item.label">
+          <div class="result-status-label">{{ item.label }}</div>
+          <div class="result-status-value">{{ item.value }}</div>
+        </div>
       </div>
     </div>
 
@@ -127,14 +199,18 @@
         <el-tag :type="resultMode === 'precheck' ? 'warning' : 'success'" effect="plain">
           {{ resultModeText }}
         </el-tag>
-        <el-tag effect="plain">分钟数据 {{ diagnostics.has_intraday_data_count ?? 0 }} / {{ diagnostics.checked_intraday_count ?? 0 }}</el-tag>
+        <el-tag effect="plain">抽样分钟 {{ diagnostics.has_intraday_data_count ?? 0 }} / {{ diagnostics.checked_intraday_count ?? 0 }}</el-tag>
         <el-tag effect="plain">扫描 {{ diagnostics.resolved_scan_count ?? result?.scanned_count ?? 0 }} / {{ diagnostics.requested_scan_limit ?? form.limit }}</el-tag>
+        <el-tag v-if="diagnostics.minute5_sync" effect="plain">补数据 {{ diagnostics.minute5_sync.inserted_rows ?? 0 }} 行</el-tag>
         <el-tag v-if="diagnostics.latest_intraday_time" effect="plain">最新分钟 {{ diagnostics.latest_intraday_time }}</el-tag>
         <el-tag v-if="diagnostics.scan_as_of_time" effect="plain">扫描截至 {{ diagnostics.scan_as_of_time }}</el-tag>
         <el-tag effect="plain">可评分 {{ diagnostics.scoreable_count ?? 0 }}</el-tag>
         <el-tag effect="plain">不可评分 {{ diagnostics.unscoreable_count ?? 0 }}</el-tag>
         <el-tag effect="plain">候选 {{ diagnostics.candidate_count }}</el-tag>
         <el-tag effect="plain">确认 {{ diagnostics.confirmed_count }}</el-tag>
+        <el-tag :type="dataFreshnessTagType" effect="plain">数据新鲜度 {{ dataFreshnessText }}</el-tag>
+        <el-tag :type="quoteStatusTagType" effect="plain">实时行情 {{ quoteStatusText }}</el-tag>
+        <el-tag v-if="persistenceText" effect="plain">持久化 {{ persistenceText }}</el-tag>
       </div>
       <div v-if="diagnostics.empty_message" class="diagnostic-message">
         {{ diagnostics.empty_message }}
@@ -161,7 +237,11 @@
         </div>
         <el-table v-if="resultMode === 'precheck'" :data="precheckRows" height="420" :empty-text="strategyEmptyText">
           <el-table-column prop="rank" label="排名" width="72" />
-          <el-table-column prop="symbol" label="股票" min-width="120" />
+          <el-table-column label="股票" min-width="120">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
+            </template>
+          </el-table-column>
           <el-table-column label="数据状态" width="130">
             <template #default="{ row }">
               <el-tag :type="row.data_status === 'has_intraday_data' ? 'success' : 'danger'" effect="plain">
@@ -179,7 +259,11 @@
         </el-table>
         <el-table v-else :data="rankedSignals" height="420" :empty-text="strategyEmptyText">
           <el-table-column prop="rank" label="排名" width="72" />
-          <el-table-column prop="symbol" label="股票" min-width="120" />
+          <el-table-column label="股票" min-width="120">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
+            </template>
+          </el-table-column>
           <el-table-column label="层级" width="110">
             <template #default="{ row }">
               <el-tag :type="v2LayerType(row.v2_layer)" effect="plain">
@@ -213,9 +297,29 @@
           <el-table-column label="尾盘涨幅" width="120" align="right">
             <template #default="{ row }">{{ formatPercent(row.tail_return) }}</template>
           </el-table-column>
+          <el-table-column label="高点回撤" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.pullback_from_high) }}</template>
+          </el-table-column>
+          <el-table-column label="可执行性" width="120" align="right">
+            <template #default="{ row }">
+              <el-tag :type="executionFlagType(row.tradability?.execution_flag)" effect="plain">
+                {{ executionFlagText(row.tradability?.execution_flag) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="涨停距离" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.tradability?.limit_up_distance) }}</template>
+          </el-table-column>
           <el-table-column label="资金/价格" width="120" align="right">
             <template #default="{ row }">
               {{ formatScore(row.v2_breakdown?.tail_money) }} / {{ formatScore(row.v2_breakdown?.price_action) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="评分拆解" min-width="180">
+            <template #default="{ row }">
+              强 {{ formatScore(row.score_breakdown?.strength) }} /
+              量 {{ formatScore(row.score_breakdown?.volume_ratio) }} /
+              涨 {{ formatScore(row.score_breakdown?.tail_return) }}
             </template>
           </el-table-column>
           <el-table-column label="过滤原因" min-width="150">
@@ -273,7 +377,11 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="symbol" label="股票" min-width="120" />
+          <el-table-column label="股票" min-width="120">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
+            </template>
+          </el-table-column>
           <el-table-column label="可信度" width="120" align="right">
             <template #default="{ row }">
               <el-tag :type="credibilityType(row.credibility?.score)" effect="plain">
@@ -293,6 +401,19 @@
           <el-table-column label="尾盘涨幅" width="120" align="right">
             <template #default="{ row }">{{ formatPercent(row.tail_return) }}</template>
           </el-table-column>
+          <el-table-column label="可执行性" width="120" align="right">
+            <template #default="{ row }">
+              <el-tag :type="executionFlagType(row.tradability?.execution_flag)" effect="plain">
+                {{ executionFlagText(row.tradability?.execution_flag) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="涨停距离" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.tradability?.limit_up_distance) }}</template>
+          </el-table-column>
+          <el-table-column label="次日卖出" min-width="150">
+            <template #default="{ row }">{{ sellPolicyText(row.next_day_plan?.sell_policy) }}</template>
+          </el-table-column>
           <el-table-column prop="reason" label="原因" min-width="260" show-overflow-tooltip />
         </el-table>
       </div>
@@ -303,7 +424,11 @@
           <el-tag effect="plain">{{ watchlistSignals.length }}</el-tag>
         </div>
         <el-table :data="watchlistSignals" height="300" empty-text="暂无候选观察信号">
-          <el-table-column prop="symbol" label="股票" min-width="120" />
+          <el-table-column label="股票" min-width="120">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
+            </template>
+          </el-table-column>
           <el-table-column label="V2分" width="100" align="right">
             <template #default="{ row }">{{ formatScore(row.v2_score) }}</template>
           </el-table-column>
@@ -326,7 +451,11 @@
           <el-tag effect="plain">{{ weakSignals.length }}</el-tag>
         </div>
         <el-table :data="weakSignals" height="300" empty-text="暂无弱信号">
-          <el-table-column prop="symbol" label="股票" min-width="120" />
+          <el-table-column label="股票" min-width="120">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
+            </template>
+          </el-table-column>
           <el-table-column label="V2分" width="100" align="right">
             <template #default="{ row }">{{ formatScore(row.v2_score) }}</template>
           </el-table-column>
@@ -355,6 +484,11 @@
           <el-descriptions-item label="确认条件">连续确认 {{ strategyRules?.confirmations ?? '-' }} 次</el-descriptions-item>
           <el-descriptions-item label="最终过滤">Top {{ strategyRules?.top_n ?? '-' }}，最小强度 {{ strategyRules?.min_strength ?? '未设置' }}，市场宽度 {{ strategyRules?.min_market_breadth_above_ma20 ?? '未设置' }}</el-descriptions-item>
           <el-descriptions-item label="排序方法">{{ strategyRules?.ranking ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="扫描口径">{{ scanScopeText }}</el-descriptions-item>
+          <el-descriptions-item label="补数据">{{ syncDiagnosticText }}</el-descriptions-item>
+          <el-descriptions-item label="阶段耗时">{{ stageTimingText }}</el-descriptions-item>
+          <el-descriptions-item label="实时行情">{{ quoteStatusText }}</el-descriptions-item>
+          <el-descriptions-item label="数据新鲜度">{{ dataFreshnessText }}</el-descriptions-item>
         </el-descriptions>
       </div>
 
@@ -374,9 +508,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { api, type JobRecord, type JobStatus, type TailLiveSelectionPayload } from '../api/client'
+import { api, type DataStatusResponse, type JobRecord, type JobStatus, type TailLiveSelectionPayload } from '../api/client'
 
 interface SelectionRow {
   rank?: number
@@ -386,6 +520,9 @@ interface SelectionRow {
   last_price: number
   volume_ratio: number
   tail_return: number
+  tail_high_return?: number
+  pullback_from_high?: number
+  close_position?: number
   reason: string
   status?: 'selected' | 'filtered'
   filter_reason?: string | null
@@ -401,6 +538,30 @@ interface SelectionRow {
     risk_control: number
   }
   credibility?: Credibility
+  tradability?: {
+    buyable: boolean
+    reason?: string | null
+    price?: number | null
+    limit_up?: number | null
+    limit_up_distance?: number | null
+    execution_flag?: string | null
+    score?: number | null
+  }
+  next_day_plan?: {
+    entry_policy: string
+    sell_policy?: string
+    gap_stop_return: number | null
+    intraday_stop_return: number | null
+    take_profit_return: number | null
+    rules: string[]
+  }
+  score_breakdown?: {
+    strength: number
+    volume_ratio: number
+    tail_return: number
+    pullback_penalty: number
+    v2_total?: number | null
+  }
 }
 
 interface Credibility {
@@ -485,6 +646,37 @@ interface TailLiveResult {
     blocked_by_market_breadth: boolean
     requested_scan_limit?: number
     resolved_scan_count?: number
+    data_freshness?: {
+      status: string
+      latest_time: string | null
+      target_time: string | null
+      lag_minutes: number | null
+      tradable: boolean
+    }
+    quote_status?: {
+      status: string
+      requested_symbols: number
+      covered_symbols: number
+      coverage_ratio: number
+      error?: string
+    }
+    minute5_sync?: {
+      trade_date?: string
+      target_symbols?: number
+      skipped?: number
+      success?: number
+      no_data?: number
+      failed?: number
+      inserted_rows?: number
+      latest_datetime?: string | null
+    }
+  }
+  stage_timings?: Record<string, number>
+  persistence?: {
+    signals?: {
+      signal_count?: number
+      selected_count?: number
+    }
   }
 }
 
@@ -496,22 +688,28 @@ const today = new Date().toISOString().slice(0, 10)
 const form = ref<TailLiveSelectionPayload>({
   trade_date: today,
   symbols: null,
-  limit: 200,
-  universe: 'liquid-cache',
+  limit: 0,
+  universe: 'default',
   bars_cache_dir: 'data/cache/bars',
   liquidity_min_bars: 60,
   min_market_breadth_above_ma20: null,
   confirmations: 1,
-  top_n: 5,
+  top_n: 2,
   min_strength: null,
-  ignore_session: true,
+  ignore_session: false,
+  auto_sync_minute5: true,
   output_dir: 'reports/tail_session'
 })
 
 const manualSymbols = ref<string[]>([])
 const submitting = ref(false)
+const loadingHistory = ref(false)
+const loadingDataHealth = ref(false)
 const activeJobId = ref('')
 const job = ref<JobRecord | null>(null)
+const runHistory = ref<JobRecord[]>([])
+const dataHealth = ref<DataStatusResponse | null>(null)
+const dataHealthLoadedAt = ref('')
 const result = computed(() => (job.value?.result ?? null) as unknown as TailLiveResult | null)
 const resultMode = computed(() => result.value?.mode ?? 'selection')
 const resultModeText = computed(() => {
@@ -572,15 +770,157 @@ const selectionEmptyText = computed(() => {
 })
 const summaryItems = computed(() => [
   { label: '运行模式', value: resultModeText.value },
-  { label: '扫描数', value: String(result.value?.scanned_count ?? '-') },
-  { label: '分钟覆盖', value: diagnostics.value ? `${diagnostics.value.has_intraday_data_count ?? 0}/${diagnostics.value.checked_intraday_count ?? 0}` : '-' },
+  { label: '扫描数', value: scanCountText.value },
+  { label: '抽样分钟', value: diagnostics.value ? `${diagnostics.value.has_intraday_data_count ?? 0}/${diagnostics.value.checked_intraday_count ?? 0}` : '-' },
   { label: '最新分钟', value: diagnostics.value?.latest_intraday_time ?? '-' },
+  { label: '数据新鲜度', value: compactDataFreshnessText.value },
+  { label: '实时行情', value: compactQuoteStatusText.value },
+  { label: '补数据', value: compactSyncSummaryText.value },
   { label: '扫描截至', value: diagnostics.value?.scan_as_of_time ?? '-' },
   { label: '可评分', value: String(diagnostics.value?.scoreable_count ?? 0) },
   { label: '强确认/观察/弱', value: `${signalLayers.value.strong}/${signalLayers.value.watchlist}/${signalLayers.value.weak}` },
   { label: resultMode.value === 'precheck' ? '等待原因' : resultMode.value === 'preview' ? '预演入选' : '最终选股', value: resultMode.value === 'precheck' ? emptyReasonText.value : resultMode.value === 'preview' ? String(result.value?.preview_count ?? 0) : String(result.value?.selected_count ?? '-') },
   { label: '交易日', value: result.value?.trade_date ?? '-' }
 ])
+const scanCountText = computed(() => {
+  const scanned = result.value?.scanned_count
+  const requested = diagnostics.value?.requested_scan_limit ?? form.value.limit
+  if (requested === 0) return `${scanned ?? '-'} / 全市场非ST`
+  return `${scanned ?? '-'} / ${requested}`
+})
+const scanScopeText = computed(() => {
+  const requested = diagnostics.value?.requested_scan_limit ?? form.value.limit
+  return requested === 0 ? '扫描全市场非ST股票，不做固定数量截断' : `扫描策略池前 ${requested} 只股票`
+})
+const scanLimitDisplayText = computed(() => form.value.limit === 0 ? '全市场非ST' : `最多 ${form.value.limit} 只`)
+const syncSummaryText = computed(() => {
+  const sync = diagnostics.value?.minute5_sync
+  if (!sync) return form.value.auto_sync_minute5 ? '等待运行' : '未启用'
+  return `${sync.inserted_rows ?? 0} 行 / 最新 ${sync.latest_datetime ?? '-'}`
+})
+const compactSyncSummaryText = computed(() => {
+  const sync = diagnostics.value?.minute5_sync
+  if (!sync) return form.value.auto_sync_minute5 ? '等待' : '未启用'
+  return `${sync.inserted_rows ?? 0}行 / ${formatCompactDateTime(sync.latest_datetime)}`
+})
+const syncDiagnosticText = computed(() => {
+  const sync = diagnostics.value?.minute5_sync
+  if (!sync) return form.value.auto_sync_minute5 ? '运行前自动补齐当日5分钟线' : '本次未启用运行前补数据'
+  return `目标 ${sync.target_symbols ?? 0}，跳过 ${sync.skipped ?? 0}，成功 ${sync.success ?? 0}，无数据 ${sync.no_data ?? 0}，失败 ${sync.failed ?? 0}，插入 ${sync.inserted_rows ?? 0} 行，最新 ${sync.latest_datetime ?? '-'}`
+})
+const dataFreshnessText = computed(() => {
+  const freshness = diagnostics.value?.data_freshness
+  if (!freshness) return '-'
+  const lag = freshness.lag_minutes == null ? '-' : `${freshness.lag_minutes} 分钟`
+  return `${freshness.status}，最新 ${freshness.latest_time ?? '-'}，目标 ${freshness.target_time ?? '-'}，滞后 ${lag}`
+})
+const compactDataFreshnessText = computed(() => {
+  const freshness = diagnostics.value?.data_freshness
+  if (!freshness) return '-'
+  const lag = freshness.lag_minutes == null ? '-' : `${freshness.lag_minutes}分`
+  return `${freshness.status} / ${freshness.latest_time ?? '-'} / ${lag}`
+})
+const dataFreshnessTagType = computed(() => {
+  const status = diagnostics.value?.data_freshness?.status
+  if (status === 'fresh') return 'success'
+  if (status === 'stale') return 'danger'
+  return 'warning'
+})
+const quoteStatusText = computed(() => {
+  const status = diagnostics.value?.quote_status
+  if (!status) return '-'
+  const base = `${status.status}，覆盖 ${status.covered_symbols ?? 0}/${status.requested_symbols ?? 0}，${formatPercent(status.coverage_ratio)}`
+  return status.error ? `${base}，${status.error}` : base
+})
+const compactQuoteStatusText = computed(() => {
+  const status = diagnostics.value?.quote_status
+  if (!status) return '-'
+  return `${status.status} / ${status.covered_symbols ?? 0}/${status.requested_symbols ?? 0} / ${formatPercent(status.coverage_ratio)}`
+})
+const quoteStatusTagType = computed(() => {
+  const status = diagnostics.value?.quote_status?.status
+  if (status === 'ok') return 'success'
+  if (status === 'partial') return 'warning'
+  if (status === 'failed') return 'danger'
+  return 'info'
+})
+const stageTimingText = computed(() => {
+  const timings = result.value?.stage_timings
+  if (!timings) return '-'
+  return Object.entries(timings)
+    .map(([key, value]) => `${stageTimingLabel(key)} ${Number(value).toFixed(2)}s`)
+    .join('，')
+})
+const persistenceText = computed(() => {
+  const signals = result.value?.persistence?.signals
+  if (!signals) return ''
+  return `排序池 ${signals.signal_count ?? 0}，入选 ${signals.selected_count ?? 0}`
+})
+const dataHealthUpdateText = computed(() => dataHealthLoadedAt.value ? `更新 ${dataHealthLoadedAt.value}` : '未加载')
+const dataHealthItems = computed(() => {
+  const quality = dataHealth.value?.quality
+  const minute5 = quality?.minute5
+  const quote = quality?.quote_snapshots?.raw
+  const daily = quality?.daily
+  const checks = quality?.scheduled_checks
+  return [
+    {
+      label: '分钟线最新',
+      value: formatCompactDateTime(minute5?.latest_datetime ?? dataHealth.value?.health?.minute5_latest_datetime),
+      status: minute5?.status ?? 'missing'
+    },
+    {
+      label: '分钟线覆盖',
+      value: qualityCoverageText(minute5),
+      status: minute5?.status ?? 'missing'
+    },
+    {
+      label: '分钟线写入中',
+      value: minute5 ? `${formatCompactDateTime(minute5.current_latest_datetime)} / ${minute5.current_covered_symbols ?? '-'}/${minute5.expected_symbols ?? '-'}` : '-',
+      status: minute5?.current_latest_datetime === minute5?.latest_datetime ? minute5?.status ?? 'missing' : 'warning'
+    },
+    {
+      label: '行情快照',
+      value: quote ? `${formatCompactDateTime(quote.latest_datetime)} / ${quote.latest_symbol_count ?? 0}/${quality?.quote_snapshots?.expected_symbols ?? 0}` : '-',
+      status: quote?.status ?? quality?.quote_snapshots?.status ?? 'missing'
+    },
+    {
+      label: '快照缺失率',
+      value: quote?.missing_rate == null ? '-' : formatPercent(quote.missing_rate),
+      status: quote?.status ?? quality?.quote_snapshots?.status ?? 'missing'
+    },
+    {
+      label: '日线质量',
+      value: daily ? `${formatCompactDateTime(daily.latest_date)} / ${daily.covered_symbols ?? 0}/${quality?.expected_non_st_symbols ?? '-'}` : '-',
+      status: daily?.status ?? 'missing'
+    },
+    {
+      label: '定时质检',
+      value: checks ? `${checks.freshness.status} / 异常${checks.today_anomalies.bad_rows}` : '-',
+      status: checks?.status ?? 'missing'
+    }
+  ]
+})
+const dataHealthIssues = computed(() => {
+  const quality = dataHealth.value?.quality
+  return dedupeIssues([
+    ...(quality?.issues ?? []),
+    ...(quality?.quote_snapshots?.issues ?? []),
+    ...(quality?.scheduled_checks?.issues ?? [])
+  ]).slice(0, 6)
+})
+
+function stageTimingLabel(value: string) {
+  if (value === 'minute5_sync') return '补数据'
+  if (value === 'strategy_scan') return '策略'
+  if (value === 'resolve_and_coverage') return '股票池'
+  if (value === 'quote_and_breadth') return '行情'
+  if (value === 'scan_intraday') return '扫描'
+  if (value === 'write_outputs') return '写入'
+  if (value === 'persistence') return '持久化'
+  if (value === 'total') return '总计'
+  return value
+}
 
 async function submit() {
   submitting.value = true
@@ -591,12 +931,50 @@ async function submit() {
     })
     activeJobId.value = response.job_id
     const completed = await pollJobUntilDone(response.job_id)
+    await loadRunHistory()
     if (completed) ElMessage.success('今日尾盘选股完成')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '提交失败')
   } finally {
     submitting.value = false
   }
+}
+
+async function loadDataHealth() {
+  loadingDataHealth.value = true
+  try {
+    dataHealth.value = await api.getDataStatus()
+    dataHealthLoadedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载数据健康度失败')
+  } finally {
+    loadingDataHealth.value = false
+  }
+}
+
+async function loadRunHistory() {
+  loadingHistory.value = true
+  try {
+    const response = await api.listJobs(100)
+    runHistory.value = response.items.filter((item) => item.kind === 'tail_session_live_selection')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载运行记录失败')
+  } finally {
+    loadingHistory.value = false
+  }
+}
+
+async function selectRunHistory(row: JobRecord) {
+  await loadJob(row.id)
+}
+
+function openStockTrend(symbol: string) {
+  window.open(stockTrendUrl(symbol), '_blank', 'noopener,noreferrer')
+}
+
+function stockTrendUrl(symbol: string) {
+  const params = new URLSearchParams({ page: 'stock-trend', symbol })
+  return `${window.location.origin}${window.location.pathname}?${params.toString()}`
 }
 
 async function refreshJob() {
@@ -639,14 +1017,70 @@ function formatPercent(value: unknown) {
   return typeof value === 'number' ? `${(value * 100).toFixed(2)}%` : '-'
 }
 
+function qualityCoverageText(row?: { covered_symbols: number; missing_symbols: number; coverage_ratio: number }) {
+  if (!row) return '-'
+  return `${row.covered_symbols ?? 0}/${(row.covered_symbols ?? 0) + (row.missing_symbols ?? 0)}，${formatPercent(row.coverage_ratio)}`
+}
+
+function formatCompactDateTime(value: unknown) {
+  if (!value) return '-'
+  const text = String(value)
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/)
+  if (!match) return text
+  return match[4] ? `${match[2]}-${match[3]} ${match[4]}:${match[5]}` : `${match[2]}-${match[3]}`
+}
+
+function dedupeIssues(items: string[]) {
+  return Array.from(new Set(items.filter(Boolean)))
+}
+
+function qualityTagType(status?: string) {
+  if (status === 'ok') return 'success'
+  if (status === 'warning' || status === 'partial') return 'warning'
+  if (status === 'error' || status === 'failed' || status === 'missing') return 'danger'
+  return 'info'
+}
+
+function formatDateTime(value: string) {
+  return value ? value.replace('T', ' ').slice(0, 19) : '-'
+}
+
+function runHistorySummary(row: JobRecord) {
+  const rowResult = (row.result ?? {}) as Record<string, unknown>
+  const scanned = rowResult.scanned_count ?? '-'
+  const selected = rowResult.selected_count ?? '-'
+  return `${scanned} / ${selected}`
+}
+
 function filterReasonText(value: unknown) {
   if (value === 'below_candidate_threshold') return '未达候选阈值'
   if (value === 'below_min_strength') return '低于最小强度'
   if (value === 'preview_not_final') return '未到14:50最终确认'
   if (value === 'v2_not_trade_candidate') return 'V2未达交易候选'
+  if (value === 'limit_up_not_buyable') return '涨停/近涨停，无法买入'
+  if (value === 'tail_pullback_risk') return '尾盘冲高回落'
   if (value === 'outside_top_n') return '排名超出 Top N'
   if (value === 'not_selected') return '未入选'
   return '-'
+}
+
+function executionFlagText(value: unknown) {
+  if (value === 'blocked_limit_up') return '涨停不可买'
+  if (value === 'near_limit_up') return '接近涨停'
+  if (value === 'executable') return '可执行'
+  return '未知'
+}
+
+function executionFlagType(value: unknown) {
+  if (value === 'blocked_limit_up') return 'danger'
+  if (value === 'near_limit_up') return 'warning'
+  if (value === 'executable') return 'success'
+  return 'info'
+}
+
+function sellPolicyText(value: unknown) {
+  if (value === 'open_or_morning_strength') return '开盘/早盘强弱卖'
+  return value ? String(value) : '-'
 }
 
 function v2LayerText(value: unknown) {
@@ -700,4 +1134,9 @@ watch(
   },
   { immediate: true }
 )
+
+onMounted(() => {
+  void loadRunHistory()
+  void loadDataHealth()
+})
 </script>

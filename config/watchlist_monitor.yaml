@@ -1,0 +1,71 @@
+stocks:
+  - symbol: "000636"
+    name: "风华高科"
+    theme: "MLCC / 被动元件"
+    notes: "MLCC主线龙头之一，短线涨幅大，优先等待回踩。"
+    levels:
+      observe: [68.0, 70.0]
+      entry: [64.0, 66.0]
+      add: [58.0, 60.0]
+      invalid: 54.0
+      breakout: 72.0
+  - symbol: "002859"
+    name: "洁美科技"
+    theme: "MLCC耗材 / 载带"
+    notes: "关注MLCC耗材需求，等待回踩到前压力区附近。"
+    levels:
+      observe: [85.0, 87.0]
+      entry: [82.0, 85.0]
+      add: [75.0, 78.0]
+      invalid: 74.0
+      breakout: 94.0
+  - symbol: "300285"
+    name: "国瓷材料"
+    theme: "MLCC上游材料"
+    notes: "陶瓷粉体材料逻辑强，短线高位波动大。"
+    levels:
+      observe: [66.0, 68.0]
+      entry: [63.0, 65.0]
+      add: [57.0, 60.0]
+      invalid: 54.0
+      breakout: 70.0
+  - symbol: "300408"
+    name: "三环集团"
+    theme: "MLCC / 陶瓷元件"
+    notes: "相对稳健的MLCC链标的，关注150附近承接。"
+    levels:
+      observe: [145.0, 150.0]
+      entry: [138.0, 142.0]
+      add: [125.0, 130.0]
+      invalid: 120.0
+      breakout: 157.0
+  - symbol: "300014"
+    name: "亿纬锂能"
+    theme: "电池 / 储能"
+    notes: "等待大涨后回踩确认，关注储能与动力电池利润兑现。"
+    levels:
+      observe: [63.0, 65.0]
+      entry: [60.0, 62.0]
+      add: [55.0, 58.0]
+      invalid: 53.0
+      breakout: 68.0
+  - symbol: "688017"
+    name: "绿的谐波"
+    theme: "机器人 / 减速器"
+    notes: "机器人高弹性标的，高位波动大，等待回踩或突破确认。"
+    levels:
+      observe: [350.0, 360.0]
+      entry: [330.0, 345.0]
+      add: [300.0, 315.0]
+      invalid: 287.0
+      breakout: 390.0
+  - symbol: "601899"
+    name: "紫金矿业"
+    theme: "金铜资源"
+    notes: "关注金铜价格、Q2利润和现金流延续性。"
+    levels:
+      observe: [30.0, 30.5]
+      entry: [29.5, 29.8]
+      add: [28.5, 29.0]
+      invalid: 27.0
+      breakout: 32.0

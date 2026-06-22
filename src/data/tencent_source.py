@@ -6,8 +6,10 @@ valuation fields such as PE, PB, market cap, turnover, and price limits.
 
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
-from typing import Callable
+from typing import Any, Callable
 
 import pandas as pd
 import requests
@@ -33,13 +35,13 @@ def parse_tencent_quote_text(text: str) -> pd.DataFrame:
         if len(values) < 50:
             continue
 
-        code = key[2:] if len(key) >= 8 else str(values[2]).zfill(6)
+        symbol = _format_tencent_key_symbol(key, str(values[2]))
         price = _float_at(values, 3)
         prev_close = _float_at(values, 4)
         amount = _float_at(values, 37) * 10_000
         timestamp = _parse_timestamp(_str_at(values, 30))
         rows.append({
-            "symbol": format_symbol(code),
+            "symbol": symbol,
             "name": _str_at(values, 1),
             "price": price,
             "open": _float_at(values, 5),
@@ -66,6 +68,87 @@ def parse_tencent_quote_text(text: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def parse_tencent_kline_json(payload: dict[str, Any], symbol: str, frequency: str = "5m") -> pd.DataFrame:
+    """Parse Tencent appstock minute K-line JSON into intraday bars."""
+    if payload.get("code") != 0:
+        return pd.DataFrame()
+    if frequency != "5m":
+        return pd.DataFrame()
+
+    query_symbol = _tencent_symbol(symbol)
+    node = (payload.get("data") or {}).get(query_symbol) or {}
+    raw_bars = node.get("m5") or []
+    rows = []
+    formatted_symbol = format_symbol(symbol)
+    for raw in raw_bars:
+        if not isinstance(raw, list) or len(raw) < 6:
+            continue
+        timestamp = pd.to_datetime(str(raw[0]), format="%Y%m%d%H%M", errors="coerce")
+        if pd.isna(timestamp):
+            continue
+        rows.append({
+            "datetime": timestamp,
+            "time": timestamp.time(),
+            "symbol": formatted_symbol,
+            "open": _float_at(raw, 1),
+            "high": _float_at(raw, 3),
+            "low": _float_at(raw, 4),
+            "close": _float_at(raw, 2),
+            "volume": _float_at(raw, 5),
+            "amount": _float_at(raw, 7),
+        })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("datetime").reset_index(drop=True)
+
+
+def parse_tencent_minute_json(payload: dict[str, Any], symbol: str, trade_date: date) -> pd.DataFrame:
+    """Parse Tencent minute trend JSON into approximate 1-minute bars."""
+    if payload.get("code") != 0:
+        return pd.DataFrame()
+    query_symbol = _tencent_symbol(symbol)
+    node = (payload.get("data") or {}).get(query_symbol) or {}
+    minute_data = node.get("data") or {}
+    payload_date = str(minute_data.get("date") or "")
+    if payload_date and payload_date != trade_date.strftime("%Y%m%d"):
+        return pd.DataFrame()
+    data = minute_data.get("data") or []
+    rows = []
+    previous_volume = 0.0
+    previous_amount = 0.0
+    formatted_symbol = format_symbol(symbol)
+    for raw in data:
+        parts = str(raw).split()
+        if len(parts) < 4:
+            continue
+        timestamp = pd.to_datetime(f"{trade_date.isoformat()} {parts[0]}", format="%Y-%m-%d %H%M", errors="coerce")
+        if pd.isna(timestamp):
+            continue
+        if not _is_regular_a_share_minute(timestamp.time()):
+            continue
+        price = _safe_float(parts[1])
+        cumulative_volume = _safe_float(parts[2])
+        cumulative_amount = _safe_float(parts[3])
+        volume = max(0.0, cumulative_volume - previous_volume)
+        amount = max(0.0, cumulative_amount - previous_amount)
+        previous_volume = cumulative_volume
+        previous_amount = cumulative_amount
+        rows.append({
+            "datetime": timestamp,
+            "time": timestamp.time(),
+            "symbol": formatted_symbol,
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": volume,
+            "amount": amount,
+        })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("datetime").reset_index(drop=True)
+
+
 class TencentQuoteSource(DataSourceBase):
     """Tencent Finance adapter for real-time quotes and valuation fields."""
 
@@ -75,9 +158,13 @@ class TencentQuoteSource(DataSourceBase):
         self,
         rate_limit: float = 0.2,
         http_get: Callable[..., str] | None = None,
+        intraday_workers: int = 30,
+        realtime_chunk_size: int = 800,
     ):
         super().__init__(rate_limit=rate_limit)
         self._http_get = http_get or _requests_get_text
+        self._intraday_workers = intraday_workers
+        self._realtime_chunk_size = max(1, realtime_chunk_size)
 
     def fetch_bars(
         self,
@@ -94,14 +181,88 @@ class TencentQuoteSource(DataSourceBase):
     def fetch_realtime_quotes(self, symbols: list[str]) -> pd.DataFrame:
         if not symbols:
             return pd.DataFrame()
+        frames = []
+        for batch in _chunks(symbols, self._realtime_chunk_size):
+            self._wait_for_rate_limit()
+            query = ",".join(_tencent_symbol(symbol) for symbol in batch)
+            text = self._http_get(
+                f"https://qt.gtimg.cn/q={query}",
+                headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/"},
+                timeout=10,
+            )
+            frame = parse_tencent_quote_text(text)
+            if frame is not None and not frame.empty:
+                frames.append(frame)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def fetch_intraday_bars(
+        self,
+        symbol: str,
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        if frequency == "1m":
+            return self._fetch_1m_intraday_bars(symbol, trade_date)
+        if frequency != "5m":
+            return pd.DataFrame()
         self._wait_for_rate_limit()
-        query = ",".join(_tencent_symbol(symbol) for symbol in symbols)
+        query_symbol = _tencent_symbol(symbol)
         text = self._http_get(
-            f"https://qt.gtimg.cn/q={query}",
-            headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/"},
+            f"https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={query_symbol},m5,,320",
+            headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/", "Accept": "application/json,*/*"},
             timeout=10,
         )
-        return parse_tencent_quote_text(text)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return pd.DataFrame()
+        bars = parse_tencent_kline_json(payload, symbol, frequency)
+        if bars.empty:
+            return bars
+        mask = bars["datetime"].dt.date == trade_date
+        return bars.loc[mask].reset_index(drop=True)
+
+    def _fetch_1m_intraday_bars(self, symbol: str, trade_date: date) -> pd.DataFrame:
+        self._wait_for_rate_limit()
+        query_symbol = _tencent_symbol(symbol)
+        text = self._http_get(
+            f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={query_symbol}",
+            headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/", "Accept": "application/json,*/*"},
+            timeout=10,
+        )
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return pd.DataFrame()
+        return parse_tencent_minute_json(payload, symbol, trade_date)
+
+    def fetch_intraday_bars_batch(
+        self,
+        symbols: list[str],
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        if not symbols or frequency not in {"1m", "5m"}:
+            return pd.DataFrame()
+        frames = []
+        workers = max(1, min(self._intraday_workers, len(symbols)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(self.fetch_intraday_bars, symbol, trade_date, frequency)
+                for symbol in symbols
+            ]
+            for future in as_completed(futures):
+                try:
+                    frame = future.result()
+                except Exception:
+                    continue
+                if frame is not None and not frame.empty:
+                    frames.append(frame)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True).sort_values(["symbol", "datetime"]).reset_index(drop=True)
 
     def fetch_financials(self, symbol: str) -> list[FinancialStatement]:
         return []
@@ -113,13 +274,38 @@ def _requests_get_text(url: str, *, headers: dict[str, str], timeout: int) -> st
     return response.content.decode("gbk", errors="ignore")
 
 
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index:index + size] for index in range(0, len(values), size)]
+
+
 def _tencent_symbol(symbol: str) -> str:
-    code = symbol.split(".")[0].zfill(6)
+    normalized = symbol.strip().upper()
+    if "." in normalized:
+        code, suffix = normalized.split(".", 1)
+        code = code.zfill(6)
+        if suffix == "SH":
+            return f"sh{code}"
+        if suffix == "SZ":
+            return f"sz{code}"
+        if suffix == "BJ":
+            return f"bj{code}"
+    code = normalized.split(".")[0].zfill(6)
     if code.startswith(("6", "9")):
         return f"sh{code}"
     if code.startswith(("8", "4")):
         return f"bj{code}"
     return f"sz{code}"
+
+
+def _format_tencent_key_symbol(key: str, fallback_code: str) -> str:
+    lowered = key.lower()
+    if lowered.startswith("sh") and len(key) >= 8:
+        return f"{key[2:].zfill(6)}.SH"
+    if lowered.startswith("sz") and len(key) >= 8:
+        return f"{key[2:].zfill(6)}.SZ"
+    if lowered.startswith("bj") and len(key) >= 8:
+        return f"{key[2:].zfill(6)}.BJ"
+    return format_symbol(fallback_code)
 
 
 def _float_at(values: list[str], index: int) -> float:
@@ -129,6 +315,24 @@ def _float_at(values: list[str], index: int) -> float:
         return float(values[index])
     except ValueError:
         return 0.0
+
+
+def _safe_float(value: str) -> float:
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
+
+
+def _is_regular_a_share_minute(value) -> bool:
+    return (
+        (value.hour == 9 and value.minute >= 30)
+        or (value.hour == 10)
+        or (value.hour == 11 and value.minute <= 30)
+        or (value.hour == 13)
+        or (value.hour == 14)
+        or (value.hour == 15 and value.minute == 0)
+    )
 
 
 def _str_at(values: list[str], index: int) -> str:

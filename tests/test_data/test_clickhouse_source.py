@@ -32,7 +32,55 @@ class FakeClickHouseClient:
                 ("000001", datetime(2026, 6, 15, 14, 30), 10.0, 10.2, 9.9, 10.1, 1000, 10100.0),
                 ("000001", datetime(2026, 6, 15, 14, 35), 10.1, 10.3, 10.0, 10.2, 1200, 12240.0),
             ]
+        if "from stock_quote_snapshots_5m" in query:
+            symbols = set((params or {}).get("symbols") or ())
+            if "600519" not in symbols:
+                return []
+            return [
+                ("600519", datetime(2026, 6, 15, 14, 30), 1200.0, 1205.0, 1198.0, 1202.0, 100, 120200.0),
+                ("600519", datetime(2026, 6, 15, 14, 35), 1202.0, 1208.0, 1201.0, 1206.0, 120, 144720.0),
+            ]
+        if "from stock_quote_snapshots" in query:
+            return [
+                (
+                    "000001",
+                    "平安银行",
+                    10.8,
+                    1.92,
+                    1000000,
+                    10800000.0,
+                    0.83,
+                    4.88,
+                    0.46,
+                    210_000_000_000.0,
+                    205_000_000_000.0,
+                    11.88,
+                    9.72,
+                    datetime(2026, 6, 15, 14, 58),
+                    datetime(2026, 6, 15, 14, 57, 55),
+                ),
+            ]
         return []
+
+
+class GapFillingClickHouseClient(FakeClickHouseClient):
+    def execute(self, query, params=None):
+        self.calls.append((query, params))
+        if "from minute5_kline" in query:
+            return [
+                ("000001", datetime(2026, 6, 15, 14, 30), 10.0, 10.2, 9.9, 10.1, 1000, 10100.0),
+                ("000001", datetime(2026, 6, 15, 14, 35), 10.1, 10.3, 10.0, 10.2, 1200, 12240.0),
+            ]
+        if "from stock_quote_snapshots_5m" in query:
+            symbols = set((params or {}).get("symbols") or ())
+            if "000001" not in symbols:
+                return []
+            return [
+                ("000001", datetime(2026, 6, 15, 14, 35), 10.1, 10.4, 10.0, 10.25, 1300, 13325.0),
+                ("000001", datetime(2026, 6, 15, 14, 40), 10.25, 10.5, 10.2, 10.45, 1500, 15675.0),
+                ("000001", datetime(2026, 6, 15, 14, 45), 10.45, 10.6, 10.4, 10.55, 1600, 16880.0),
+            ]
+        return super().execute(query, params)
 
 
 def test_clickhouse_source_reads_stock_list() -> None:
@@ -81,7 +129,7 @@ def test_clickhouse_source_reads_5m_intraday_bars() -> None:
 
     result = source.fetch_intraday_bars("000001.SZ", date(2026, 6, 15), "5m")
 
-    assert client.calls[-1][1] == {
+    assert client.calls[0][1] == {
         "symbol": "000001",
         "start": datetime(2026, 6, 15, 0, 0),
         "end": datetime(2026, 6, 15, 23, 59, 59),
@@ -92,6 +140,82 @@ def test_clickhouse_source_reads_5m_intraday_bars() -> None:
         datetime(2026, 6, 15, 14, 35).time(),
     ]
     assert result["close"].tolist() == [10.1, 10.2]
+
+
+def test_clickhouse_source_reads_5m_intraday_bars_batch() -> None:
+    client = FakeClickHouseClient()
+    source = ClickHouseStockDataSource(client=client)
+
+    result = source.fetch_intraday_bars_batch(["000001.SZ", "600519.SH"], date(2026, 6, 15), "5m")
+
+    assert client.calls[0][1] == {
+        "symbols": ("000001", "600519"),
+        "start": datetime(2026, 6, 15, 0, 0),
+        "end": datetime(2026, 6, 15, 23, 59, 59),
+    }
+    assert result["symbol"].tolist() == ["000001.SZ", "000001.SZ", "600519.SH", "600519.SH"]
+    assert result["close"].tolist() == [10.1, 10.2, 1202.0, 1206.0]
+
+
+def test_clickhouse_source_uses_quote_snapshot_5m_for_missing_intraday_symbols() -> None:
+    client = FakeClickHouseClient()
+    source = ClickHouseStockDataSource(client=client)
+
+    result = source.fetch_intraday_bars_batch(["000001.SZ", "600519.SH"], date(2026, 6, 15), "5m")
+
+    assert sorted(result["symbol"].unique().tolist()) == ["000001.SZ", "600519.SH"]
+    fallback = result[result["symbol"] == "600519.SH"]
+    assert fallback["datetime"].tolist() == [
+        datetime(2026, 6, 15, 14, 30),
+        datetime(2026, 6, 15, 14, 35),
+    ]
+    assert fallback["close"].tolist() == [1202.0, 1206.0]
+
+
+def test_clickhouse_source_fills_newer_5m_buckets_from_quote_snapshots() -> None:
+    client = GapFillingClickHouseClient()
+    source = ClickHouseStockDataSource(client=client)
+
+    result = source.fetch_intraday_bars_batch(["000001.SZ"], date(2026, 6, 15), "5m")
+
+    assert result["datetime"].tolist() == [
+        datetime(2026, 6, 15, 14, 30),
+        datetime(2026, 6, 15, 14, 35),
+        datetime(2026, 6, 15, 14, 40),
+        datetime(2026, 6, 15, 14, 45),
+    ]
+    assert result["close"].tolist() == [10.1, 10.2, 10.45, 10.55]
+
+
+def test_clickhouse_source_fills_single_symbol_newer_5m_buckets_from_quote_snapshots() -> None:
+    client = GapFillingClickHouseClient()
+    source = ClickHouseStockDataSource(client=client)
+
+    result = source.fetch_intraday_bars("000001.SZ", date(2026, 6, 15), "5m")
+
+    assert result["datetime"].tolist() == [
+        datetime(2026, 6, 15, 14, 30),
+        datetime(2026, 6, 15, 14, 35),
+        datetime(2026, 6, 15, 14, 40),
+        datetime(2026, 6, 15, 14, 45),
+    ]
+    assert result["close"].tolist() == [10.1, 10.2, 10.45, 10.55]
+
+
+def test_clickhouse_source_reads_latest_quote_snapshots() -> None:
+    client = FakeClickHouseClient()
+    source = ClickHouseStockDataSource(client=client)
+
+    result = source.fetch_latest_quote_snapshots(["000001.SZ"], date(2026, 6, 15))
+
+    assert client.calls[-1][1] == {"symbols": ("000001.SZ",), "trade_date": date(2026, 6, 15)}
+    assert result["symbol"].tolist() == ["000001.SZ"]
+    assert result["price"].tolist() == [10.8]
+    assert result["change_pct"].tolist() == [1.92]
+    assert result["pe_ttm"].tolist() == [4.88]
+    assert result["pb"].tolist() == [0.46]
+    assert result["mcap"].tolist() == [210_000_000_000.0]
+    assert str(result["quote_time"].iloc[0]) == "2026-06-15 14:57:55"
 
 
 def test_clickhouse_source_ranks_liquid_symbols() -> None:

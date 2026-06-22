@@ -167,6 +167,7 @@ function openResult(job: JobRecord | null) {
 function resultPage(job: JobRecord | null) {
   if (!job || job.status !== 'success') return ''
   if (job.kind === 'tail_session_live_selection') return 'tail-live'
+  if (job.kind === 'tail_session_replay_backtest') return 'tail-replay'
   if (job.kind === 'tail_session_backtest') return 'backtest'
   if (job.kind === 'fund_tail_advice') return 'fund-tail'
   if (job.kind === 'daily_maintenance' || job.kind === 'minute5_sync' || job.kind === 'stock_db_sync' || job.kind === 'dataset_build') return 'data'

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.data.fund_tail_repository import ClickHouseFundTailRepository
 
@@ -13,6 +15,7 @@ class FakeClickHouseClient:
     def __init__(self) -> None:
         self.commands: list[tuple[str, object | None]] = []
         self.watchlist_rows: list[tuple] = []
+        self.advice_run_rows: list[tuple] = []
 
     def execute(self, query, params=None):
         self.commands.append((query, params))
@@ -22,6 +25,9 @@ class FakeClickHouseClient:
                 self.watchlist_rows = [existing for existing in self.watchlist_rows if existing[0] != row[0]]
                 self.watchlist_rows.append(row)
             return []
+        if normalized.startswith("insert into fund_tail_advice_runs"):
+            self.advice_run_rows.extend([tuple(row) + (datetime(2026, 6, 22, 5, 5, 45),) for row in params or []])
+            return []
         if normalized.startswith("delete from fund_watchlist"):
             code = params["fund_code"]
             self.watchlist_rows = [row for row in self.watchlist_rows if row[0] != code]
@@ -30,6 +36,14 @@ class FakeClickHouseClient:
             return [(len(self.watchlist_rows),)]
         if "from fund_watchlist" in normalized:
             return self.watchlist_rows
+        if "from fund_tail_nav final" in normalized and "fund_code in" in normalized:
+            return [("001632", "2026-06-11", 1.21)]
+        if "from fund_tail_proxy final" in normalized and "fund_code in" in normalized:
+            return [("001632", "2026-06-12", 101.0, 100.0, 10.0)]
+        if "from fund_tail_advice_runs" in normalized:
+            if not self.advice_run_rows:
+                return []
+            return [self.advice_run_rows[-1]]
         if "from fund_tail_nav" in normalized and "max(date)" in normalized:
             return [("001632", "天弘中证食品饮料ETF联接C", "2026-06-11")]
         if "from fund_tail_proxy" in normalized and "max(date)" in normalized:
@@ -165,8 +179,37 @@ def test_watchlist_crud_and_seed_from_static_funds() -> None:
     assert latest["position_amount"] == 5000.0
     assert latest["position_return_pct"] == -0.12
     assert latest["note"] == "回踩再补"
+    assert latest["latest_nav_date"] == "2026-06-11"
+    assert latest["latest_nav"] == 1.21
+    assert latest["latest_proxy_date"] == "2026-06-12"
+    assert latest["latest_proxy_close"] == 101.0
+    assert latest["proxy_return_pct"] == pytest.approx(0.01)
+    assert latest["estimated_change_pct"] == pytest.approx(0.01)
     assert repo.advice_fund_codes_from_watchlist() == ["001632"]
 
     result = repo.delete_watchlist_item("001632")
     assert result == {"deleted": 1}
     assert any("delete from fund_watchlist" in command[0].lower() for command in client.commands)
+
+
+def test_repository_persists_and_loads_latest_advice_report() -> None:
+    client = FakeClickHouseClient()
+    repo = ClickHouseFundTailRepository(client=client)
+
+    saved = repo.save_advice_report(
+        trade_date="2026-06-18",
+        rows=[{"基金代码": "001632", "最终操作建议": "小额试探"}],
+        markdown="# 基金尾盘操作建议 - 2026-06-18",
+        data_status=[{"code": "001632", "latest_proxy_date": "2026-06-18"}],
+        metadata={"storage": "clickhouse", "row_count": 1},
+    )
+    loaded = repo.load_latest_advice_report()
+
+    assert saved == {"saved": 1, "row_count": 1}
+    assert loaded is not None
+    assert loaded["rows"] == [{"基金代码": "001632", "最终操作建议": "小额试探"}]
+    assert loaded["markdown"] == "# 基金尾盘操作建议 - 2026-06-18"
+    assert loaded["data_status"] == [{"code": "001632", "latest_proxy_date": "2026-06-18"}]
+    assert loaded["metadata"]["storage"] == "clickhouse"
+    assert loaded["report_path"] == "clickhouse:fund_tail_advice_runs"
+    assert loaded["report_updated_at"] == "2026-06-22T13:05:45"

@@ -5,7 +5,7 @@ from datetime import date
 
 import pandas as pd
 
-from src.data.minute5_sync import sync_minute5_kline
+from src.data.minute5_sync import FallbackIntradaySource, sync_minute5_kline
 
 
 def _create_db(path) -> None:
@@ -61,6 +61,36 @@ class FakeSource:
                 },
             ]
         )
+
+
+class FakeBatchSource(FakeSource):
+    def __init__(self, provided_symbols: set[str]) -> None:
+        super().__init__()
+        self.provided_symbols = provided_symbols
+        self.batch_calls: list[tuple[list[str], date, str]] = []
+
+    def fetch_intraday_bars_batch(self, symbols: list[str], trade_date: date, frequency: str = "5m") -> pd.DataFrame:
+        self.batch_calls.append((symbols, trade_date, frequency))
+        frames = [
+            super().fetch_intraday_bars(symbol, trade_date, frequency)
+            for symbol in symbols
+            if symbol in self.provided_symbols
+        ]
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+
+def test_fallback_intraday_source_uses_batch_source_then_fills_missing_symbols() -> None:
+    primary = FakeBatchSource({"000001.SZ"})
+    fallback = FakeSource()
+    source = FallbackIntradaySource([primary, fallback])
+
+    result = source.fetch_intraday_bars_batch(["000001.SZ", "600000.SH"], date(2026, 6, 12), "5m")
+
+    assert primary.batch_calls == [(["000001.SZ", "600000.SH"], date(2026, 6, 12), "5m")]
+    assert fallback.calls == ["600000.SH"]
+    assert sorted(result["symbol"].unique().tolist()) == ["000001.SZ", "600000.SH"]
 
 
 def test_sync_minute5_kline_upserts_non_st_symbols(tmp_path) -> None:

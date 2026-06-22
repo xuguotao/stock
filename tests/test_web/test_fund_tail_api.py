@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 from fastapi.testclient import TestClient
 
@@ -10,6 +12,7 @@ class FakeFundTailRepository:
     def __init__(self, data_dir):
         self.data_dir = data_dir
         self.import_calls = []
+        self.saved_reports = []
         self.watchlist_items = [
             {
                 "fund_code": "001632",
@@ -81,6 +84,31 @@ class FakeFundTailRepository:
             for item in self.watchlist_items
             if item["enabled"] and item["include_in_advice"] and item["status"] != "paused"
         ]
+
+    def save_advice_report(self, *, trade_date, rows, markdown, data_status, metadata=None):
+        self.saved_reports.append({
+            "trade_date": trade_date,
+            "rows": rows,
+            "markdown": markdown,
+            "data_status": data_status,
+            "metadata": metadata or {},
+        })
+        return {"saved": 1, "row_count": len(rows)}
+
+    def load_latest_advice_report(self):
+        if not self.saved_reports:
+            return None
+        latest = self.saved_reports[-1]
+        return {
+            "rows": latest["rows"],
+            "markdown": latest["markdown"],
+            "data_status": latest["data_status"],
+            "data_refreshed": latest["metadata"].get("data_refreshed", False),
+            "report_path": "clickhouse:fund_tail_advice_runs",
+            "markdown_path": "clickhouse:fund_tail_advice_runs",
+            "report_updated_at": "2026-06-18T15:01:00",
+            "markdown_updated_at": "2026-06-18T15:01:00",
+        }
 
 
 def test_fund_tail_api_lists_universe_with_local_data_status(tmp_path) -> None:
@@ -166,6 +194,7 @@ def test_fund_tail_api_loads_latest_report(tmp_path) -> None:
     markdown_path.write_text("# 基金尾盘操作建议\n", encoding="utf-8")
     app = create_app(
         db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_data_dir=tmp_path / "fund_tail",
         fund_tail_report_path=report_path,
         fund_tail_markdown_path=markdown_path,
     )
@@ -177,6 +206,39 @@ def test_fund_tail_api_loads_latest_report(tmp_path) -> None:
     assert response.json()["rows"][0]["基金代码"] == "001632"
     assert response.json()["markdown"] == "# 基金尾盘操作建议\n"
     assert response.json()["report_updated_at"]
+
+
+def test_fund_tail_api_prefers_clickhouse_latest_report(tmp_path) -> None:
+    data_dir = tmp_path / "fund_tail"
+    data_dir.mkdir()
+    report_path = tmp_path / "fund_tail_backtest.csv"
+    markdown_path = tmp_path / "latest.md"
+    pd.DataFrame(
+        [{"基金名称": "旧报告", "基金代码": "000000", "最终操作建议": "旧建议"}]
+    ).to_csv(report_path, index=False)
+    markdown_path.write_text("# 旧报告\n", encoding="utf-8")
+    repository = FakeFundTailRepository(data_dir)
+    repository.save_advice_report(
+        trade_date="2026-06-18",
+        rows=[{"基金名称": "天弘中证食品饮料ETF联接C", "基金代码": "001632", "最终操作建议": "小额试探"}],
+        markdown="# ClickHouse 最新报告",
+        data_status=[{"code": "001632", "latest_proxy_date": "2026-06-18"}],
+        metadata={"data_refreshed": True},
+    )
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_report_path=report_path,
+        fund_tail_markdown_path=markdown_path,
+        fund_tail_repository=repository,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/fund-tail/report")
+
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["基金代码"] == "001632"
+    assert response.json()["markdown"] == "# ClickHouse 最新报告"
+    assert response.json()["report_path"] == "clickhouse:fund_tail_advice_runs"
 
 
 def test_fund_tail_api_runs_local_advice_job(tmp_path) -> None:
@@ -217,6 +279,7 @@ def test_fund_tail_api_runs_local_advice_job(tmp_path) -> None:
     assert job["result"]["row_count"] == 4
     assert "# 基金尾盘操作建议 - 2026-02-09" in job["result"]["markdown"]
     assert job["result"]["storage"] == "clickhouse"
+    assert job["result"]["saved_report"] == {"saved": 1, "row_count": 4}
 
 
 def test_fund_tail_advice_uses_watchlist_when_codes_are_omitted(tmp_path) -> None:
@@ -341,3 +404,166 @@ def test_fund_tail_advice_refreshes_inputs_and_returns_data_status(tmp_path) -> 
     assert job["result"]["data_status"][0]["latest_nav_date"] == "2026-06-11"
     assert job["result"]["data_status"][0]["latest_proxy_date"] == "2026-06-12"
     assert job["result"]["import_result"] == {"nav_rows": 1, "proxy_rows": 1, "benchmark_rows": 1}
+
+
+def test_fund_tail_advice_uses_fast_proxy_refresher_when_available(tmp_path) -> None:
+    data_dir = tmp_path / "fund_tail"
+    data_dir.mkdir()
+    dates = pd.date_range("2026-01-01", periods=40, freq="D")
+    pd.DataFrame({"date": dates, "close": range(100, 140)}).to_csv(data_dir / "benchmark.csv", index=False)
+    pd.DataFrame({"date": dates, "close": [1 + index * 0.01 for index in range(40)]}).to_csv(
+        data_dir / "001632_nav.csv",
+        index=False,
+    )
+    pd.DataFrame({"date": dates, "close": [100 + index for index in range(40)]}).to_csv(
+        data_dir / "001632_proxy.csv",
+        index=False,
+    )
+    downloader_calls = []
+    refresher_calls = []
+
+    def downloader(*args):
+        downloader_calls.append(args)
+
+    def proxy_refresher(repository, fund_codes, trade_date):
+        refresher_calls.append((repository, fund_codes, trade_date))
+        return {"source": "tencent", "proxy_rows": 1, "benchmark_rows": 1, "missing_symbols": []}
+
+    repository = FakeFundTailRepository(data_dir)
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_data_dir=data_dir,
+        fund_tail_report_path=tmp_path / "fund_tail_backtest.csv",
+        fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
+        fund_tail_advice_dir=tmp_path / "fund_tail_advice",
+        run_jobs_inline=True,
+        fund_tail_downloader=downloader,
+        fund_tail_repository=repository,
+        fund_tail_proxy_refresher=proxy_refresher,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/fund-tail/advice",
+        json={
+            "trade_date": "2026-06-18",
+            "fund_codes": ["001632"],
+            "refresh_data": True,
+        },
+    )
+    payload = response.json()
+    job = client.get(f"/api/jobs/{payload['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert downloader_calls == []
+    assert refresher_calls == [(repository, ["001632"], date(2026, 6, 18))]
+    assert job["result"]["proxy_refresh"]["source"] == "tencent"
+
+
+def test_fund_tail_default_proxy_refresher_receives_proxy_specs(tmp_path, monkeypatch) -> None:
+    data_dir = tmp_path / "fund_tail"
+    data_dir.mkdir()
+    dates = pd.date_range("2026-01-01", periods=40, freq="D")
+    pd.DataFrame({"date": dates, "close": range(100, 140)}).to_csv(data_dir / "benchmark.csv", index=False)
+    pd.DataFrame({"date": dates, "close": [1 + index * 0.01 for index in range(40)]}).to_csv(
+        data_dir / "001632_nav.csv",
+        index=False,
+    )
+    pd.DataFrame({"date": dates, "close": [100 + index for index in range(40)]}).to_csv(
+        data_dir / "001632_proxy.csv",
+        index=False,
+    )
+
+    calls = []
+
+    def fake_refresh(**kwargs):
+        calls.append(kwargs)
+        return {"source": "tencent", "proxy_rows": 1, "benchmark_rows": 1, "missing_symbols": []}
+
+    import src.web.backend.app as backend_app
+
+    monkeypatch.setattr(backend_app, "refresh_fund_tail_proxy_quotes", fake_refresh)
+    repository = FakeFundTailRepository(data_dir)
+    app = backend_app.create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_data_dir=data_dir,
+        fund_tail_report_path=tmp_path / "fund_tail_backtest.csv",
+        fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
+        fund_tail_advice_dir=tmp_path / "fund_tail_advice",
+        run_jobs_inline=True,
+        fund_tail_repository=repository,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/fund-tail/advice",
+        json={
+            "trade_date": "2026-06-18",
+            "fund_codes": ["001632"],
+            "refresh_data": True,
+        },
+    )
+    payload = response.json()
+    job = client.get(f"/api/jobs/{payload['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert calls
+    assert calls[0]["repository"] is repository
+    assert calls[0]["fund_codes"] == ["001632"]
+    assert "001632" in calls[0]["proxy_specs"]
+
+
+def test_fund_tail_refresh_proxy_api_uses_watchlist_codes(tmp_path) -> None:
+    data_dir = tmp_path / "fund_tail"
+    data_dir.mkdir()
+    calls = []
+
+    def proxy_refresher(repository, fund_codes, trade_date):
+        calls.append((repository, fund_codes, trade_date))
+        return {"source": "tencent", "proxy_rows": 1, "benchmark_rows": 1, "missing_symbols": []}
+
+    repository = FakeFundTailRepository(data_dir)
+    repository.watchlist_items = [
+        {
+            "fund_code": "001632",
+            "fund_name": "天弘中证食品饮料ETF联接C",
+            "status": "watching",
+            "priority": "normal",
+            "fund_type": "consumer",
+            "enabled": True,
+            "include_in_advice": True,
+            "position_cost": None,
+            "position_amount": None,
+            "position_return_pct": None,
+            "note": "",
+        },
+        {
+            "fund_code": "017437",
+            "fund_name": "华宝纳斯达克精选股票(QDII)C",
+            "status": "paused",
+            "priority": "normal",
+            "fund_type": "overseas",
+            "enabled": True,
+            "include_in_advice": True,
+            "position_cost": None,
+            "position_amount": None,
+            "position_return_pct": None,
+            "note": "",
+        },
+    ]
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_data_dir=data_dir,
+        run_jobs_inline=True,
+        fund_tail_repository=repository,
+        fund_tail_proxy_refresher=proxy_refresher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/fund-tail/refresh-proxy", json={"trade_date": "2026-06-22"})
+
+    assert response.status_code == 200
+    assert response.json()["proxy_refresh"]["source"] == "tencent"
+    assert calls == [(repository, ["001632"], date(2026, 6, 22))]

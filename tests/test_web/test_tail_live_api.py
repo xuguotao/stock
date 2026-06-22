@@ -77,6 +77,7 @@ def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
             "symbols": ["000001.SZ", "600519.SH"],
             "top_n": 1,
             "ignore_session": True,
+            "auto_sync_minute5": False,
         },
     )
 
@@ -148,8 +149,76 @@ def test_tail_live_selection_reports_chinese_session_error(monkeypatch) -> None:
 def test_tail_live_selection_defaults_to_expanded_scan_pool() -> None:
     request = TailLiveSelectionRequest(trade_date="2026-06-12")
 
-    assert request.limit == 200
+    assert request.limit == 0
+    assert request.universe == "default"
+    assert request.auto_sync_minute5 is True
     assert request.liquidity_min_bars == 60
+    assert request.top_n == 2
+
+
+def test_tail_live_selection_job_refreshes_minute5_before_scanning(tmp_path) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeSignalRepository:
+        def save_selection_result(self, *, job_id, result):
+            return {"trade_date": result["trade_date"], "signal_count": 0, "selected_count": 0}
+
+        def compute_and_save_outcomes(self, *, signal_date, symbols):
+            return {"signal_date": signal_date.isoformat(), "outcome_count": 0, "missing_symbols": symbols}
+
+    def fake_minute5_runner(**kwargs):
+        calls.append(kwargs)
+        kwargs["progress"](100, "completed", "分钟线补齐完成")
+        return {"inserted_rows": 12, "target_symbols": 2, "coverage_after": {"date_range": {"end": "2026-06-12 14:35:00"}}}
+
+    def fake_tail_runner(payload: TailLiveSelectionRequest, progress=None) -> dict[str, Any]:
+        assert calls, "minute5 sync should run before strategy scan"
+        if progress:
+            progress(80, "scanning", "扫描尾盘信号")
+        return {
+            "trade_date": payload.trade_date.isoformat(),
+            "scanned_count": 2,
+            "candidate_count": 0,
+            "confirmed_count": 0,
+            "selected_count": 0,
+            "selections": [],
+            "files": {"json": "x", "csv": "x", "report": "x"},
+            "market_breadth": None,
+            "diagnostics": {"empty_reason": None},
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=tmp_path / "stock.db",
+        run_jobs_inline=True,
+        minute5_sync_runner=fake_minute5_runner,
+        tail_live_runner=fake_tail_runner,
+        tail_signal_repository=FakeSignalRepository(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/tail-session/live-selection",
+        json={
+            "trade_date": "2026-06-12",
+            "symbols": ["000001.SZ", "600519.SH"],
+            "ignore_session": True,
+        },
+    )
+
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+
+    assert response.status_code == 200
+    assert calls[0]["trade_date"].isoformat() == "2026-06-12"
+    assert calls[0]["symbols"] == ["000001.SZ", "600519.SH"]
+    assert calls[0]["limit"] == 0
+    assert calls[0]["include_st"] is False
+    assert job["status"] == "success"
+    assert job["result"]["data_refresh"]["inserted_rows"] == 12
+    assert job["result"]["diagnostics"]["minute5_sync"]["inserted_rows"] == 12
+    assert "stage_timings" in job["result"]
+    assert "minute5_sync" in job["result"]["stage_timings"]
+    assert job["result"]["persistence"]["signals"]["signal_count"] == 0
 
 
 def test_tail_live_selection_explains_empty_universe(monkeypatch, tmp_path) -> None:
@@ -264,6 +333,8 @@ def test_tail_live_selection_returns_ranked_near_misses_when_no_candidates(monke
     assert [row["symbol"] for row in result["ranked_signals"]] == ["000001.SZ", "600519.SH"]
     assert {row["status"] for row in result["ranked_signals"]} == {"filtered"}
     assert {row["filter_reason"] for row in result["ranked_signals"]} == {"below_candidate_threshold"}
+    assert "score_breakdown" in result["ranked_signals"][0]
+    assert result["ranked_signals"][0]["score_breakdown"]["volume_ratio"] > 0
 
 
 def test_tail_live_selection_exposes_v2_watchlist_for_moderate_signals(monkeypatch, tmp_path) -> None:
@@ -464,6 +535,183 @@ def test_tail_live_selection_filters_watchlist_out_of_final_selection(monkeypatc
     assert result["ranked_signals"][0]["filter_reason"] == "v2_not_trade_candidate"
 
 
+def test_tail_live_selection_filters_limit_up_signal_from_executable_selection(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return ["605255.SH", "002774.SZ"]
+
+        def get_realtime_quotes(self, symbols):
+            return pd.DataFrame(
+                [
+                    {"symbol": "605255.SH", "price": 83.26, "limit_up": 83.26},
+                        {"symbol": "002774.SZ", "price": 11.12, "limit_up": 13.22},
+                ]
+            )
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            base_price = 80.0 if symbol == "605255.SH" else 11.0
+            close = 83.26 if symbol == "605255.SH" else 11.12
+            return pd.DataFrame(
+                [
+                    {"time": pd.Timestamp("14:00").time(), "open": base_price, "high": base_price, "low": base_price, "close": base_price, "volume": 1000},
+                    {"time": pd.Timestamp("14:05").time(), "open": base_price, "high": base_price, "low": base_price, "close": base_price, "volume": 1000},
+                    {"time": pd.Timestamp("14:30").time(), "open": base_price, "high": close, "low": base_price, "close": close, "volume": 5000 if symbol == "605255.SH" else 1800},
+                    {"time": pd.Timestamp("14:35").time(), "open": close, "high": close, "low": close, "close": close, "volume": 5000 if symbol == "605255.SH" else 1900},
+                    {"time": pd.Timestamp("14:40").time(), "open": close, "high": close, "low": close, "close": close, "volume": 5000 if symbol == "605255.SH" else 2000},
+                    {"time": pd.Timestamp("14:45").time(), "open": close, "high": close, "low": close, "close": close, "volume": 5000 if symbol == "605255.SH" else 2100},
+                    {"time": pd.Timestamp("14:50").time(), "open": close, "high": close, "low": close, "close": close, "volume": 5000 if symbol == "605255.SH" else 2000},
+                ]
+            )
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=2,
+            top_n=2,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["selected_count"] == 1
+    assert [row["symbol"] for row in result["selections"]] == ["002774.SZ"]
+    ranked_by_symbol = {row["symbol"]: row for row in result["ranked_signals"]}
+    assert ranked_by_symbol["605255.SH"]["status"] == "filtered"
+    assert ranked_by_symbol["605255.SH"]["filter_reason"] == "limit_up_not_buyable"
+    assert ranked_by_symbol["605255.SH"]["tradability"]["buyable"] is False
+    assert ranked_by_symbol["605255.SH"]["tradability"]["execution_flag"] == "blocked_limit_up"
+    assert ranked_by_symbol["605255.SH"]["tradability"]["score"] < 50
+    assert ranked_by_symbol["002774.SZ"]["tradability"]["execution_flag"] == "executable"
+    assert ranked_by_symbol["002774.SZ"]["tradability"]["limit_up_distance"] > 0.1
+    assert result["diagnostics"]["quote_status"]["status"] == "ok"
+    assert result["diagnostics"]["quote_status"]["covered_symbols"] == 2
+    assert result["diagnostics"]["data_freshness"]["status"] == "fresh"
+
+
+def test_tail_live_selection_rows_include_next_day_execution_plan(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return ["002774.SZ"]
+
+        def get_realtime_quotes(self, symbols):
+            return pd.DataFrame([{"symbol": "002774.SZ", "price": 11.12, "limit_up": 13.22}])
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            return pd.DataFrame(
+                [
+                    {"time": pd.Timestamp("14:00").time(), "open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0, "volume": 1000},
+                    {"time": pd.Timestamp("14:05").time(), "open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0, "volume": 1000},
+                    {"time": pd.Timestamp("14:30").time(), "open": 11.0, "high": 11.08, "low": 11.0, "close": 11.06, "volume": 1800},
+                    {"time": pd.Timestamp("14:35").time(), "open": 11.06, "high": 11.10, "low": 11.06, "close": 11.09, "volume": 1900},
+                    {"time": pd.Timestamp("14:40").time(), "open": 11.09, "high": 11.13, "low": 11.08, "close": 11.11, "volume": 2100},
+                    {"time": pd.Timestamp("14:45").time(), "open": 11.11, "high": 11.13, "low": 11.10, "close": 11.12, "volume": 2000},
+                    {"time": pd.Timestamp("14:50").time(), "open": 11.12, "high": 11.13, "low": 11.11, "close": 11.12, "volume": 2000},
+                ]
+            )
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=1,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    plan = result["selections"][0]["next_day_plan"]
+    assert plan["entry_policy"] == "next_open_or_no_chase"
+    assert plan["sell_policy"] == "open_or_morning_strength"
+    assert plan["gap_stop_return"] == -0.015
+    assert plan["intraday_stop_return"] == -0.03
+    assert any("低开超过 1.5%" in rule for rule in plan["rules"])
+
+
+def test_tail_live_selection_filters_tail_pullback_risk_from_final_selection(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return ["600198.SH", "002774.SZ"]
+
+        def get_realtime_quotes(self, symbols):
+            return pd.DataFrame(
+                [
+                    {"symbol": "600198.SH", "price": 9.69, "limit_up": 10.59},
+                    {"symbol": "002774.SZ", "price": 11.12, "limit_up": 13.22},
+                ]
+            )
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            if symbol == "600198.SH":
+                return pd.DataFrame(
+                    [
+                        {"time": pd.Timestamp("14:00").time(), "open": 9.2, "high": 9.2, "low": 9.2, "close": 9.2, "volume": 1000},
+                        {"time": pd.Timestamp("14:05").time(), "open": 9.2, "high": 9.2, "low": 9.2, "close": 9.2, "volume": 1000},
+                        {"time": pd.Timestamp("14:30").time(), "open": 9.27, "high": 10.01, "low": 9.27, "close": 9.81, "volume": 16900},
+                        {"time": pd.Timestamp("14:35").time(), "open": 9.83, "high": 9.97, "low": 9.70, "close": 9.74, "volume": 6600},
+                        {"time": pd.Timestamp("14:40").time(), "open": 9.75, "high": 9.77, "low": 9.69, "close": 9.69, "volume": 2800},
+                        {"time": pd.Timestamp("14:45").time(), "open": 9.69, "high": 9.70, "low": 9.68, "close": 9.69, "volume": 1600},
+                        {"time": pd.Timestamp("14:50").time(), "open": 9.68, "high": 9.70, "low": 9.61, "close": 9.62, "volume": 2100},
+                    ]
+                )
+            return pd.DataFrame(
+                [
+                    {"time": pd.Timestamp("14:00").time(), "open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0, "volume": 1000},
+                    {"time": pd.Timestamp("14:05").time(), "open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0, "volume": 1000},
+                    {"time": pd.Timestamp("14:30").time(), "open": 11.0, "high": 11.08, "low": 11.0, "close": 11.06, "volume": 1800},
+                    {"time": pd.Timestamp("14:35").time(), "open": 11.06, "high": 11.10, "low": 11.06, "close": 11.09, "volume": 1900},
+                    {"time": pd.Timestamp("14:40").time(), "open": 11.09, "high": 11.13, "low": 11.08, "close": 11.11, "volume": 2100},
+                    {"time": pd.Timestamp("14:45").time(), "open": 11.11, "high": 11.13, "low": 11.10, "close": 11.12, "volume": 2000},
+                    {"time": pd.Timestamp("14:50").time(), "open": 11.12, "high": 11.13, "low": 11.11, "close": 11.12, "volume": 2000},
+                ]
+            )
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=2,
+            top_n=2,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["selected_count"] == 1
+    assert [row["symbol"] for row in result["selections"]] == ["002774.SZ"]
+    ranked_by_symbol = {row["symbol"]: row for row in result["ranked_signals"]}
+    assert ranked_by_symbol["600198.SH"]["status"] == "filtered"
+    assert ranked_by_symbol["600198.SH"]["filter_reason"] == "tail_pullback_risk"
+    assert any("冲高回落" in risk for risk in ranked_by_symbol["600198.SH"]["v2_risks"])
+
+
 def test_tail_live_selection_returns_ranked_signals_filtered_from_final_selection(monkeypatch, tmp_path) -> None:
     class FakeScheduler:
         def is_tail_session(self) -> bool:
@@ -546,3 +794,91 @@ def test_tail_live_selection_uses_completed_bar_as_of_time(monkeypatch, tmp_path
     assert result["mode"] == "preview"
     assert result["diagnostics"]["scan_as_of_time"] == "14:35:00"
     assert result["selected_count"] == 0
+
+
+def test_tail_live_selection_marks_stale_data_when_latest_bar_lags_target(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return ["000001.SZ"]
+
+        def get_realtime_quotes(self, symbols):
+            return pd.DataFrame([{"symbol": "000001.SZ", "price": 10.1, "limit_up": 11.0}])
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            return pd.DataFrame(
+                [
+                    {"time": pd.Timestamp("14:00").time(), "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000},
+                    {"time": pd.Timestamp("14:30").time(), "open": 10.0, "high": 10.1, "low": 10.0, "close": 10.1, "volume": 3000},
+                    {"time": pd.Timestamp("14:35").time(), "open": 10.1, "high": 10.1, "low": 10.1, "close": 10.1, "volume": 3000},
+                ]
+            )
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=1,
+            as_of_time="14:56:00",
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["diagnostics"]["data_freshness"]["status"] == "stale"
+    assert result["diagnostics"]["data_freshness"]["target_time"] == "14:55:00"
+    assert result["diagnostics"]["data_freshness"]["latest_time"] == "14:35:00"
+    assert result["diagnostics"]["empty_reason"] == "data_stale"
+    assert result["selected_count"] == 0
+
+
+def test_tail_live_selection_reports_realtime_quote_failure(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return ["000001.SZ"]
+
+        def get_realtime_quotes(self, symbols):
+            raise RuntimeError("quote source down")
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            return pd.DataFrame(
+                [
+                    {"time": pd.Timestamp("14:00").time(), "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000},
+                    {"time": pd.Timestamp("14:30").time(), "open": 10.0, "high": 10.4, "low": 10.0, "close": 10.4, "volume": 4000},
+                    {"time": pd.Timestamp("14:35").time(), "open": 10.4, "high": 10.6, "low": 10.4, "close": 10.6, "volume": 4000},
+                    {"time": pd.Timestamp("14:40").time(), "open": 10.6, "high": 10.8, "low": 10.6, "close": 10.8, "volume": 4000},
+                    {"time": pd.Timestamp("14:45").time(), "open": 10.8, "high": 10.9, "low": 10.8, "close": 10.9, "volume": 4000},
+                    {"time": pd.Timestamp("14:50").time(), "open": 10.9, "high": 11.0, "low": 10.9, "close": 11.0, "volume": 4000},
+                ]
+            )
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=1,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["diagnostics"]["quote_status"]["status"] == "failed"
+    assert "quote source down" in result["diagnostics"]["quote_status"]["error"]
+    assert result["ranked_signals"][0]["tradability"]["execution_flag"] == "unknown"

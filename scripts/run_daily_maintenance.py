@@ -12,9 +12,11 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.web.backend.app import DailyMaintenanceRequest, _run_daily_maintenance_job
-from src.web.backend.data_status import inspect_clickhouse_database
+from src.data.clickhouse_daily_sync import sync_clickhouse_daily_from_minute5, sync_clickhouse_index_daily
 from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_kline
+from src.data.tail_signal_repository import ClickHouseTailSignalRepository
+from src.web.backend.app import DailyMaintenanceRequest, _run_daily_maintenance_job
+from src.web.backend.data_status import inspect_clickhouse_database, persist_clickhouse_quality_snapshot
 from src.web.backend.jobs import JobStore
 from src.web.backend.tail_live import run_tail_live_selection
 
@@ -44,9 +46,13 @@ def main() -> None:
         sync_clickhouse_minute5_kline,
         inspect_clickhouse_database,
         run_tail_live_selection,
+        ClickHouseTailSignalRepository(),
         Path(args.stock_db),
         job.id,
         request,
+        daily_repair_runner=sync_clickhouse_daily_from_minute5,
+        index_daily_sync_runner=sync_clickhouse_index_daily,
+        quality_snapshot_writer=persist_clickhouse_quality_snapshot,
     )
     completed = store.get_job(job.id)
     if completed is None:

@@ -15,6 +15,7 @@ import http.client
 import json
 import logging
 import ssl
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 
 import pandas as pd
@@ -140,8 +141,10 @@ class SinaSource(DataSourceBase):
 
     name = "sina"
 
-    def __init__(self, rate_limit: float = 0.2):
+    def __init__(self, rate_limit: float = 0.2, intraday_datalen: int = 1000, intraday_workers: int = 30):
         super().__init__(rate_limit=rate_limit)
+        self._intraday_datalen = intraday_datalen
+        self._intraday_workers = intraday_workers
 
     def fetch_bars(
         self,
@@ -258,4 +261,61 @@ class SinaSource(DataSourceBase):
         """Fetch intraday bars from Sina Finance."""
         from src.data.intraday_source import fetch_intraday_bars as _fetch
         self._wait_for_rate_limit()
-        return _fetch(symbol, trade_date, frequency)
+        return _fetch(symbol, trade_date, frequency, datalen=self._intraday_datalen)
+
+    def fetch_intraday_bars_batch(
+        self,
+        symbols: list[str],
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        """Fetch intraday bars for multiple symbols concurrently."""
+        if not symbols:
+            return pd.DataFrame()
+        from src.data.intraday_source import fetch_intraday_bars as _fetch
+        frames = []
+        workers = max(1, min(self._intraday_workers, len(symbols)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(_fetch, symbol, trade_date, frequency, self._intraday_datalen)
+                for symbol in symbols
+            ]
+            for future in as_completed(futures):
+                try:
+                    frame = future.result()
+                except Exception:
+                    continue
+                if frame is not None and not frame.empty:
+                    frames.append(frame)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True).sort_values(["symbol", "datetime"]).reset_index(drop=True)
+
+    def fetch_intraday_bars_window(
+        self,
+        symbols: list[str],
+        start: date,
+        end: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        """Fetch recent intraday bars for multiple symbols across a date window."""
+        if not symbols:
+            return pd.DataFrame()
+        from src.data.intraday_source import fetch_intraday_bars_range as _fetch_range
+        frames = []
+        workers = max(1, min(self._intraday_workers, len(symbols)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(_fetch_range, symbol, start, end, frequency, self._intraday_datalen)
+                for symbol in symbols
+            ]
+            for future in as_completed(futures):
+                try:
+                    frame = future.result()
+                except Exception:
+                    continue
+                if frame is not None and not frame.empty:
+                    frames.append(frame)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True).sort_values(["symbol", "datetime"]).reset_index(drop=True)

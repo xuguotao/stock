@@ -62,9 +62,14 @@ def test_fund_tail_page_exposes_watchlist_management_panel() -> None:
     assert "持有中" in source
     assert "准备买入" in source
     assert "参与建议" in source
-    assert "成本净值" in source
-    assert "持仓金额" in source
-    assert "浮盈亏%" in source
+    table_source = source.split('<el-table :data="filteredWatchlist"', 1)[1].split('</el-table>', 1)[0]
+    assert "成本净值" not in table_source
+    assert "持仓金额" not in table_source
+    assert "浮盈亏%" not in table_source
+    assert 'label="最新净值"' in source
+    assert 'label="代理涨跌"' in source
+    assert 'label="预估涨跌"' in source
+    assert 'label="数据日期"' in source
     assert "watchlistStatusText" in source
 
 
@@ -84,3 +89,49 @@ def test_fund_tail_watchlist_position_fields_use_plain_inputs() -> None:
     assert 'label="持仓成本"' not in source
     assert 'label="持仓收益率"' not in source
     assert "el-input-number" not in source
+
+
+def test_fund_tail_page_shows_data_trust_and_action_groups() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    for text in [
+        "数据可信度",
+        "可操作",
+        "减仓提醒",
+        "观察等待",
+        "数据问题",
+        "数据源",
+        "proxyFreshCount",
+        "proxyRefreshSource",
+        "actionableRows",
+        "sellAlertRows",
+    ]:
+        assert text in source
+
+
+def test_fund_tail_toolbar_focuses_on_tail_advice_workflow() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert "刷新行情并生成建议" in source
+    assert "刷新页面" in source
+    assert 'active-text="刷新数据"' not in source
+    assert "v-model=\"refreshData\"" not in source
+    assert "refresh_data: true" in source
+
+
+def test_fund_tail_page_auto_refreshes_proxy_data_for_trust_status() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert "api.refreshFundTailProxy" in source
+    assert "startAutoProxyRefresh" in source
+    assert "window.setInterval" in source
+    assert "window.clearInterval" in source
+    assert "const dataStatus = computed<FundTailDataStatusItem[]>(() => universe.value.length ? universe.value : report.value.data_status ?? [])" in source
+
+
+def test_fund_tail_advice_refresh_button_regenerates_advice_without_job_id() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert "刷新行情并重算建议" in source
+    assert ':disabled="!activeJobId"' not in source
+    assert '@click="runAdvice"' in source

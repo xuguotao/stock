@@ -23,6 +23,7 @@ from src.research.fund_tail_backtest import (
 )
 
 FundTailDownloader = Callable[[Path, str, str], None]
+FundTailProxyRefresher = Callable[..., dict[str, Any]]
 ProgressCallback = Callable[[int, str, str], None]
 
 
@@ -142,8 +143,13 @@ def delete_fund_watchlist_item(repository, fund_code: str) -> dict[str, int]:
 def load_latest_fund_tail_report(
     report_path: str | Path,
     markdown_path: str | Path,
+    repository=None,
 ) -> dict[str, Any]:
     """Load the latest Chinese CSV and Markdown advice report."""
+    if repository is not None:
+        persisted = repository.load_latest_advice_report()
+        if persisted is not None:
+            return persisted
     report = Path(report_path)
     markdown = Path(markdown_path)
     rows: list[dict[str, Any]] = []
@@ -164,6 +170,7 @@ def run_local_fund_tail_advice(
     request: FundTailAdviceRequest,
     *,
     downloader: FundTailDownloader = download_inputs,
+    proxy_refresher: FundTailProxyRefresher | None = None,
     repository=None,
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
@@ -175,16 +182,25 @@ def run_local_fund_tail_advice(
 
     all_fund_names = _fund_names(repository)
     selected_funds = _selected_funds(request.fund_codes, repository=repository, fund_names=all_fund_names)
+    proxy_refresh = None
     if request.refresh_data:
-        _report_progress(progress, 20, "refreshing_data", "刷新基金净值和代理指数数据")
-        downloader(
-            paths.data_dir,
-            request.download_start_date.strftime("%Y%m%d"),
-            request.trade_date.strftime("%Y%m%d"),
-        )
+        if proxy_refresher is not None and repository is not None:
+            _report_progress(progress, 20, "refreshing_proxy", "刷新基金代理行情")
+            proxy_refresh = proxy_refresher(
+                repository=repository,
+                fund_codes=list(selected_funds),
+                trade_date=request.trade_date,
+            )
+        else:
+            _report_progress(progress, 20, "refreshing_data", "刷新基金净值和代理指数数据")
+            downloader(
+                paths.data_dir,
+                request.download_start_date.strftime("%Y%m%d"),
+                request.trade_date.strftime("%Y%m%d"),
+            )
 
     import_result = None
-    if repository is not None:
+    if repository is not None and proxy_refresh is None:
         _report_progress(progress, 40, "importing_clickhouse", "导入基金尾盘数据到 ClickHouse")
         import_result = repository.import_csv_directory(
             paths.data_dir,
@@ -229,6 +245,23 @@ def run_local_fund_tail_advice(
     paths.markdown_path.parent.mkdir(parents=True, exist_ok=True)
     paths.markdown_path.write_text(markdown, encoding="utf-8")
     rows_for_api = chinese_report.fillna("").astype(str).to_dict(orient="records")
+    data_status = _fund_data_status(paths.data_dir, selected_funds, repository=repository)
+    saved_report = None
+    metadata = {
+        "storage": "clickhouse" if repository is not None else "csv",
+        "data_refreshed": request.refresh_data,
+        "row_count": int(len(chinese_report)),
+        "import_result": import_result,
+        "proxy_refresh": proxy_refresh,
+    }
+    if repository is not None:
+        saved_report = repository.save_advice_report(
+            trade_date=request.trade_date.isoformat(),
+            rows=rows_for_api,
+            markdown=markdown,
+            data_status=data_status,
+            metadata=metadata,
+        )
     return {
         "row_count": int(len(chinese_report)),
         "rows": rows_for_api,
@@ -236,7 +269,9 @@ def run_local_fund_tail_advice(
         "data_refreshed": request.refresh_data,
         "storage": "clickhouse" if repository is not None else "csv",
         "import_result": import_result,
-        "data_status": _fund_data_status(paths.data_dir, selected_funds, repository=repository),
+        "proxy_refresh": proxy_refresh,
+        "saved_report": saved_report,
+        "data_status": data_status,
         "report_path": str(paths.report_path),
         "raw_report_path": str(paths.raw_report_path),
         "markdown_path": str(dated_path),

@@ -115,15 +115,160 @@ class ClickHouseStockDataSource(DataSourceBase):
             {"symbol": _code(symbol), "start": start, "end": end},
         )
         if not rows:
-            return pd.DataFrame()
+            return self._fetch_quote_snapshot_5m_bars([symbol], trade_date)
         df = pd.DataFrame(
             rows,
             columns=["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"],
         )
-        return _intraday_rows(df)
+        result = _intraday_rows(df)
+        fallback = self._fetch_quote_snapshot_5m_bars([symbol], trade_date)
+        return _merge_intraday_with_snapshot_fallback(result, fallback)
+
+    def fetch_intraday_bars_batch(
+        self,
+        symbols: list[str],
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        if frequency != "5m" or not symbols:
+            return pd.DataFrame()
+        start = datetime.combine(trade_date, time(0, 0))
+        end = datetime.combine(trade_date, time(23, 59, 59))
+        codes = tuple(_code(symbol) for symbol in symbols)
+        rows = self._execute(
+            """
+            select symbol, datetime, open, high, low, close, volume, amount
+            from minute5_kline
+            where symbol in %(symbols)s and datetime >= %(start)s and datetime <= %(end)s
+            order by symbol, datetime
+            """,
+            {"symbols": codes, "start": start, "end": end},
+        )
+        if rows:
+            df = _intraday_rows(
+                pd.DataFrame(
+                    rows,
+                    columns=[
+                        "symbol",
+                        "datetime",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "volume",
+                        "amount",
+                    ],
+                )
+            )
+            found = set(df["symbol"].dropna().astype(str))
+            missing = [symbol for symbol in symbols if format_symbol(symbol) not in found]
+        else:
+            df = pd.DataFrame()
+            missing = symbols
+        fallback_symbols = list(dict.fromkeys([*symbols, *missing]))
+        fallback = self._fetch_quote_snapshot_5m_bars(fallback_symbols, trade_date)
+        return _merge_intraday_with_snapshot_fallback(df, fallback)
+
+    def _fetch_quote_snapshot_5m_bars(self, symbols: list[str], trade_date: date) -> pd.DataFrame:
+        if not symbols:
+            return pd.DataFrame()
+        start = datetime.combine(trade_date, time(0, 0))
+        end = datetime.combine(trade_date, time(23, 59, 59))
+        rows = self._execute(
+            """
+            select symbol, bucket_start as datetime, open_price, high_price, low_price, close_price, volume, amount
+            from stock_quote_snapshots_5m
+            where symbol in %(symbols)s and bucket_start >= %(start)s and bucket_start <= %(end)s
+            order by symbol, bucket_start
+            """,
+            {"symbols": tuple(_code(symbol) for symbol in symbols), "start": start, "end": end},
+        )
+        if not rows:
+            return pd.DataFrame()
+        return _intraday_rows(
+            pd.DataFrame(
+                rows,
+                columns=["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"],
+            )
+        )
 
     def fetch_realtime_quotes(self, symbols: list[str]) -> pd.DataFrame:
         return pd.DataFrame()
+
+    def fetch_latest_quote_snapshots(
+        self,
+        symbols: list[str],
+        trade_date: date,
+    ) -> pd.DataFrame:
+        if not symbols:
+            return pd.DataFrame()
+        codes = tuple(format_symbol(symbol) for symbol in symbols)
+        rows = self._execute(
+            """
+            select
+                symbol,
+                argMax(name, snapshot_at) as name,
+                argMax(price, snapshot_at) as price,
+                argMax(change_pct, snapshot_at) as change_pct,
+                argMax(volume, snapshot_at) as volume,
+                argMax(amount, snapshot_at) as amount,
+                argMax(turnover_pct, snapshot_at) as turnover_pct,
+                argMax(pe_ttm, snapshot_at) as pe_ttm,
+                argMax(pb, snapshot_at) as pb,
+                argMax(mcap, snapshot_at) as mcap,
+                argMax(float_mcap, snapshot_at) as float_mcap,
+                argMax(limit_up, snapshot_at) as limit_up,
+                argMax(limit_down, snapshot_at) as limit_down,
+                max(snapshot_at) as latest_snapshot_at,
+                argMax(quote_time, snapshot_at) as latest_quote_time
+            from stock_quote_snapshots
+            where symbol in %(symbols)s
+                and toDate(snapshot_at) = %(trade_date)s
+            group by symbol
+            order by symbol
+            """,
+            {"symbols": codes, "trade_date": trade_date},
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(
+            rows,
+            columns=[
+                "symbol",
+                "name",
+                "price",
+                "change_pct",
+                "volume",
+                "amount",
+                "turnover_pct",
+                "pe_ttm",
+                "pb",
+                "mcap",
+                "float_mcap",
+                "limit_up",
+                "limit_down",
+                "snapshot_at",
+                "quote_time",
+            ],
+        )
+        df["symbol"] = df["symbol"].astype(str).map(format_symbol)
+        for column in [
+            "price",
+            "change_pct",
+            "volume",
+            "amount",
+            "turnover_pct",
+            "pe_ttm",
+            "pb",
+            "mcap",
+            "float_mcap",
+            "limit_up",
+            "limit_down",
+        ]:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+        df["snapshot_at"] = pd.to_datetime(df["snapshot_at"], errors="coerce")
+        df["quote_time"] = pd.to_datetime(df["quote_time"], errors="coerce")
+        return df
 
     def rank_liquid_symbols(
         self,
@@ -214,6 +359,22 @@ def _intraday_rows(df: pd.DataFrame) -> pd.DataFrame:
     return result[
         ["time", "datetime", "open", "high", "low", "close", "volume", "amount", "symbol"]
     ]
+
+
+def _merge_intraday_with_snapshot_fallback(primary: pd.DataFrame, fallback: pd.DataFrame) -> pd.DataFrame:
+    if primary.empty:
+        return fallback
+    if fallback.empty:
+        return primary
+    combined = pd.concat(
+        [
+            primary.assign(_source_priority=0),
+            fallback.assign(_source_priority=1),
+        ],
+        ignore_index=True,
+    ).sort_values(["symbol", "datetime", "_source_priority"])
+    combined = combined.drop_duplicates(["symbol", "datetime"], keep="first")
+    return combined.drop(columns=["_source_priority"]).sort_values(["symbol", "datetime"]).reset_index(drop=True)
 
 
 def _code(symbol: str) -> str:

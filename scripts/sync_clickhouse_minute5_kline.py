@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_kline
+from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_history_window, sync_clickhouse_minute5_kline
 
 
 def main() -> None:
@@ -21,8 +21,11 @@ def main() -> None:
     parser.add_argument("--user", default="default", help="ClickHouse user")
     parser.add_argument("--password", default="stock123", help="ClickHouse password")
     parser.add_argument("--database", default="stock", help="ClickHouse database")
-    parser.add_argument("--trade-date", required=True, help="Trade date, YYYY-MM-DD")
+    parser.add_argument("--trade-date", default=None, help="Trade date, YYYY-MM-DD")
+    parser.add_argument("--start", default=None, help="Historical window start date, YYYY-MM-DD")
+    parser.add_argument("--end", default=None, help="Historical window end date, YYYY-MM-DD")
     parser.add_argument("--limit", type=int, default=0, help="Max symbols to update, 0 means all")
+    parser.add_argument("--batch-size", type=int, default=500, help="Historical window symbols per batch")
     parser.add_argument("--symbols", nargs="*", default=None, help="Optional explicit symbols")
     parser.add_argument("--include-st", action="store_true", help="Include ST stocks")
     parser.add_argument("--verbose", action="store_true", help="Print every symbol progress update")
@@ -39,22 +42,50 @@ def main() -> None:
             last_bucket["value"] = marker // 100
             print(f"[{percent:3d}%] {stage}: {message}", flush=True)
 
-    result = sync_clickhouse_minute5_kline(
-        host=args.host,
-        user=args.user,
-        password=args.password,
-        database=args.database,
-        trade_date=datetime.strptime(args.trade_date, "%Y-%m-%d").date(),
-        limit=args.limit,
-        symbols=args.symbols,
-        include_st=args.include_st,
-        progress=report,
-    )
+    if args.start or args.end:
+        if not args.start or not args.end:
+            parser.error("--start and --end must be provided together")
+        result = sync_clickhouse_minute5_history_window(
+            host=args.host,
+            user=args.user,
+            password=args.password,
+            database=args.database,
+            start=datetime.strptime(args.start, "%Y-%m-%d").date(),
+            end=datetime.strptime(args.end, "%Y-%m-%d").date(),
+            limit=args.limit,
+            symbols=args.symbols,
+            include_st=args.include_st,
+            batch_size=args.batch_size,
+            progress=report,
+        )
+    else:
+        if not args.trade_date:
+            parser.error("--trade-date is required unless --start/--end are provided")
+        result = sync_clickhouse_minute5_kline(
+            host=args.host,
+            user=args.user,
+            password=args.password,
+            database=args.database,
+            trade_date=datetime.strptime(args.trade_date, "%Y-%m-%d").date(),
+            limit=args.limit,
+            symbols=args.symbols,
+            include_st=args.include_st,
+            progress=report,
+        )
     coverage = result["coverage_after"]
+    if "success" in result:
+        summary = (
+            f"{result['success']} success, {result.get('no_data', 0)} no_data, "
+            f"{result.get('skipped', 0)} skipped, {result['failed']} failed"
+        )
+    else:
+        summary = (
+            f"{result['target_symbols']} target symbols, {result.get('no_data', 0)} no_data, "
+            f"{result['failed']} failed"
+        )
     print(
         "Done: "
-        f"{result['success']} success, {result.get('no_data', 0)} no_data, "
-        f"{result.get('skipped', 0)} skipped, {result['failed']} failed, "
+        f"{summary}, "
         f"{result['inserted_rows']} rows, "
         f"{coverage['symbol_count']} covered symbols, "
         f"{coverage['date_range']['start']} -> {coverage['date_range']['end']}"

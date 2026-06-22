@@ -12,6 +12,9 @@ def _signal(
     strength: float,
     volume_ratio: float,
     tail_return: float,
+    tail_high_return: float = 0.0,
+    pullback_from_high: float = 0.0,
+    close_position: float = 1.0,
 ) -> TailSessionSignal:
     return TailSessionSignal(
         symbol=symbol,
@@ -21,6 +24,9 @@ def _signal(
         volume_ratio=volume_ratio,
         tail_return=tail_return,
         reason="fixture",
+        tail_high_return=tail_high_return,
+        pullback_from_high=pullback_from_high,
+        close_position=close_position,
     )
 
 
@@ -62,3 +68,45 @@ def test_v2_scorer_keeps_weak_scoreable_signal_visible() -> None:
     assert row.action == "no_trade"
     assert row.total_score < 45
     assert row.risks
+
+
+def test_v2_scorer_filters_spike_then_pullback_signal_from_trade_candidates() -> None:
+    rows = score_tail_signals([
+        _signal(
+            "600198.SH",
+            strength=1.0,
+            volume_ratio=6.7,
+            tail_return=0.045,
+            tail_high_return=0.09,
+            pullback_from_high=-0.045,
+            close_position=0.22,
+        )
+    ])
+
+    row = rows[0]
+    assert row.symbol == "600198.SH"
+    assert row.action != "trade_candidate"
+    assert row.layer in {"watchlist", "weak"}
+    assert any("冲高回落" in risk for risk in row.risks)
+
+
+def test_v2_scorer_keeps_overheated_tail_return_out_of_trade_candidates() -> None:
+    rows = score_tail_signals([
+        _signal("000004.SZ", strength=1.0, volume_ratio=2.2, tail_return=0.028)
+    ])
+
+    row = rows[0]
+    assert row.action == "observe_next_open"
+    assert row.layer == "watchlist"
+    assert any("涨幅过热" in risk for risk in row.risks)
+
+
+def test_v2_scorer_keeps_excessive_volume_spike_out_of_trade_candidates() -> None:
+    rows = score_tail_signals([
+        _signal("000005.SZ", strength=1.0, volume_ratio=3.2, tail_return=0.008)
+    ])
+
+    row = rows[0]
+    assert row.action == "observe_next_open"
+    assert row.layer == "watchlist"
+    assert any("过度放量" in risk for risk in row.risks)

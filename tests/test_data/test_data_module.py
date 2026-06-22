@@ -431,6 +431,96 @@ def test_sina_intraday_bars_returns_dataframe() -> None:
     assert isinstance(df, pd.DataFrame)
 
 
+def test_sina_intraday_bars_uses_configured_history_window(monkeypatch) -> None:
+    from src.data.sina_source import SinaSource
+
+    calls = []
+
+    def fake_fetch(symbol, trade_date, frequency, datalen=1000):
+        calls.append((symbol, trade_date, frequency, datalen))
+        return pd.DataFrame([{
+            "datetime": pd.Timestamp("2026-04-01 14:30:00"),
+            "time": pd.Timestamp("2026-04-01 14:30:00").time(),
+            "symbol": symbol,
+            "open": 10.0,
+            "high": 10.2,
+            "low": 9.9,
+            "close": 10.1,
+            "volume": 1000,
+            "amount": 0.0,
+        }])
+
+    monkeypatch.setattr("src.data.intraday_source.fetch_intraday_bars", fake_fetch)
+    source = SinaSource(rate_limit=0.0, intraday_datalen=10000)
+
+    result = source.fetch_intraday_bars("000001.SZ", date(2026, 4, 1), "5m")
+
+    assert not result.empty
+    assert calls == [("000001.SZ", date(2026, 4, 1), "5m", 10000)]
+
+
+def test_sina_intraday_bars_batch_uses_configured_history_window(monkeypatch) -> None:
+    from src.data.sina_source import SinaSource
+
+    calls = []
+
+    def fake_fetch(symbol, trade_date, frequency, datalen=1000):
+        calls.append((symbol, trade_date, frequency, datalen))
+        return pd.DataFrame([{
+            "datetime": pd.Timestamp("2026-04-01 14:30:00"),
+            "time": pd.Timestamp("2026-04-01 14:30:00").time(),
+            "symbol": symbol,
+            "open": 10.0,
+            "high": 10.2,
+            "low": 9.9,
+            "close": 10.1,
+            "volume": 1000,
+            "amount": 0.0,
+        }])
+
+    monkeypatch.setattr("src.data.intraday_source.fetch_intraday_bars", fake_fetch)
+    source = SinaSource(rate_limit=0.0, intraday_datalen=10000, intraday_workers=2)
+
+    result = source.fetch_intraday_bars_batch(["000001.SZ", "600000.SH"], date(2026, 4, 1), "5m")
+
+    assert sorted(result["symbol"].unique().tolist()) == ["000001.SZ", "600000.SH"]
+    assert sorted(calls) == [
+        ("000001.SZ", date(2026, 4, 1), "5m", 10000),
+        ("600000.SH", date(2026, 4, 1), "5m", 10000),
+    ]
+
+
+def test_sina_intraday_bars_window_uses_configured_history_window(monkeypatch) -> None:
+    from src.data.sina_source import SinaSource
+
+    calls = []
+
+    def fake_fetch(symbol, start, end, frequency, datalen=1000):
+        calls.append((symbol, start, end, frequency, datalen))
+        return pd.DataFrame([{
+            "datetime": pd.Timestamp("2026-04-01 14:30:00"),
+            "time": pd.Timestamp("2026-04-01 14:30:00").time(),
+            "symbol": symbol,
+            "open": 10.0,
+            "high": 10.2,
+            "low": 9.9,
+            "close": 10.1,
+            "volume": 1000,
+            "amount": 0.0,
+        }])
+
+    monkeypatch.setattr("src.data.intraday_source.fetch_intraday_bars_range", fake_fetch)
+    source = SinaSource(rate_limit=0.0, intraday_datalen=10000, intraday_workers=2)
+
+    result = source.fetch_intraday_bars_window(["000001.SZ", "600000.SH"], date(2026, 1, 8), date(2026, 6, 17), "5m")
+
+    assert sorted(result["symbol"].unique().tolist()) == ["000001.SZ", "600000.SH"]
+    assert sorted(calls) == [
+        ("000001.SZ", date(2026, 1, 8), date(2026, 6, 17), "5m", 10000),
+        ("600000.SH", date(2026, 1, 8), date(2026, 6, 17), "5m", 10000),
+    ]
+
+
 def test_data_aggregator_get_intraday_bars_uses_source_method() -> None:
     from src.data.aggregator import DataAggregator
 
@@ -456,6 +546,46 @@ def test_data_aggregator_get_intraday_bars_uses_source_method() -> None:
 
     assert not result.empty
     assert result.iloc[0]["symbol"] == "000001.SZ"
+
+
+def test_data_aggregator_get_intraday_bars_batch_uses_source_batch_method() -> None:
+    from src.data.aggregator import DataAggregator
+
+    class BatchIntradaySource:
+        name = "fake"
+
+        def __init__(self):
+            self.batch_calls = []
+            self.single_calls = []
+
+        def fetch_intraday_bars_batch(self, symbols, trade_date, frequency="5m"):
+            self.batch_calls.append((symbols, trade_date, frequency))
+            return pd.DataFrame([
+                {
+                    "datetime": pd.Timestamp("2025-06-03 14:30"),
+                    "time": pd.Timestamp("2025-06-03 14:30").time(),
+                    "symbol": symbols[0],
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "volume": 1000,
+                    "amount": 10_100,
+                }
+            ])
+
+        def fetch_intraday_bars(self, symbol, trade_date, frequency="5m"):
+            self.single_calls.append(symbol)
+            return pd.DataFrame()
+
+    source = BatchIntradaySource()
+    agg = DataAggregator([source])
+
+    result = agg.get_intraday_bars_batch(["000001.SZ", "600519.SH"], date(2025, 6, 3), frequency="5m")
+
+    assert not result.empty
+    assert source.batch_calls == [(["000001.SZ", "600519.SH"], date(2025, 6, 3), "5m")]
+    assert source.single_calls == []
 
 
 def test_akshare_source_fetches_intraday_bars(monkeypatch) -> None:

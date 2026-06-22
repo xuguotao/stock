@@ -48,6 +48,9 @@ def tail_session_selection_rows(signals: list[TailSessionSignal]) -> list[dict[s
             "last_price": round(signal.last_price, 4),
             "volume_ratio": round(signal.volume_ratio, 6),
             "tail_return": round(signal.tail_return, 6),
+            "tail_high_return": round(float(getattr(signal, "tail_high_return", 0.0)), 6),
+            "pullback_from_high": round(float(getattr(signal, "pullback_from_high", 0.0)), 6),
+            "close_position": round(float(getattr(signal, "close_position", 1.0)), 6),
             "reason": signal.reason,
         }
         for signal in signals

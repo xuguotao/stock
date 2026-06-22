@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date
+import json
+from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -99,6 +101,22 @@ class ClickHouseFundTailRepository:
             """
         )
 
+    def ensure_advice_report_table(self) -> None:
+        self._execute(
+            """
+            create table if not exists fund_tail_advice_runs (
+                trade_date Date,
+                rows_json String,
+                markdown String,
+                data_status_json String,
+                metadata_json String,
+                updated_at DateTime default now()
+            )
+            engine = ReplacingMergeTree(updated_at)
+            order by (trade_date, updated_at)
+            """
+        )
+
     def list_watchlist(self) -> list[dict[str, Any]]:
         self.ensure_watchlist_table()
         rows = self._execute(
@@ -119,7 +137,91 @@ class ClickHouseFundTailRepository:
             order by fund_code
             """
         )
-        return [_watchlist_row(row) for row in rows]
+        items = [_watchlist_row(row) for row in rows]
+        self._attach_watchlist_market_snapshot(items)
+        return items
+
+    def _attach_watchlist_market_snapshot(self, items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+        self.ensure_tables()
+        codes = [item["fund_code"] for item in items]
+        nav_rows = self._execute(
+            """
+            select
+                fund_code,
+                date,
+                close
+            from (
+                select
+                    fund_code,
+                    date,
+                    close,
+                    row_number() over (partition by fund_code order by date desc) as rn
+                from fund_tail_nav final
+                where fund_code in %(codes)s
+            )
+            where rn = 1
+            """,
+            {"codes": tuple(codes)},
+        )
+        proxy_rows = self._execute(
+            """
+            select
+                fund_code,
+                date,
+                close,
+                prev_close,
+                volume
+            from (
+                select
+                    fund_code,
+                    date,
+                    close,
+                    lagInFrame(close) over (
+                        partition by fund_code
+                        order by date
+                        rows between unbounded preceding and unbounded following
+                    ) as prev_close,
+                    volume,
+                    row_number() over (partition by fund_code order by date desc) as rn
+                from fund_tail_proxy final
+                where fund_code in %(codes)s
+            )
+            where rn = 1
+            """,
+            {"codes": tuple(codes)},
+        )
+        nav_by_code = {
+            str(code): {"latest_nav_date": _date_string(day), "latest_nav": _float_or_none(close)}
+            for code, day, close in nav_rows
+        }
+        proxy_by_code = {}
+        for code, day, close, prev_close, volume in proxy_rows:
+            latest = _float_or_none(close)
+            previous = _float_or_none(prev_close)
+            proxy_return = latest / previous - 1 if latest is not None and previous and previous > 0 else None
+            proxy_by_code[str(code)] = {
+                "latest_proxy_date": _date_string(day),
+                "latest_proxy_close": latest,
+                "proxy_prev_close": previous,
+                "proxy_volume": _float_or_none(volume),
+                "proxy_return_pct": proxy_return,
+                "estimated_change_pct": proxy_return,
+            }
+        for item in items:
+            item.update(nav_by_code.get(item["fund_code"], {
+                "latest_nav_date": None,
+                "latest_nav": None,
+            }))
+            item.update(proxy_by_code.get(item["fund_code"], {
+                "latest_proxy_date": None,
+                "latest_proxy_close": None,
+                "proxy_prev_close": None,
+                "proxy_volume": None,
+                "proxy_return_pct": None,
+                "estimated_change_pct": None,
+            }))
 
     def upsert_watchlist_item(self, item: dict[str, Any]) -> dict[str, Any]:
         self.ensure_watchlist_table()
@@ -163,6 +265,74 @@ class ClickHouseFundTailRepository:
             {"fund_code": str(fund_code).zfill(6)},
         )
         return {"deleted": 1}
+
+    def save_advice_report(
+        self,
+        *,
+        trade_date: str | date,
+        rows: list[dict[str, Any]],
+        markdown: str,
+        data_status: list[dict[str, Any]],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, int]:
+        """Persist a generated fund-tail advice report for dashboard/history use."""
+        self.ensure_advice_report_table()
+        row = (
+            _date_value(trade_date),
+            json.dumps(rows, ensure_ascii=False),
+            markdown,
+            json.dumps(data_status, ensure_ascii=False),
+            json.dumps(metadata or {}, ensure_ascii=False),
+        )
+        self._execute(
+            """
+            insert into fund_tail_advice_runs (
+                trade_date,
+                rows_json,
+                markdown,
+                data_status_json,
+                metadata_json
+            ) values
+            """,
+            [row],
+        )
+        return {"saved": 1, "row_count": len(rows)}
+
+    def load_latest_advice_report(self) -> dict[str, Any] | None:
+        """Return the latest persisted advice report, if one exists."""
+        self.ensure_advice_report_table()
+        rows = self._execute(
+            """
+            select
+                trade_date,
+                rows_json,
+                markdown,
+                data_status_json,
+                metadata_json,
+                updated_at
+            from fund_tail_advice_runs final
+            order by updated_at desc
+            limit 1
+            """
+        )
+        if not rows:
+            return None
+        trade_date, rows_json, markdown, data_status_json, metadata_json, updated_at = rows[0]
+        metadata = _json_object(metadata_json)
+        updated_at_text = _datetime_string(updated_at)
+        return {
+            "rows": _json_list(rows_json),
+            "markdown": str(markdown or ""),
+            "data_status": _json_list(data_status_json),
+            "data_refreshed": bool(metadata.get("data_refreshed", False)),
+            "proxy_refresh": metadata.get("proxy_refresh"),
+            "report_path": "clickhouse:fund_tail_advice_runs",
+            "markdown_path": "clickhouse:fund_tail_advice_runs",
+            "report_updated_at": updated_at_text,
+            "markdown_updated_at": updated_at_text,
+            "trade_date": _date_string(trade_date),
+            "metadata": metadata,
+        }
 
     def seed_watchlist_from_static_funds(
         self,
@@ -264,6 +434,45 @@ class ClickHouseFundTailRepository:
             "proxy_rows": len(proxy_rows),
             "benchmark_rows": len(benchmark_rows),
         }
+
+    def insert_proxy_quotes(self, rows: list[dict[str, Any]]) -> dict[str, int]:
+        """Append latest proxy quote rows produced by the fast quote refresher."""
+        self.ensure_tables()
+        values = [
+            (
+                str(row["fund_code"]).zfill(6),
+                str(row["proxy_provider"]),
+                str(row["proxy_code"]),
+                _date_value(row["date"]),
+                float(row["close"]),
+                _float_or_none(row.get("volume")),
+            )
+            for row in rows
+        ]
+        if values:
+            self._execute(
+                "insert into fund_tail_proxy (fund_code, proxy_provider, proxy_code, date, close, volume) values",
+                values,
+            )
+        return {"proxy_rows": len(values)}
+
+    def insert_benchmark_quotes(self, rows: list[dict[str, Any]]) -> dict[str, int]:
+        """Append latest benchmark quote rows produced by the fast quote refresher."""
+        self.ensure_tables()
+        values = [
+            (
+                _date_value(row["date"]),
+                float(row["close"]),
+                _float_or_none(row.get("volume")),
+            )
+            for row in rows
+        ]
+        if values:
+            self._execute(
+                "insert into fund_tail_benchmark (date, close, volume) values",
+                values,
+            )
+        return {"benchmark_rows": len(values)}
 
     def list_universe(
         self,
@@ -392,6 +601,40 @@ def _date_string(value: Any) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     return str(value)[:10]
+
+
+def _datetime_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        source = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return source.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None).isoformat(timespec="seconds")
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat(timespec="seconds")
+        except TypeError:
+            return value.isoformat()
+    return str(value)
+
+
+def _date_value(value: str | date) -> date:
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def _json_list(value: Any) -> list[dict[str, Any]]:
+    if not value:
+        return []
+    parsed = json.loads(str(value))
+    return parsed if isinstance(parsed, list) else []
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    parsed = json.loads(str(value))
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _watchlist_row(row: tuple[Any, ...]) -> dict[str, Any]:

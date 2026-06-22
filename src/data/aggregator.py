@@ -213,6 +213,32 @@ class DataAggregator:
 
         return pd.DataFrame()
 
+    def get_intraday_bars_batch(
+        self,
+        symbols: list[str],
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        """Get intraday bars for multiple symbols, preferring source-native batch reads."""
+        if not symbols:
+            return pd.DataFrame()
+        for source in self.sources:
+            batch_fetcher = getattr(source, "fetch_intraday_bars_batch", None)
+            if batch_fetcher is not None:
+                try:
+                    df = batch_fetcher(symbols, trade_date, frequency)
+                    if df is not None and not df.empty:
+                        return df
+                except Exception as e:
+                    logger.warning(f"Source {source.name} intraday batch failed: {e}")
+                    continue
+
+        frames = [self.get_intraday_bars(symbol, trade_date, frequency) for symbol in symbols]
+        frames = [frame for frame in frames if frame is not None and not frame.empty]
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
     def get_symbols_by_board(self, board_prefixes: list[str]) -> list[str]:
         """Filter stock list by board code prefixes."""
         stocks = self.get_stock_list()
