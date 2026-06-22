@@ -44,6 +44,17 @@ def test_tail_live_selection_page_explains_new_filter_reasons() -> None:
     assert "pullback_from_high" in source
 
 
+def test_tail_live_selection_page_labels_signal_quality_and_rank_context() -> None:
+    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+
+    assert "信号质量分" in source
+    assert "原始排名" in source
+    assert "候选排名" in source
+    assert "raw_rank" in source
+    assert "final_candidate_rank" in source
+    assert "V2分" in source
+
+
 def test_tail_live_selection_page_shows_executability_fields() -> None:
     source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
 

@@ -259,6 +259,10 @@
         </el-table>
         <el-table v-else :data="rankedSignals" height="420" :empty-text="strategyEmptyText">
           <el-table-column prop="rank" label="排名" width="72" />
+          <el-table-column prop="raw_rank" label="原始排名" width="92" />
+          <el-table-column prop="final_candidate_rank" label="候选排名" width="92">
+            <template #default="{ row }">{{ row.final_candidate_rank ?? '-' }}</template>
+          </el-table-column>
           <el-table-column label="股票" min-width="120">
             <template #default="{ row }">
               <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
@@ -284,7 +288,7 @@
           <el-table-column label="V2分" width="100" align="right">
             <template #default="{ row }">{{ formatScore(row.v2_score) }}</template>
           </el-table-column>
-          <el-table-column label="可信度" width="120" align="right">
+          <el-table-column label="信号质量分" width="130" align="right">
             <template #default="{ row }">
               <el-tag :type="credibilityType(row.credibility?.score)" effect="plain">
                 {{ row.credibility?.score ?? '-' }} {{ row.credibility?.grade ?? '' }}
@@ -353,8 +357,10 @@
             <template #default="{ row }">
               <div class="credibility-detail">
                 <el-descriptions :column="2" border>
-                  <el-descriptions-item label="可信度">{{ row.credibility?.score ?? '-' }} / 100（{{ row.credibility?.grade ?? '-' }}）</el-descriptions-item>
+                  <el-descriptions-item label="信号质量分">{{ row.credibility?.score ?? '-' }} / 100（{{ row.credibility?.grade ?? '-' }}）</el-descriptions-item>
                   <el-descriptions-item label="阶段">{{ row.credibility?.phase ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="原始排名">{{ row.raw_rank ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="候选排名">{{ row.final_candidate_rank ?? '-' }}</el-descriptions-item>
                   <el-descriptions-item label="信号强度">{{ formatScore(row.credibility?.components?.signal_strength) }}</el-descriptions-item>
                   <el-descriptions-item label="量能质量">{{ formatScore(row.credibility?.components?.volume_quality) }}</el-descriptions-item>
                   <el-descriptions-item label="涨幅质量">{{ formatScore(row.credibility?.components?.return_quality) }}</el-descriptions-item>
@@ -382,7 +388,7 @@
               <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="可信度" width="120" align="right">
+          <el-table-column label="信号质量分" width="130" align="right">
             <template #default="{ row }">
               <el-tag :type="credibilityType(row.credibility?.score)" effect="plain">
                 {{ row.credibility?.score ?? '-' }} {{ row.credibility?.grade ?? '' }}
@@ -514,6 +520,8 @@ import { api, type DataStatusResponse, type JobRecord, type JobStatus, type Tail
 
 interface SelectionRow {
   rank?: number
+  raw_rank?: number | null
+  final_candidate_rank?: number | null
   symbol: string
   trade_date: string
   strength: number

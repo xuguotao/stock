@@ -5,8 +5,9 @@ from typing import Any
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from src.strategy.scanner import TailSessionSignal
 from src.web.backend.app import create_app
-from src.web.backend.tail_live import TailLiveSelectionRequest, run_tail_live_selection
+from src.web.backend.tail_live import TailLiveSelectionRequest, _final_trade_candidates, _ranked_signal_rows, run_tail_live_selection
 
 
 def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
@@ -753,6 +754,52 @@ def test_tail_live_selection_returns_ranked_signals_filtered_from_final_selectio
     assert [row["rank"] for row in result["ranked_signals"]] == [1, 2]
     assert {row["status"] for row in result["ranked_signals"]} == {"filtered"}
     assert {row["filter_reason"] for row in result["ranked_signals"]} == {"below_min_strength"}
+
+
+def test_tail_live_selection_ranks_strategy_pool_by_v2_trade_readiness() -> None:
+    hot_but_not_tradeable = TailSessionSignal(
+        symbol="000001.SZ",
+        trade_date=pd.Timestamp("2026-06-12").date(),
+        strength=1.0,
+        last_price=10.3,
+        volume_ratio=3.0,
+        tail_return=0.03,
+        reason="hot but chase risk",
+        tail_high_return=0.03,
+        pullback_from_high=0.0,
+        close_position=1.0,
+    )
+    trade_ready = TailSessionSignal(
+        symbol="688768.SH",
+        trade_date=pd.Timestamp("2026-06-12").date(),
+        strength=0.8,
+        last_price=20.1,
+        volume_ratio=1.8,
+        tail_return=0.01,
+        reason="balanced trade candidate",
+        tail_high_return=0.012,
+        pullback_from_high=-0.001,
+        close_position=0.9,
+    )
+
+    selected = _final_trade_candidates([hot_but_not_tradeable, trade_ready], top_n=1, min_strength=None)
+    rows = _ranked_signal_rows(
+        confirmed=[hot_but_not_tradeable, trade_ready],
+        selected=selected,
+        ranked_pool=[hot_but_not_tradeable, trade_ready],
+        mode="selection",
+        top_n=1,
+        min_strength=None,
+    )
+
+    assert [signal.symbol for signal in selected] == ["688768.SH"]
+    assert rows[0]["symbol"] == "688768.SH"
+    assert rows[0]["status"] == "selected"
+    assert rows[0]["raw_rank"] == 2
+    assert rows[0]["final_candidate_rank"] == 1
+    assert rows[1]["symbol"] == "000001.SZ"
+    assert rows[1]["raw_rank"] == 1
+    assert rows[1]["filter_reason"] == "v2_not_trade_candidate"
 
 
 def test_tail_live_selection_uses_completed_bar_as_of_time(monkeypatch, tmp_path) -> None:

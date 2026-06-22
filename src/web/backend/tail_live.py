@@ -284,17 +284,30 @@ def _final_trade_candidates(
     min_strength: float | None,
     tradability_by_symbol: dict[str, dict[str, Any]] | None = None,
 ) -> list[Any]:
-    layered = score_tail_signals(confirmed)
-    trade_candidates = [
-        row.signal for row in layered
-        if row.layer == "strong" and row.action == "trade_candidate"
+    trade_candidates = _trade_candidate_layered(
+        confirmed,
+        min_strength=min_strength,
+        tradability_by_symbol=tradability_by_symbol,
+    )
+    selected = [row.signal for row in trade_candidates]
+    if top_n is None or top_n <= 0:
+        return selected
+    return selected[:top_n]
+
+
+def _trade_candidate_layered(
+    signals: list[Any],
+    *,
+    min_strength: float | None,
+    tradability_by_symbol: dict[str, dict[str, Any]] | None = None,
+) -> list[LayeredSignal]:
+    return [
+        row for row in score_tail_signals(signals)
+        if row.layer == "strong"
+        and row.action == "trade_candidate"
+        and (min_strength is None or row.signal.strength >= min_strength)
         and _is_buyable(row.signal.symbol, tradability_by_symbol)
     ]
-    return select_tail_session_signals(
-        trade_candidates,
-        top_n=top_n,
-        min_strength=min_strength,
-    )
 
 
 def _safe_realtime_quotes(aggregator: Any, symbols: list[str]) -> tuple[Any | None, dict[str, Any]]:
@@ -406,9 +419,33 @@ def _ranked_signal_rows(
     layered_by_symbol: dict[str, LayeredSignal] | None = None,
     tradability_by_symbol: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    ordered = select_tail_session_signals(confirmed, top_n=None, min_strength=None)
-    if not ordered and ranked_pool:
-        ordered = select_tail_session_signals(ranked_pool, top_n=None, min_strength=None)
+    ordered_source = ranked_pool or confirmed
+    effective_layered_by_symbol = layered_by_symbol or {
+        row.symbol: row for row in score_tail_signals(ordered_source)
+    }
+    raw_ordered = select_tail_session_signals(ranked_pool or confirmed, top_n=None, min_strength=None)
+    raw_rank_by_symbol = {signal.symbol: index for index, signal in enumerate(raw_ordered, start=1)}
+    candidate_rank_by_symbol = {
+        row.symbol: index
+        for index, row in enumerate(
+            _trade_candidate_layered(
+                confirmed,
+                min_strength=min_strength,
+                tradability_by_symbol=tradability_by_symbol,
+            ),
+            start=1,
+        )
+    }
+    ordered = sorted(
+        ordered_source,
+        key=lambda signal: _ranked_signal_display_key(
+            signal,
+            selected=selected,
+            candidate_rank_by_symbol=candidate_rank_by_symbol,
+            layered_by_symbol=effective_layered_by_symbol,
+            tradability_by_symbol=tradability_by_symbol,
+        ),
+    )
     selected_symbols = {signal.symbol for signal in selected}
     preview_symbols = {signal.symbol for signal in preview or []}
     confirmed_symbols = {signal.symbol for signal in confirmed}
@@ -416,7 +453,7 @@ def _ranked_signal_rows(
     for index, signal in enumerate(ordered, start=1):
         status = "selected" if signal.symbol in selected_symbols else "filtered"
         filter_reason = None
-        layered = (layered_by_symbol or {}).get(signal.symbol)
+        layered = effective_layered_by_symbol.get(signal.symbol)
         if mode == "preview" and signal.symbol in preview_symbols:
             status = "preview"
             filter_reason = "preview_not_final"
@@ -431,17 +468,19 @@ def _ranked_signal_rows(
                 filter_reason = "tail_pullback_risk"
             elif layered is not None and layered.action != "trade_candidate":
                 filter_reason = "v2_not_trade_candidate"
-            elif index > top_n:
+            elif candidate_rank_by_symbol.get(signal.symbol, 0) > top_n > 0:
                 filter_reason = "outside_top_n"
             else:
                 filter_reason = "not_selected"
         row = _signal_rows_with_credibility(
             [signal],
             mode=mode,
-            layered_by_symbol=layered_by_symbol,
+            layered_by_symbol=effective_layered_by_symbol,
         )[0]
         row.update({
             "rank": index,
+            "raw_rank": raw_rank_by_symbol.get(signal.symbol),
+            "final_candidate_rank": candidate_rank_by_symbol.get(signal.symbol),
             "status": status,
             "filter_reason": filter_reason,
             "tradability": (tradability_by_symbol or {}).get(signal.symbol, _default_tradability()),
@@ -449,6 +488,32 @@ def _ranked_signal_rows(
         })
         rows.append(row)
     return rows
+
+
+def _ranked_signal_display_key(
+    signal: Any,
+    *,
+    selected: list[Any],
+    candidate_rank_by_symbol: dict[str, int],
+    layered_by_symbol: dict[str, LayeredSignal] | None,
+    tradability_by_symbol: dict[str, dict[str, Any]] | None,
+) -> tuple[Any, ...]:
+    selected_symbols = {row.symbol for row in selected}
+    layered = (layered_by_symbol or {}).get(signal.symbol)
+    candidate_rank = candidate_rank_by_symbol.get(signal.symbol)
+    tradability = (tradability_by_symbol or {}).get(signal.symbol, _default_tradability())
+    return (
+        0 if signal.symbol in selected_symbols else 1,
+        0 if candidate_rank is not None else 1,
+        candidate_rank or 999999,
+        -float(layered.total_score if layered is not None else 0.0),
+        0 if _is_buyable(signal.symbol, tradability_by_symbol) else 1,
+        -float(tradability.get("score") or 0),
+        -float(signal.strength),
+        -float(signal.volume_ratio),
+        -float(signal.tail_return),
+        signal.symbol,
+    )
 
 
 def _score_breakdown(signal: Any, layered: LayeredSignal | None) -> dict[str, Any]:
