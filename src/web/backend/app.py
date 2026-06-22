@@ -1247,10 +1247,17 @@ def _safe_dataset_name(name: str) -> str:
 
 
 def _resolve_trade_date(status: dict[str, Any]) -> date:
-    value = (status.get("health") or {}).get("daily_latest_date")
-    if not value:
-        raise ValueError("ClickHouse daily_kline 没有可用最新日期")
-    return date.fromisoformat(str(value))
+    health = status.get("health") or {}
+    candidates = []
+    minute5_latest = health.get("minute5_latest_datetime")
+    if minute5_latest:
+        candidates.append(date.fromisoformat(str(minute5_latest).split(" ", 1)[0].split("T", 1)[0]))
+    daily_latest = health.get("daily_latest_date")
+    if daily_latest:
+        candidates.append(date.fromisoformat(str(daily_latest)))
+    if candidates:
+        return max(candidates)
+    raise ValueError("ClickHouse daily_kline 和 minute5_kline 都没有可用最新日期")
 
 
 def _run_strategy_review(

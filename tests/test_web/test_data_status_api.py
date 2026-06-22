@@ -485,6 +485,66 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
     }
 
 
+def test_daily_maintenance_prefers_latest_minute5_date_when_daily_is_stale(tmp_path) -> None:
+    stock_db = tmp_path / "stock.db"
+    _create_stock_db(stock_db)
+    status = {
+        "database": {"exists": True, "type": "clickhouse", "size_bytes": 0},
+        "stock_summary": {"stock_count": 2, "non_st_stock_count": 2, "st_stock_count": 0},
+        "health": {
+            "status": "ok",
+            "daily_latest_date": "2026-06-18",
+            "daily_symbol_count": 2,
+            "minute5_latest_datetime": "2026-06-22 15:00:00",
+            "minute5_symbol_count": 2,
+        },
+        "tables": {},
+    }
+    sync_dates = []
+    repair_dates = []
+
+    def fake_sync(db_path, trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
+        sync_dates.append(trade_date.isoformat())
+        return {
+            "trade_date": trade_date.isoformat(),
+            "target_symbols": 2,
+            "success": 2,
+            "no_data": 0,
+            "no_data_symbols": [],
+            "failed": 0,
+            "inserted_rows": 0,
+        }
+
+    def fake_daily_repair(*, trade_date):
+        repair_dates.append(trade_date.isoformat())
+        return {"trade_date": trade_date.isoformat(), "inserted_rows": 2}
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=stock_db,
+        run_jobs_inline=True,
+        minute5_sync_runner=fake_sync,
+        data_status_runner=lambda: status,
+        daily_repair_runner=fake_daily_repair,
+        auto_start_minute5_monitor=False,
+        auto_start_quote_snapshot_monitor=False,
+        auto_start_data_ops_scheduler=False,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/data/daily-maintenance",
+        json={"retry_no_data": True, "run_strategy_review": False},
+    )
+
+    assert response.status_code == 200
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+    assert job["status"] == "success"
+    assert job["result"]["trade_date"] == "2026-06-22"
+    assert sync_dates == ["2026-06-22"]
+    assert repair_dates == ["2026-06-22"]
+
+
 def test_data_ops_scheduler_endpoint_can_run_maintenance_once(tmp_path) -> None:
     maintenance_calls = []
 
