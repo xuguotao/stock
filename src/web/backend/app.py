@@ -194,6 +194,7 @@ def create_app(
 
     app = FastAPI(title="A-Share Quant Dashboard API", lifespan=lifespan)
     store = JobStore(db_path)
+    store.mark_running_jobs_interrupted("服务重启，任务进程已中断")
     datasets = DatasetService(dataset_root)
     fund_tail_paths = FundTailPaths(
         data_dir=Path(fund_tail_data_dir),

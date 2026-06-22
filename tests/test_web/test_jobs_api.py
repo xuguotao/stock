@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from src.web.backend.app import create_app
+from src.web.backend.jobs import JobStore
 
 
 def test_jobs_api_creates_and_lists_jobs(tmp_path) -> None:
@@ -30,3 +31,28 @@ def test_jobs_api_returns_one_job(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["id"] == created["id"]
+
+
+def test_job_store_marks_existing_running_jobs_interrupted_on_startup(tmp_path) -> None:
+    db_path = tmp_path / "jobs.sqlite3"
+    store = JobStore(db_path)
+    running = store.create_job("daily_maintenance", {})
+    store.update_job(
+        running.id,
+        status="running",
+        progress={"percent": 53, "stage": "fetching", "message": "更新 603721.SH ClickHouse 5m 分钟线 7/10"},
+    )
+    success = store.create_job("daily_maintenance", {})
+    store.update_job(success.id, status="success", result={"ok": True})
+
+    marked = store.mark_running_jobs_interrupted("服务重启，任务进程已中断")
+
+    interrupted = store.get_job(running.id)
+    untouched = store.get_job(success.id)
+    assert marked == 1
+    assert interrupted is not None
+    assert interrupted.status == "failed"
+    assert interrupted.error == "服务重启，任务进程已中断"
+    assert interrupted.progress == {"percent": 100, "stage": "interrupted", "message": "服务重启，任务进程已中断"}
+    assert untouched is not None
+    assert untouched.status == "success"

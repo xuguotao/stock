@@ -124,6 +124,29 @@ class JobStore:
             raise KeyError(job_id)
         return job
 
+    def mark_running_jobs_interrupted(self, reason: str) -> int:
+        """Mark jobs left running by a previous server process as failed."""
+        updated_at = _now()
+        progress = _progress(100, "interrupted", reason)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                update jobs
+                set status = 'failed',
+                    result = null,
+                    error = ?,
+                    progress = ?,
+                    updated_at = ?
+                where status = 'running'
+                """,
+                (
+                    reason,
+                    json.dumps(progress, ensure_ascii=False),
+                    updated_at,
+                ),
+            )
+            return int(cursor.rowcount)
+
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.execute(
