@@ -235,6 +235,34 @@ export interface DataStatusResponse {
   }>
 }
 
+export interface DataHealthRepairAction {
+  key: string
+  title: string
+  status: string
+  auto_repair: boolean
+  reason: string
+  trade_date?: string | null
+  symbols?: string[]
+  samples?: Array<Record<string, unknown>>
+  runner?: string | null
+}
+
+export interface DataHealthRepairPlan {
+  status: string
+  summary: {
+    quality_status: string
+    issue_count: number
+    auto_repair_count: number
+    manual_count: number
+  }
+  issues: string[]
+  actions: DataHealthRepairAction[]
+}
+
+export interface DataHealthRepairPayload {
+  action_keys?: string[] | null
+}
+
 export interface StockDbSyncPayload {
   remote?: string
   backup?: boolean
@@ -732,6 +760,15 @@ export const api = {
   },
   getDataOpsScheduler() {
     return request<DataOpsSchedulerStatus>('/api/data/ops-scheduler')
+  },
+  getDataHealthRepairPlan() {
+    return request<DataHealthRepairPlan>('/api/data/health-repair-plan')
+  },
+  repairDataHealth(payload: DataHealthRepairPayload = {}) {
+    return request<BacktestSubmitResponse>('/api/data/health-repair', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
   },
   startDataOpsScheduler() {
     return request<DataOpsSchedulerStatus>('/api/data/ops-scheduler/start', { method: 'POST' })

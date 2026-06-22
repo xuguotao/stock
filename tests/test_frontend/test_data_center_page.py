@@ -164,3 +164,15 @@ def test_data_center_page_auto_refreshes_background_status() -> None:
     assert "window.setInterval(refreshOperationalStatus" in source
     assert "window.setInterval(refreshDataStatus" in source
     assert "onBeforeUnmount(stopAutoRefresh)" in source
+
+
+def test_data_center_page_exposes_health_repair_plan_actions() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "告警修复计划" in source
+    assert "自动修复可处理项" in source
+    assert "repairDataHealth" in source
+    assert "pollHealthRepairJob" in source
+    assert "getDataHealthRepairPlan" in client
+    assert "repairDataHealth" in client

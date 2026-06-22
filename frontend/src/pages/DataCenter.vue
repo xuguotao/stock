@@ -40,6 +40,37 @@
           <small>{{ quoteSnapshotReadinessText }}</small>
         </div>
       </div>
+      <div v-if="repairPlan?.actions.length" class="repair-plan-panel">
+        <div class="repair-plan-head">
+          <div>
+            <div class="operation-title">告警修复计划</div>
+            <div class="operation-desc">
+              自动 {{ repairPlan.summary.auto_repair_count }} 项，手动 {{ repairPlan.summary.manual_count }} 项；{{ repairPlan.issues.join('，') || '无告警' }}
+            </div>
+          </div>
+          <div class="repair-actions">
+            <el-button size="small" :loading="repairPlanLoading" @click="loadRepairPlan">刷新计划</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              :disabled="!repairPlan.summary.auto_repair_count"
+              :loading="repairingHealth"
+              @click="repairDataHealth"
+            >
+              自动修复可处理项
+            </el-button>
+          </div>
+        </div>
+        <div class="repair-action-list">
+          <div v-for="action in repairPlan.actions" :key="action.key" class="repair-action-item">
+            <span>{{ action.title }}</span>
+            <small>{{ action.reason }}</small>
+            <el-tag :type="action.auto_repair ? 'success' : 'warning'" effect="plain" size="small">
+              {{ action.auto_repair ? '自动' : '手动' }}
+            </el-tag>
+          </div>
+        </div>
+      </div>
       <div class="section-header compact-section-header">
         <div>
           <h3 class="section-title">消费链路状态</h3>
@@ -214,6 +245,16 @@
         <el-progress
           :percentage="maintenanceJob.progress.percent"
           :status="maintenanceJob.status === 'failed' ? 'exception' : maintenanceJob.status === 'success' ? 'success' : undefined"
+        />
+      </div>
+      <div v-if="healthRepairJob" class="sync-progress">
+        <div class="sync-progress-header">
+          <span>健康修复：{{ healthRepairJob.progress.message || healthRepairJob.status }}</span>
+          <el-tag :type="jobStatusType(healthRepairJob.status)" effect="plain">{{ healthRepairJob.status }}</el-tag>
+        </div>
+        <el-progress
+          :percentage="healthRepairJob.progress.percent"
+          :status="healthRepairJob.status === 'failed' ? 'exception' : healthRepairJob.status === 'success' ? 'success' : undefined"
         />
       </div>
       <div v-if="datasetBuildJob" class="sync-progress">
@@ -493,7 +534,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type DataOpsSchedulerStatus, type DataStatusResponse, type DatasetDetail, type DatasetSummary, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus } from '../api/client'
+import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataStatusResponse, type DatasetDetail, type DatasetSummary, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus } from '../api/client'
 
 const datasets = ref<DatasetSummary[]>([])
 const detail = ref<DatasetDetail | null>(null)
@@ -502,15 +543,19 @@ const loading = ref(false)
 const syncing = ref(false)
 const syncingMinute5 = ref(false)
 const maintaining = ref(false)
+const repairingHealth = ref(false)
+const repairPlanLoading = ref(false)
 const buildingDataset = ref(false)
 const monitorChanging = ref(false)
 const syncJob = ref<JobRecord | null>(null)
 const minute5Job = ref<JobRecord | null>(null)
 const maintenanceJob = ref<JobRecord | null>(null)
+const healthRepairJob = ref<JobRecord | null>(null)
 const datasetBuildJob = ref<JobRecord | null>(null)
 const minute5Monitor = ref<Minute5MonitorStatus | null>(null)
 const quoteSnapshotMonitor = ref<QuoteSnapshotMonitorStatus | null>(null)
 const dataOpsScheduler = ref<DataOpsSchedulerStatus | null>(null)
+const repairPlan = ref<DataHealthRepairPlan | null>(null)
 const minute5TradeDate = ref(todayLabel())
 let operationalRefreshTimer: number | null = null
 let dataStatusRefreshTimer: number | null = null
@@ -865,6 +910,7 @@ async function loadData() {
       api.getDataOpsScheduler()
     ])
     dataStatus.value = statusResponse
+    repairPlan.value = await api.getDataHealthRepairPlan()
     datasets.value = datasetsResponse.items
     minute5Monitor.value = monitorResponse
     quoteSnapshotMonitor.value = quoteSnapshotMonitorResponse
@@ -876,6 +922,17 @@ async function loadData() {
     ElMessage.error(error instanceof Error ? error.message : '加载数据集失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadRepairPlan() {
+  repairPlanLoading.value = true
+  try {
+    repairPlan.value = await api.getDataHealthRepairPlan()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载修复计划失败')
+  } finally {
+    repairPlanLoading.value = false
   }
 }
 
@@ -1038,6 +1095,33 @@ async function runDailyMaintenance() {
   }
 }
 
+async function repairDataHealth() {
+  try {
+    await ElMessageBox.confirm(
+      `将自动执行 ${repairPlan.value?.summary.auto_repair_count ?? 0} 个可处理修复项；历史回填类手动项不会自动执行。`,
+      '自动修复数据告警',
+      { type: 'warning', confirmButtonText: '开始修复', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+
+  repairingHealth.value = true
+  try {
+    const actionKeys = repairPlan.value?.actions.filter((action) => action.auto_repair).map((action) => action.key) ?? []
+    const response = await api.repairDataHealth({ action_keys: actionKeys })
+    const completed = await pollHealthRepairJob(response.job_id)
+    if (completed) {
+      ElMessage.success('数据健康修复完成')
+      await loadData()
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '数据健康修复失败')
+  } finally {
+    repairingHealth.value = false
+  }
+}
+
 async function buildClickHouseDataset() {
   const end = dataStatus.value?.health.daily_latest_date
   if (!end) {
@@ -1115,6 +1199,20 @@ async function pollMaintenanceJob(jobId: string) {
     await sleep(1000)
   }
   ElMessage.warning('日常维护仍在运行，请稍后刷新任务状态')
+  return false
+}
+
+async function pollHealthRepairJob(jobId: string) {
+  for (let attempt = 0; attempt < 7200; attempt += 1) {
+    healthRepairJob.value = await api.getJob(jobId)
+    if (healthRepairJob.value.status === 'success') return true
+    if (healthRepairJob.value.status === 'failed') {
+      ElMessage.error(healthRepairJob.value.error ?? '数据健康修复失败')
+      return false
+    }
+    await sleep(1000)
+  }
+  ElMessage.warning('数据健康修复仍在运行，请稍后刷新任务状态')
   return false
 }
 
@@ -1506,6 +1604,47 @@ onBeforeUnmount(stopAutoRefresh)
   margin-bottom: 12px;
 }
 
+.repair-plan-panel {
+  border-top: 1px solid #ebeef5;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.repair-plan-head,
+.repair-action-item {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.repair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.repair-action-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.repair-action-item {
+  background: #f8fafc;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  color: #303133;
+  font-size: 13px;
+  padding: 9px 10px;
+}
+
+.repair-action-item small {
+  color: #909399;
+  flex: 1;
+  min-width: 0;
+}
+
 @media (max-width: 1100px) {
   .readiness-grid,
   .consumer-strip,
@@ -1520,6 +1659,12 @@ onBeforeUnmount(stopAutoRefresh)
 
   .quote-health-grid {
     grid-template-columns: 1fr;
+  }
+
+  .repair-plan-head,
+  .repair-action-item {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

@@ -26,6 +26,7 @@ from src.web.backend.data_status import (
     inspect_stock_database,
     persist_clickhouse_quality_snapshot,
 )
+from src.web.backend.data_health_repair import build_data_health_repair_plan
 from src.web.backend.datasets import DatasetService
 from src.web.backend.fund_tail import (
     FundTailAdviceRequest,
@@ -81,6 +82,10 @@ class DailyMaintenanceRequest(BaseModel):
     strategy_universe: str = "default"
     bars_cache_dir: str = "data/cache/bars"
     output_dir: str = "reports/tail_session"
+
+
+class DataHealthRepairRequest(BaseModel):
+    action_keys: list[str] | None = None
 
 
 class Minute5MonitorRequest(BaseModel):
@@ -339,6 +344,45 @@ def create_app(
     @app.get("/api/data/status")
     def get_data_status() -> dict[str, Any]:
         return app.state.data_status_runner()
+
+    @app.get("/api/data/health-repair-plan")
+    def get_data_health_repair_plan() -> dict[str, Any]:
+        return build_data_health_repair_plan(app.state.data_status_runner())
+
+    @app.post("/api/data/health-repair")
+    def create_data_health_repair(
+        payload: DataHealthRepairRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, Any]:
+        job = store.create_job("data_health_repair", payload.model_dump(mode="json"))
+
+        if app.state.run_jobs_inline:
+            _run_data_health_repair_job(
+                store,
+                app.state.minute5_sync_runner,
+                app.state.quote_snapshot_sync_runner,
+                app.state.data_status_runner,
+                app.state.stock_db_path,
+                job.id,
+                payload,
+                daily_repair_runner=app.state.daily_repair_runner,
+                quality_snapshot_writer=app.state.quality_snapshot_writer,
+            )
+        else:
+            background_tasks.add_task(
+                _run_data_health_repair_job,
+                store,
+                app.state.minute5_sync_runner,
+                app.state.quote_snapshot_sync_runner,
+                app.state.data_status_runner,
+                app.state.stock_db_path,
+                job.id,
+                payload,
+                daily_repair_runner=app.state.daily_repair_runner,
+                quality_snapshot_writer=app.state.quality_snapshot_writer,
+            )
+
+        return {"job_id": job.id}
 
     @app.get("/api/stocks/{symbol}/trend")
     def get_stock_trend(
@@ -957,6 +1001,103 @@ def _run_minute5_sync_job(
     store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "5m 分钟线更新完成"))
 
 
+def _run_data_health_repair_job(
+    store: JobStore,
+    minute5_runner,
+    quote_snapshot_runner,
+    data_status_runner,
+    stock_db_path: Path,
+    job_id: str,
+    payload: DataHealthRepairRequest,
+    *,
+    daily_repair_runner=None,
+    quality_snapshot_writer=None,
+) -> None:
+    store.update_job(job_id, status="running", progress=_progress(5, "planning", "生成数据健康修复计划"))
+    try:
+        before_status = data_status_runner()
+        plan = build_data_health_repair_plan(before_status)
+        requested = set(payload.action_keys or [])
+        repairs = []
+        skipped = []
+        wants_quality_snapshot = any(
+            action.get("key") == "quality_snapshot"
+            and action.get("auto_repair")
+            and (not requested or action["key"] in requested)
+            for action in plan["actions"]
+        )
+        auto_actions = [
+            action for action in plan["actions"]
+            if action.get("auto_repair")
+            and action.get("key") != "quality_snapshot"
+            and (not requested or action["key"] in requested)
+        ]
+        total = max(1, len(auto_actions))
+
+        for index, action in enumerate(auto_actions, start=1):
+            key = str(action["key"])
+            base_percent = 10 + int((index - 1) / total * 75)
+            store.update_job(job_id, status="running", progress=_progress(base_percent, key, str(action["title"])))
+            if key == "minute5_sync":
+                trade_date = _parse_optional_date(action.get("trade_date"))
+                if trade_date is None:
+                    skipped.append({"key": key, "reason": "缺少可修复的 5m 交易日"})
+                    continue
+                result = minute5_runner(
+                    db_path=stock_db_path,
+                    trade_date=trade_date,
+                    limit=0,
+                    symbols=action.get("symbols") or None,
+                    include_st=False,
+                    progress=lambda percent, stage, message: store.update_job(
+                        job_id,
+                        status="running",
+                        progress=_progress(min(84, base_percent + int(percent * 0.2)), stage, message),
+                    ),
+                )
+                repairs.append({"key": key, "result": result})
+            elif key == "daily_from_minute5":
+                trade_date = _parse_optional_date(action.get("trade_date"))
+                if trade_date is None or daily_repair_runner is None:
+                    skipped.append({"key": key, "reason": "缺少日线修复器或交易日"})
+                    continue
+                repairs.append({"key": key, "result": daily_repair_runner(trade_date=trade_date)})
+            elif key == "quote_snapshot_sync":
+                result = quote_snapshot_runner(
+                    symbols=None,
+                    limit=0,
+                    include_st=False,
+                    progress=lambda percent, stage, message: store.update_job(
+                        job_id,
+                        status="running",
+                        progress=_progress(min(88, base_percent + int(percent * 0.2)), stage, message),
+                    ),
+                )
+                repairs.append({"key": key, "result": result})
+            else:
+                skipped.append({"key": key, "reason": "未知自动修复动作"})
+
+        after_status = data_status_runner()
+        if wants_quality_snapshot:
+            store.update_job(job_id, status="running", progress=_progress(90, "quality_snapshot", "写入修复后的质量快照"))
+            if quality_snapshot_writer is None:
+                skipped.append({"key": "quality_snapshot", "reason": "缺少质量快照写入器"})
+            else:
+                repairs.append({"key": "quality_snapshot", "result": quality_snapshot_writer(quality=after_status.get("quality"))})
+        result = {
+            "before": before_status,
+            "before_plan": plan,
+            "after": after_status,
+            "after_plan": build_data_health_repair_plan(after_status),
+            "repairs": repairs,
+            "skipped": skipped,
+        }
+    except Exception as exc:
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "数据健康修复失败"))
+        return
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "数据健康修复完成"))
+
+
 def _run_daily_maintenance_job(
     store: JobStore,
     minute5_runner,
@@ -1143,6 +1284,14 @@ def _maintenance_verification(status: dict[str, Any]) -> dict[str, Any]:
         "minute5_complete_symbols": health.get("minute5_symbol_count", 0),
         "status": health.get("status", "unknown"),
     }
+
+
+def _parse_optional_date(value: Any) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
 
 
 def _progress(percent: int, stage: str, message: str) -> dict[str, Any]:

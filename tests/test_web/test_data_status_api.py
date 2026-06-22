@@ -187,6 +187,115 @@ def test_minute5_sync_api_runs_inline_job_and_returns_refreshed_status(tmp_path)
     assert job["result"]["status"]["health"]["minute5_symbol_count"] == 1
 
 
+def test_data_health_repair_plan_api_returns_actionable_warnings(tmp_path) -> None:
+    status = {
+        "quality": {
+            "status": "warning",
+            "issues": ["minute5_kline_missing_1_symbols"],
+            "minute5": {"latest_datetime": "2026-06-12 14:55:00", "missing_symbols": 1},
+            "daily": {"latest_date": "2026-06-12", "missing_symbols": 0},
+            "quote_snapshots": {"status": "ok", "issues": []},
+            "scheduled_checks": {"completeness_30d": {"affected_symbols": 0}},
+        }
+    }
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        data_status_runner=lambda: status,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/data/health-repair-plan")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["actions"][0]["key"] == "minute5_sync"
+    assert payload["actions"][0]["trade_date"] == "2026-06-12"
+
+
+def test_data_health_repair_api_runs_inline_auto_repairs(tmp_path) -> None:
+    stock_db = tmp_path / "stock.db"
+    _create_stock_db(stock_db)
+    before_status = {
+        "quality": {
+            "status": "warning",
+            "issues": [
+                "daily_kline_missing_1_symbols",
+                "minute5_kline_missing_1_symbols",
+                "stock_quote_snapshots_missing_1_symbols",
+            ],
+            "daily": {
+                "latest_date": "2026-06-12",
+                "missing_symbols": 1,
+                "missing_samples": [{"symbol": "000001.SZ", "name": "平安银行"}],
+            },
+            "minute5": {
+                "latest_datetime": "2026-06-12 14:55:00",
+                "missing_symbols": 1,
+                "missing_samples": [{"symbol": "000001.SZ", "name": "平安银行"}],
+            },
+            "quote_snapshots": {"status": "warning", "issues": ["stock_quote_snapshots_missing_1_symbols"]},
+            "scheduled_checks": {"completeness_30d": {"affected_symbols": 0}},
+        }
+    }
+    after_status = {
+        "quality": {
+            "status": "ok",
+            "issues": [],
+            "daily": {"latest_date": "2026-06-12", "missing_symbols": 0},
+            "minute5": {"latest_datetime": "2026-06-12 14:55:00", "missing_symbols": 0},
+            "quote_snapshots": {"status": "ok", "issues": []},
+            "scheduled_checks": {"completeness_30d": {"affected_symbols": 0}},
+        }
+    }
+    statuses = [before_status, after_status]
+    calls = []
+
+    def fake_status():
+        return statuses.pop(0) if statuses else after_status
+
+    def fake_minute5(db_path, trade_date, limit, symbols=None, include_st=False, progress=None):
+        calls.append(("minute5", trade_date.isoformat(), symbols))
+        return {"success": 1}
+
+    def fake_daily_repair(trade_date):
+        calls.append(("daily", trade_date.isoformat()))
+        return {"inserted_rows": 1}
+
+    def fake_quote_snapshot(**kwargs):
+        calls.append(("quote", kwargs["symbols"], kwargs["limit"]))
+        return {"inserted_rows": 1}
+
+    def fake_quality_snapshot(quality):
+        calls.append(("snapshot", quality["status"]))
+        return {"inserted_rows": 4}
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=stock_db,
+        run_jobs_inline=True,
+        data_status_runner=fake_status,
+        minute5_sync_runner=fake_minute5,
+        quote_snapshot_sync_runner=fake_quote_snapshot,
+        daily_repair_runner=fake_daily_repair,
+        quality_snapshot_writer=fake_quality_snapshot,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/data/health-repair", json={})
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert calls == [
+        ("minute5", "2026-06-12", ["000001.SZ"]),
+        ("daily", "2026-06-12"),
+        ("quote", None, 0),
+        ("snapshot", "ok"),
+    ]
+    assert job["result"]["after_plan"]["status"] == "ok"
+
+
 def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None:
     stock_db = tmp_path / "stock.db"
     _create_stock_db(stock_db)
