@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 
-from src.web.backend.app import create_app
+from src.web.backend.app import _resolve_trade_date, create_app
 from src.web.backend.data_status import inspect_stock_database
 
 
@@ -449,7 +450,7 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
 
     response = client.post(
         "/api/data/daily-maintenance",
-        json={"retry_no_data": True, "run_strategy_review": True, "strategy_limit": 2},
+        json={"trade_date": "2026-06-12", "retry_no_data": True, "run_strategy_review": True, "strategy_limit": 2},
     )
 
     assert response.status_code == 200
@@ -543,6 +544,39 @@ def test_daily_maintenance_prefers_latest_minute5_date_when_daily_is_stale(tmp_p
     assert job["result"]["trade_date"] == "2026-06-22"
     assert sync_dates == ["2026-06-22"]
     assert repair_dates == ["2026-06-22"]
+
+
+def test_resolve_trade_date_uses_current_trading_day_after_post_close() -> None:
+    status = {
+        "health": {
+            "daily_latest_date": "2026-06-18",
+            "minute5_latest_datetime": "2026-06-18 15:00:00",
+        }
+    }
+
+    assert _resolve_trade_date(status, now=datetime(2026, 6, 22, 15, 10)) == datetime(2026, 6, 22).date()
+
+
+def test_resolve_trade_date_uses_previous_trading_day_before_post_close() -> None:
+    status = {
+        "health": {
+            "daily_latest_date": "2026-06-18",
+            "minute5_latest_datetime": "2026-06-22 14:55:00",
+        }
+    }
+
+    assert _resolve_trade_date(status, now=datetime(2026, 6, 22, 14, 50)) == datetime(2026, 6, 18).date()
+
+
+def test_resolve_trade_date_uses_previous_trading_day_on_non_trading_day() -> None:
+    status = {
+        "health": {
+            "daily_latest_date": "2026-06-18",
+            "minute5_latest_datetime": "2026-06-18 15:00:00",
+        }
+    }
+
+    assert _resolve_trade_date(status, now=datetime(2026, 6, 20, 16, 0)) == datetime(2026, 6, 18).date()
 
 
 def test_data_ops_scheduler_endpoint_can_run_maintenance_once(tmp_path) -> None:

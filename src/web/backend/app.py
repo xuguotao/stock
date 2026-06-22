@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -18,6 +18,7 @@ from src.data.fund_tail_market_data import refresh_fund_tail_proxy_quotes
 from src.data.clickhouse_research_dataset import build_clickhouse_research_dataset
 from src.data.fund_tail_repository import ClickHouseFundTailRepository
 from src.data.tail_signal_repository import ClickHouseTailSignalRepository
+from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
 from src.web.backend.data_sync import DEFAULT_REMOTE_STOCK_DB, sync_stock_database
 from src.web.backend.data_ops_scheduler import DataOpsScheduler, DataOpsSchedulerConfig
@@ -1246,18 +1247,16 @@ def _safe_dataset_name(name: str) -> str:
     return cleaned
 
 
-def _resolve_trade_date(status: dict[str, Any]) -> date:
-    health = status.get("health") or {}
-    candidates = []
-    minute5_latest = health.get("minute5_latest_datetime")
-    if minute5_latest:
-        candidates.append(date.fromisoformat(str(minute5_latest).split(" ", 1)[0].split("T", 1)[0]))
-    daily_latest = health.get("daily_latest_date")
-    if daily_latest:
-        candidates.append(date.fromisoformat(str(daily_latest)))
-    if candidates:
-        return max(candidates)
-    raise ValueError("ClickHouse daily_kline 和 minute5_kline 都没有可用最新日期")
+def _resolve_trade_date(status: dict[str, Any], *, now: datetime | None = None) -> date:
+    _ = status
+    current = now or datetime.now()
+    scheduler = TradingScheduler()
+    current_date = current.date()
+    if scheduler.is_trading_day(current_date):
+        if current.time() >= time(15, 5):
+            return current_date
+        return scheduler.prev_trading_day(current_date)
+    return scheduler.prev_trading_day(current_date)
 
 
 def _run_strategy_review(
