@@ -245,16 +245,26 @@ def _bucket_start(value: datetime, minutes: int) -> datetime:
 
 
 def _resolve_symbols(client: Any, *, limit: int, include_st: bool) -> list[str]:
-    rows = client.execute("select symbol, name from stocks order by symbol")
+    rows = client.execute("select symbol, name, market from stocks order by symbol")
     result = []
-    for symbol, name in rows:
+    for row in rows:
+        symbol = row[0]
+        name = row[1] if len(row) > 1 else ""
+        market = row[2] if len(row) > 2 else ""
         stock_name = str(name or "")
         if not include_st and is_st(stock_name):
             continue
-        result.append(format_symbol(str(symbol)))
+        result.append(_format_symbol_with_market(str(symbol), str(market or "")))
         if limit > 0 and len(result) >= limit:
             break
     return result
+
+
+def _format_symbol_with_market(symbol: str, market: str) -> str:
+    cleaned_market = market.strip().upper()
+    if cleaned_market in {"SH", "SZ", "BJ"}:
+        return f"{symbol.strip().zfill(6)}.{cleaned_market}"
+    return format_symbol(symbol)
 
 
 def _normalize_symbols(symbols: list[str]) -> list[str]:

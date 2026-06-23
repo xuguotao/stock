@@ -16,7 +16,7 @@ class FakeClickHouseClient:
         self.queries.append(query)
         normalized = " ".join(query.lower().split())
         if "from stocks" in normalized:
-            return [("000001", "平安银行"), ("600000", "浦发银行")]
+            return [("000001", "平安银行", "SZ"), ("302132", "中航成飞", "SZ"), ("600000", "浦发银行", "SH")]
         if normalized.startswith("insert into stock_quote_snapshots ("):
             self.inserted.extend(params)
             return []
@@ -48,6 +48,15 @@ class FakeQuoteSource:
                     "timestamp": "2026-06-16 14:30:00",
                 },
                 {
+                    "symbol": "302132.SZ",
+                    "name": "中航成飞",
+                    "price": 60.25,
+                    "change_pct": 1.55,
+                    "volume": 84251,
+                    "amount": 497260000.0,
+                    "timestamp": "2026-06-16 14:30:00",
+                },
+                {
                     "symbol": "600000.SH",
                     "name": "浦发银行",
                     "price": 9.1,
@@ -74,14 +83,15 @@ def test_sync_clickhouse_quote_snapshots_creates_table_and_inserts_quotes() -> N
     )
 
     assert any("create table if not exists stock_quote_snapshots" in query.lower() for query in client.queries)
-    assert quote_source.calls == [["000001.SZ", "600000.SH"]]
-    assert len(client.inserted) == 2
+    assert quote_source.calls == [["000001.SZ", "302132.SZ", "600000.SH"]]
+    assert len(client.inserted) == 3
     assert client.inserted[0][0] == datetime(2026, 6, 16, 14, 30, 5)
     assert client.inserted[0][1] == "000001.SZ"
     assert client.inserted[0][-1] == datetime(2026, 6, 16, 14, 30, 0)
-    assert result["target_symbols"] == 2
-    assert result["quote_rows"] == 2
-    assert result["inserted_rows"] == 2
+    assert client.inserted[1][1] == "302132.SZ"
+    assert result["target_symbols"] == 3
+    assert result["quote_rows"] == 3
+    assert result["inserted_rows"] == 3
     assert result["failed_chunks"] == 0
     assert result["latest_quote_time"] == "2026-06-16 14:30:00"
     assert result["timings"]["fetch_seconds"] >= 0
