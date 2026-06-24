@@ -126,6 +126,57 @@ def test_tail_signal_stats_api_returns_repository_metrics(tmp_path) -> None:
     assert payload["range"] == {"start": "2026-06-01", "end": "2026-06-30"}
 
 
+def test_tail_signal_review_outcomes_api_can_compute_pending_dates(tmp_path) -> None:
+    class FakeSignalRepository:
+        def __init__(self) -> None:
+            self.pending_args = None
+
+        def compute_pending_selected_outcomes(self, *, start=None, end=None):
+            self.pending_args = (start, end)
+            return {
+                "mode": "pending",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "date_count": 2,
+                "outcome_count": 3,
+                "missing_symbols": ["000001.SZ"],
+                "dates": [],
+            }
+
+    repository = FakeSignalRepository()
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        tail_signal_repository=repository,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/tail-session/review-outcomes",
+        json={"mode": "pending", "start": "2026-06-15", "end": "2026-06-23"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "pending"
+    assert payload["date_count"] == 2
+    assert payload["outcome_count"] == 3
+    assert repository.pending_args[0].isoformat() == "2026-06-15"
+    assert repository.pending_args[1].isoformat() == "2026-06-23"
+
+
+def test_tail_signal_review_outcomes_api_requires_signal_date_for_single_date(tmp_path) -> None:
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        tail_signal_repository=object(),
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/tail-session/review-outcomes", json={})
+
+    assert response.status_code == 400
+    assert "signal_date is required" in response.json()["detail"]
+
+
 def test_tail_live_selection_reports_chinese_session_error(monkeypatch) -> None:
     class FakeScheduler:
         def is_tail_session(self) -> bool:
@@ -157,8 +208,9 @@ def test_tail_live_selection_defaults_to_expanded_scan_pool() -> None:
     assert request.top_n == 2
 
 
-def test_tail_live_selection_job_refreshes_minute5_before_scanning(tmp_path) -> None:
-    calls: list[dict[str, Any]] = []
+def test_tail_live_selection_job_defaults_to_snapshot_refresh_before_scanning(tmp_path) -> None:
+    minute5_calls: list[dict[str, Any]] = []
+    snapshot_calls: list[dict[str, Any]] = []
 
     class FakeSignalRepository:
         def save_selection_result(self, *, job_id, result):
@@ -168,12 +220,18 @@ def test_tail_live_selection_job_refreshes_minute5_before_scanning(tmp_path) -> 
             return {"signal_date": signal_date.isoformat(), "outcome_count": 0, "missing_symbols": symbols}
 
     def fake_minute5_runner(**kwargs):
-        calls.append(kwargs)
+        minute5_calls.append(kwargs)
         kwargs["progress"](100, "completed", "分钟线补齐完成")
         return {"inserted_rows": 12, "target_symbols": 2, "coverage_after": {"date_range": {"end": "2026-06-12 14:35:00"}}}
 
+    def fake_snapshot_runner(**kwargs):
+        snapshot_calls.append(kwargs)
+        kwargs["progress"](100, "completed", "快照刷新完成")
+        return {"inserted_rows": 2, "target_symbols": 2, "latest_snapshot_at": "2026-06-12 14:45:01"}
+
     def fake_tail_runner(payload: TailLiveSelectionRequest, progress=None) -> dict[str, Any]:
-        assert calls, "minute5 sync should run before strategy scan"
+        assert snapshot_calls, "snapshot sync should run before strategy scan"
+        assert not minute5_calls, "default mode should not run full-market minute5 sync"
         if progress:
             progress(80, "scanning", "扫描尾盘信号")
         return {
@@ -193,6 +251,7 @@ def test_tail_live_selection_job_refreshes_minute5_before_scanning(tmp_path) -> 
         stock_db_path=tmp_path / "stock.db",
         run_jobs_inline=True,
         minute5_sync_runner=fake_minute5_runner,
+        quote_snapshot_sync_runner=fake_snapshot_runner,
         tail_live_runner=fake_tail_runner,
         tail_signal_repository=FakeSignalRepository(),
     )
@@ -210,16 +269,81 @@ def test_tail_live_selection_job_refreshes_minute5_before_scanning(tmp_path) -> 
     job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
 
     assert response.status_code == 200
-    assert calls[0]["trade_date"].isoformat() == "2026-06-12"
-    assert calls[0]["symbols"] == ["000001.SZ", "600519.SH"]
-    assert calls[0]["limit"] == 0
-    assert calls[0]["include_st"] is False
+    assert minute5_calls == []
+    assert snapshot_calls[0]["limit"] == 0
+    assert snapshot_calls[0]["include_st"] is False
     assert job["status"] == "success"
-    assert job["result"]["data_refresh"]["inserted_rows"] == 12
-    assert job["result"]["diagnostics"]["minute5_sync"]["inserted_rows"] == 12
+    assert job["result"]["data_refresh"]["inserted_rows"] == 2
+    assert job["result"]["diagnostics"]["data_refresh_mode"] == "auto"
+    assert job["result"]["diagnostics"]["quote_snapshot_sync"]["inserted_rows"] == 2
     assert "stage_timings" in job["result"]
-    assert "minute5_sync" in job["result"]["stage_timings"]
+    assert "quote_snapshot_sync" in job["result"]["stage_timings"]
     assert job["result"]["persistence"]["signals"]["signal_count"] == 0
+
+
+def test_tail_live_selection_job_can_force_standard_minute5_refresh(tmp_path) -> None:
+    minute5_calls: list[dict[str, Any]] = []
+    snapshot_calls: list[dict[str, Any]] = []
+
+    class FakeSignalRepository:
+        def save_selection_result(self, *, job_id, result):
+            return {"trade_date": result["trade_date"], "signal_count": 0, "selected_count": 0}
+
+        def compute_and_save_outcomes(self, *, signal_date, symbols):
+            return {"signal_date": signal_date.isoformat(), "outcome_count": 0, "missing_symbols": symbols}
+
+    def fake_minute5_runner(**kwargs):
+        minute5_calls.append(kwargs)
+        kwargs["progress"](100, "completed", "分钟线补齐完成")
+        return {"inserted_rows": 12, "target_symbols": 2, "coverage_after": {"date_range": {"end": "2026-06-12 14:35:00"}}}
+
+    def fake_snapshot_runner(**kwargs):
+        snapshot_calls.append(kwargs)
+        return {"inserted_rows": 2}
+
+    def fake_tail_runner(payload: TailLiveSelectionRequest, progress=None) -> dict[str, Any]:
+        assert minute5_calls, "standard_minute5 should run minute5 sync before strategy scan"
+        assert not snapshot_calls
+        return {
+            "trade_date": payload.trade_date.isoformat(),
+            "scanned_count": 2,
+            "candidate_count": 0,
+            "confirmed_count": 0,
+            "selected_count": 0,
+            "selections": [],
+            "files": {"json": "x", "csv": "x", "report": "x"},
+            "market_breadth": None,
+            "diagnostics": {},
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=tmp_path / "stock.db",
+        run_jobs_inline=True,
+        minute5_sync_runner=fake_minute5_runner,
+        quote_snapshot_sync_runner=fake_snapshot_runner,
+        tail_live_runner=fake_tail_runner,
+        tail_signal_repository=FakeSignalRepository(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/tail-session/live-selection",
+        json={
+            "trade_date": "2026-06-12",
+            "symbols": ["000001.SZ", "600519.SH"],
+            "ignore_session": True,
+            "data_refresh_mode": "standard_minute5",
+        },
+    )
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+
+    assert response.status_code == 200
+    assert minute5_calls[0]["trade_date"].isoformat() == "2026-06-12"
+    assert minute5_calls[0]["symbols"] == ["000001.SZ", "600519.SH"]
+    assert job["status"] == "success"
+    assert job["result"]["diagnostics"]["data_refresh_mode"] == "standard_minute5"
+    assert job["result"]["diagnostics"]["minute5_sync"]["inserted_rows"] == 12
 
 
 def test_tail_live_selection_explains_empty_universe(monkeypatch, tmp_path) -> None:

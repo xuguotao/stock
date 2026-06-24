@@ -44,6 +44,26 @@ class FakeClickHouseClient:
                 ("selection", 10, 6, 7, 9, 0.01, 0.02, 0.05, -0.015),
                 ("preview", 4, 1, 1, 2, -0.005, -0.01, 0.02, -0.03),
             ]
+        if "confidence_bucket" in normalized:
+            return [
+                ("高可信", 6, 5, 5, 6, 0.018, 0.026, 0.055, -0.01),
+                ("中可信", 4, 1, 2, 3, -0.004, -0.006, 0.018, -0.03),
+            ]
+        if "volume_ratio_bucket" in normalized:
+            return [
+                ("放量确认", 7, 5, 6, 7, 0.012, 0.02, 0.05, -0.012),
+                ("量能一般", 3, 1, 1, 2, -0.003, 0.001, 0.02, -0.025),
+            ]
+        if "tail_return_bucket" in normalized:
+            return [
+                ("尾盘强拉", 5, 4, 4, 5, 0.014, 0.023, 0.052, -0.011),
+                ("温和走强", 5, 2, 3, 4, 0.001, 0.006, 0.026, -0.021),
+            ]
+        if "pending_selected_signal_dates" in normalized:
+            return [
+                (date(2026, 6, 23), 2, 0, 2),
+                (date(2026, 6, 22), 2, 1, 1),
+            ]
         if "group by s.trade_date" in normalized:
             return [
                 (date(2026, 6, 16), 4, 3, 3, 4, 0.008, 0.018, 0.045, -0.012),
@@ -222,6 +242,9 @@ def test_signal_stats_returns_overall_and_grouped_metrics() -> None:
     assert result["by_layer"][0]["group"] == "strong"
     assert result["by_filter_reason"][0]["group"] == "outside_top_n"
     assert result["by_mode"][0]["group"] == "selection"
+    assert result["by_confidence"][0]["group"] == "高可信"
+    assert result["by_volume_ratio"][0]["group"] == "放量确认"
+    assert result["by_tail_return"][0]["group"] == "尾盘强拉"
     assert result["by_signal_date"] == [
         {
             "date": "2026-06-16",
@@ -285,3 +308,44 @@ def test_signal_stats_returns_overall_and_grouped_metrics() -> None:
     assert result["details"][0]["current_price"] == 10.66
     assert result["details"][0]["current_return"] == pytest.approx(0.04509803921568634)
     assert result["details"][0]["max_return"] == pytest.approx(0.0686)
+    assert result["details"][0]["confidence_bucket"] == "中可信"
+    assert result["details"][0]["execution_label"] == "开盘可盈利"
+    assert result["details"][0]["risk_label"] == "低回撤"
+
+
+def test_pending_selected_signal_dates_returns_missing_outcome_dates() -> None:
+    repo = ClickHouseTailSignalRepository(client=FakeClickHouseClient())
+
+    result = repo.pending_selected_signal_dates(start=date(2026, 6, 1), end=date(2026, 6, 30))
+
+    assert result == [
+        {"signal_date": "2026-06-23", "selected_count": 2, "outcome_count": 0, "missing_count": 2},
+        {"signal_date": "2026-06-22", "selected_count": 2, "outcome_count": 1, "missing_count": 1},
+    ]
+
+
+def test_compute_pending_selected_outcomes_recomputes_each_pending_date(monkeypatch) -> None:
+    repo = ClickHouseTailSignalRepository(client=FakeClickHouseClient())
+    calls: list[date] = []
+
+    def fake_compute_selected_outcomes(*, signal_date: date) -> dict[str, object]:
+        calls.append(signal_date)
+        return {"signal_date": signal_date.isoformat(), "outcome_count": 1, "missing_symbols": []}
+
+    monkeypatch.setattr(repo, "compute_selected_outcomes", fake_compute_selected_outcomes)
+
+    result = repo.compute_pending_selected_outcomes(start=date(2026, 6, 1), end=date(2026, 6, 30))
+
+    assert calls == [date(2026, 6, 23), date(2026, 6, 22)]
+    assert result == {
+        "mode": "pending",
+        "start": "2026-06-01",
+        "end": "2026-06-30",
+        "date_count": 2,
+        "outcome_count": 2,
+        "missing_symbols": [],
+        "dates": [
+            {"signal_date": "2026-06-23", "outcome_count": 1, "missing_symbols": []},
+            {"signal_date": "2026-06-22", "outcome_count": 1, "missing_symbols": []},
+        ],
+    }

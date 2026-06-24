@@ -1,18 +1,22 @@
 <template>
   <section class="page">
     <div class="page-header">
-      <h1 class="page-title">策略复盘</h1>
+      <h1 class="page-title">尾盘策略复盘</h1>
       <div class="toolbar">
         <el-date-picker v-model="range" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" />
-        <el-button :loading="reviewingOutcomes" @click="reviewOutcomes">补算复盘</el-button>
+        <el-button :loading="reviewingOutcomes" @click="reviewOutcomes">补算全部待复盘</el-button>
         <el-button type="primary" :loading="loading" @click="loadStats">刷新</el-button>
       </div>
     </div>
 
     <div class="metric-grid">
       <div class="metric-card">
-        <div class="metric-label">已完成复盘</div>
+        <div class="metric-label">正式选股已复盘</div>
         <div class="metric-value">{{ formatNumber(stats?.tracking_summary?.completed ?? 0) }}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">待复盘信号</div>
+        <div class="metric-value">{{ formatNumber(stats?.review_plan?.pending_signal_count ?? 0) }}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">跟踪中信号</div>
@@ -42,6 +46,24 @@
         <div class="metric-label">次日最低回撤</div>
         <div class="metric-value">{{ formatPercent(stats?.execution_summary?.avg_min_return ?? stats?.selected_overall.avg_min_return ?? 0) }}</div>
       </div>
+    </div>
+
+    <div class="panel review-plan-panel">
+      <div class="page-header panel-title-row">
+        <div>
+          <h2 class="page-title">复盘补算计划</h2>
+          <p class="panel-subtitle">口径：正式选股 / 最终入选 / 已有次日行情但缺少收益记录。</p>
+        </div>
+        <el-tag :type="(stats?.review_plan?.pending_signal_count ?? 0) > 0 ? 'warning' : 'success'" effect="plain">
+          {{ stats?.review_plan?.pending_date_count ?? 0 }} 日 / {{ stats?.review_plan?.pending_signal_count ?? 0 }} 条
+        </el-tag>
+      </div>
+      <el-table :data="stats?.review_plan?.pending_dates ?? []" height="220" empty-text="暂无待补算复盘">
+        <el-table-column prop="signal_date" label="信号日" min-width="120" />
+        <el-table-column prop="selected_count" label="正式选股" width="110" align="right" />
+        <el-table-column prop="outcome_count" label="已复盘" width="110" align="right" />
+        <el-table-column prop="missing_count" label="待补算" width="110" align="right" />
+      </el-table>
     </div>
 
     <div class="panel">
@@ -141,6 +163,75 @@
 
       <div class="panel">
         <div class="page-header panel-title-row">
+          <h2 class="page-title">按可信度</h2>
+          <el-tag effect="plain">{{ stats?.by_confidence?.length ?? 0 }}</el-tag>
+        </div>
+        <el-table :data="stats?.by_confidence ?? []" height="320" empty-text="暂无复核样本">
+          <el-table-column prop="group" label="分层" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="count" label="样本" width="90" align="right" />
+          <el-table-column label="开盘胜率" width="110" align="right">
+            <template #default="{ row }">{{ formatPercent(row.open_win_rate ?? 0) }}</template>
+          </el-table-column>
+          <el-table-column label="收盘胜率" width="110" align="right">
+            <template #default="{ row }">{{ formatPercent(row.win_rate) }}</template>
+          </el-table-column>
+          <el-table-column label="最高收益" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.avg_max_return ?? 0) }}</template>
+          </el-table-column>
+          <el-table-column label="最低回撤" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.avg_min_return ?? 0) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="panel">
+        <div class="page-header panel-title-row">
+          <h2 class="page-title">按量比确认</h2>
+          <el-tag effect="plain">{{ stats?.by_volume_ratio?.length ?? 0 }}</el-tag>
+        </div>
+        <el-table :data="stats?.by_volume_ratio ?? []" height="320" empty-text="暂无复核样本">
+          <el-table-column prop="group" label="分层" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="count" label="样本" width="90" align="right" />
+          <el-table-column label="开盘胜率" width="110" align="right">
+            <template #default="{ row }">{{ formatPercent(row.open_win_rate ?? 0) }}</template>
+          </el-table-column>
+          <el-table-column label="收盘胜率" width="110" align="right">
+            <template #default="{ row }">{{ formatPercent(row.win_rate) }}</template>
+          </el-table-column>
+          <el-table-column label="平均收盘" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.avg_close_return) }}</template>
+          </el-table-column>
+          <el-table-column label="最低回撤" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.avg_min_return ?? 0) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="panel">
+        <div class="page-header panel-title-row">
+          <h2 class="page-title">按尾盘形态</h2>
+          <el-tag effect="plain">{{ stats?.by_tail_return?.length ?? 0 }}</el-tag>
+        </div>
+        <el-table :data="stats?.by_tail_return ?? []" height="320" empty-text="暂无复核样本">
+          <el-table-column prop="group" label="分层" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="count" label="样本" width="90" align="right" />
+          <el-table-column label="开盘收益" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.avg_open_return) }}</template>
+          </el-table-column>
+          <el-table-column label="收盘收益" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.avg_close_return) }}</template>
+          </el-table-column>
+          <el-table-column label="最高收益" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.avg_max_return ?? 0) }}</template>
+          </el-table-column>
+          <el-table-column label="最低回撤" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.avg_min_return ?? 0) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="panel">
+        <div class="page-header panel-title-row">
           <h2 class="page-title">按信号层</h2>
           <el-tag effect="plain">{{ stats?.by_layer.length ?? 0 }}</el-tag>
         </div>
@@ -200,6 +291,9 @@
         </el-table-column>
         <el-table-column prop="mode" label="模式" width="110" />
         <el-table-column prop="v2_layer" label="信号层" width="120" show-overflow-tooltip />
+        <el-table-column prop="confidence_bucket" label="可信度" width="100" />
+        <el-table-column prop="execution_label" label="表现标签" width="120" />
+        <el-table-column prop="risk_label" label="回撤风险" width="100" />
         <el-table-column label="强度" width="100" align="right">
           <template #default="{ row }">{{ formatScore(row.strength) }}</template>
         </el-table-column>
@@ -263,15 +357,19 @@ async function loadStats() {
 }
 
 async function reviewOutcomes() {
-  const signalDate = range.value?.[1] ?? stats.value?.details?.[0]?.trade_date
-  if (!signalDate) {
-    ElMessage.warning('没有可补算的信号日期')
+  const pendingCount = stats.value?.review_plan?.pending_signal_count ?? 0
+  if (!pendingCount) {
+    ElMessage.info('当前没有待补算的正式选股复盘')
     return
   }
   reviewingOutcomes.value = true
   try {
-    const result = await api.reviewTailSignalOutcomes(signalDate)
-    ElMessage.success(`补算完成：${result.outcome_count} 条，缺失 ${result.missing_symbols.length} 条`)
+    const result = await api.reviewTailSignalOutcomes({
+      mode: 'pending',
+      start: range.value?.[0] ?? null,
+      end: range.value?.[1] ?? null
+    })
+    ElMessage.success(`补算完成：${result.date_count ?? 0} 日，${result.outcome_count} 条，缺失 ${result.missing_symbols.length} 条`)
     await loadStats()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '补算复盘失败')
@@ -333,6 +431,16 @@ onMounted(loadStats)
 
 .execution-item strong {
   color: #303133;
+}
+
+.review-plan-panel {
+  margin-top: 14px;
+}
+
+.panel-subtitle {
+  color: #909399;
+  font-size: 13px;
+  margin: 4px 0 0;
 }
 
 @media (max-width: 900px) {

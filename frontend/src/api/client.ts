@@ -32,6 +32,7 @@ export interface TailBacktestPayload {
   dataset_path?: string | null
   symbols?: string[] | null
   sample: boolean
+  source?: 'clickhouse' | 'dataset'
 }
 
 export interface TailReplayBacktestPayload {
@@ -103,11 +104,13 @@ export interface DataStatusResponse {
   quality?: {
     status: string
     expected_non_st_symbols: number
+    expected_strategy_tradable_symbols?: number
     daily: {
       latest_date?: string | null
       covered_symbols: number
       missing_symbols: number
       coverage_ratio: number
+      expected_symbols?: number
       status: string
       missing_samples?: Array<{ symbol: string; name: string }>
     }
@@ -192,6 +195,20 @@ export interface DataStatusResponse {
           volume: number
         }>
       }
+      historical_invalid_prices?: {
+        status: string
+        bad_rows: number
+        affected_symbols: number
+        start_date?: string | null
+        end_date?: string | null
+        samples: Array<{
+          symbol: string
+          name: string
+          bad_rows: number
+          start_date?: string | null
+          end_date?: string | null
+        }>
+      }
       freshness: {
         status: string
         latest_date?: string | null
@@ -202,8 +219,10 @@ export interface DataStatusResponse {
         max_lag_days: number
       }
       issues: string[]
+      ignored_issues?: string[]
     }
     issues: string[]
+    ignored_issues?: string[]
   }
   datasets_health?: Array<{
     key: string
@@ -523,6 +542,7 @@ export interface TailLiveSelectionPayload {
   min_strength?: number | null
   ignore_session: boolean
   auto_sync_minute5?: boolean
+  data_refresh_mode?: 'auto' | 'snapshot' | 'standard_minute5' | 'none'
   output_dir: string
 }
 
@@ -591,9 +611,22 @@ export interface TailSignalStatsResponse {
     live_tracking: number
     pending_outcome: number
   }
+  review_plan?: {
+    pending_dates: Array<{
+      signal_date: string
+      selected_count: number
+      outcome_count: number
+      missing_count: number
+    }>
+    pending_date_count: number
+    pending_signal_count: number
+  }
   by_status: TailSignalStatsRow[]
   by_mode?: TailSignalStatsRow[]
   by_layer: TailSignalStatsRow[]
+  by_confidence?: TailSignalStatsRow[]
+  by_volume_ratio?: TailSignalStatsRow[]
+  by_tail_return?: TailSignalStatsRow[]
   by_filter_reason: TailSignalStatsRow[]
   by_signal_date: Array<{
     date: string
@@ -646,6 +679,9 @@ export interface TailSignalStatsResponse {
     v2_score: number | null
     volume_ratio: number | null
     tail_return: number | null
+    confidence_bucket?: string
+    execution_label?: string
+    risk_label?: string
     signal_close: number
     next_open: number
     next_high: number
@@ -662,9 +698,25 @@ export interface TailSignalStatsResponse {
 }
 
 export interface TailSignalOutcomeReviewResponse {
-  signal_date: string
+  mode?: 'single_date' | 'pending'
+  signal_date?: string
+  start?: string
+  end?: string
+  date_count?: number
   outcome_count: number
   missing_symbols: string[]
+  dates?: Array<{
+    signal_date: string
+    outcome_count: number
+    missing_symbols: string[]
+  }>
+}
+
+export interface TailSignalOutcomeReviewPayload {
+  mode?: 'single_date' | 'pending'
+  signal_date?: string | null
+  start?: string | null
+  end?: string | null
 }
 
 export interface StockTrendResponse {
@@ -893,10 +945,10 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : ''
     return request<TailSignalStatsResponse>(`/api/tail-session/signal-stats${suffix}`)
   },
-  reviewTailSignalOutcomes(signalDate: string) {
+  reviewTailSignalOutcomes(payload: TailSignalOutcomeReviewPayload) {
     return request<TailSignalOutcomeReviewResponse>('/api/tail-session/review-outcomes', {
       method: 'POST',
-      body: JSON.stringify({ signal_date: signalDate })
+      body: JSON.stringify(payload)
     })
   }
 }

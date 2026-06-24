@@ -137,6 +137,64 @@ class ClickHouseTailSignalRepository:
             symbols=[str(row[0]) for row in rows],
         )
 
+    def pending_selected_signal_dates(self, *, start: date | None = None, end: date | None = None) -> list[dict[str, Any]]:
+        self.ensure_tables()
+        params = {"start": start or date(1970, 1, 1), "end": end or date(2999, 12, 31)}
+        rows = self.client.execute(
+            f"""
+            -- pending_selected_signal_dates
+            select
+                selected.trade_date,
+                selected.selected_count,
+                countDistinct(o.symbol) as outcome_count,
+                greatest(selected.selected_count - countDistinct(o.symbol), 0) as missing_count
+            from (
+                select
+                    trade_date,
+                    countDistinct(symbol) as selected_count
+                from {_deduped_signal_source()}
+                where {_stats_date_filter()} and mode = 'selection' and status = 'selected'
+                group by trade_date
+            ) selected
+            left join tail_signal_outcomes o
+                on selected.trade_date = o.signal_date
+            group by selected.trade_date, selected.selected_count
+            having missing_count > 0
+            order by selected.trade_date desc
+            """,
+            params,
+        )
+        return [
+            {
+                "signal_date": _date_string(signal_date),
+                "selected_count": int(selected_count or 0),
+                "outcome_count": int(outcome_count or 0),
+                "missing_count": int(missing_count or 0),
+            }
+            for signal_date, selected_count, outcome_count, missing_count in rows
+        ]
+
+    def compute_pending_selected_outcomes(self, *, start: date | None = None, end: date | None = None) -> dict[str, Any]:
+        pending_dates = self.pending_selected_signal_dates(start=start, end=end)
+        results = []
+        missing_symbols: list[str] = []
+        outcome_count = 0
+        for item in pending_dates:
+            signal_date = date.fromisoformat(str(item["signal_date"]))
+            result = self.compute_selected_outcomes(signal_date=signal_date)
+            results.append(result)
+            outcome_count += int(result.get("outcome_count") or 0)
+            missing_symbols.extend(str(symbol) for symbol in result.get("missing_symbols", []) or [])
+        return {
+            "mode": "pending",
+            "start": (start or date(1970, 1, 1)).isoformat(),
+            "end": (end or date(2999, 12, 31)).isoformat(),
+            "date_count": len(pending_dates),
+            "outcome_count": outcome_count,
+            "missing_symbols": missing_symbols,
+            "dates": results,
+        }
+
     def _minute_outcome_row(self, *, signal_date: date, symbol: str) -> tuple[Any, ...] | None:
         code = _code(symbol)
         signal_rows = self.client.execute(
@@ -207,6 +265,7 @@ class ClickHouseTailSignalRepository:
         selected_recent = self._daily_stats(params, limit=20, status="selected")
         selected_overall = _overall_stats(selected_rows[0] if selected_rows else None)
         details = self._detail_rows(params, status="selected", limit=200)
+        review_plan = self.pending_selected_signal_dates(start=params["start"], end=params["end"])
         return {
             "range": {
                 "start": params["start"].isoformat(),
@@ -216,9 +275,50 @@ class ClickHouseTailSignalRepository:
             "selected_overall": selected_overall,
             "execution_summary": _execution_summary(selected_overall),
             "tracking_summary": _tracking_summary(details),
+            "review_plan": {
+                "pending_dates": review_plan,
+                "pending_date_count": len(review_plan),
+                "pending_signal_count": sum(int(row.get("missing_count") or 0) for row in review_plan),
+            },
             "by_status": self._group_stats("s.status", params),
             "by_mode": self._group_stats("s.mode", params),
             "by_layer": self._group_stats("s.v2_layer", params),
+            "by_confidence": self._group_stats(
+                """
+                /* confidence_bucket */
+                multiIf(
+                    s.v2_score >= 85, '高可信',
+                    s.v2_score >= 70, '中可信',
+                    s.v2_score > 0, '低可信',
+                    '未评分'
+                )
+                """,
+                params,
+            ),
+            "by_volume_ratio": self._group_stats(
+                """
+                /* volume_ratio_bucket */
+                multiIf(
+                    s.volume_ratio >= 2, '放量确认',
+                    s.volume_ratio >= 1.2, '量能一般',
+                    s.volume_ratio > 0, '量能不足',
+                    '无量比'
+                )
+                """,
+                params,
+            ),
+            "by_tail_return": self._group_stats(
+                """
+                /* tail_return_bucket */
+                multiIf(
+                    s.tail_return >= 0.015, '尾盘强拉',
+                    s.tail_return >= 0.003, '温和走强',
+                    s.tail_return > -0.003, '尾盘震荡',
+                    '尾盘转弱'
+                )
+                """,
+                params,
+            ),
             "by_filter_reason": self._group_stats("s.filter_reason", params),
             "by_signal_date": self._daily_stats(params),
             "recent": recent,
@@ -659,6 +759,14 @@ def _detail_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "v2_score": _float_or_none(v2_score),
         "volume_ratio": _float_or_none(volume_ratio),
         "tail_return": _float_or_none(tail_return),
+        "confidence_bucket": _confidence_bucket(_float_or_none(v2_score)),
+        "execution_label": _execution_label(
+            review_status=review_status,
+            open_return=_safe_float(open_return),
+            max_return=_safe_float(max_return),
+            close_return=_safe_float(close_return),
+        ),
+        "risk_label": _risk_label(_safe_float(min_return)),
         "signal_close": signal_close_value,
         "next_open": _safe_float(next_open),
         "next_high": _safe_float(next_high),
@@ -672,6 +780,36 @@ def _detail_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "current_return": _return(current_price_value, signal_close_value) if current_price_value > 0 else 0.0,
         "latest_snapshot_at": _datetime_string(latest_snapshot_at) if current_price_value > 0 else None,
     }
+
+
+def _confidence_bucket(v2_score: float | None) -> str:
+    if v2_score is None or v2_score <= 0:
+        return "未评分"
+    if v2_score >= 85:
+        return "高可信"
+    if v2_score >= 70:
+        return "中可信"
+    return "低可信"
+
+
+def _execution_label(*, review_status: str, open_return: float, max_return: float, close_return: float) -> str:
+    if review_status != "completed":
+        return "待验证"
+    if open_return > 0:
+        return "开盘可盈利"
+    if max_return > 0:
+        return "盘中可盈利"
+    if close_return > 0:
+        return "收盘转正"
+    return "次日承压"
+
+
+def _risk_label(min_return: float) -> str:
+    if min_return <= -0.04:
+        return "高回撤"
+    if min_return <= -0.02:
+        return "中回撤"
+    return "低回撤"
 
 
 def _format_symbol(symbol: str) -> str:

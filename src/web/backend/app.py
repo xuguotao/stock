@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -114,7 +114,10 @@ class BuildClickHouseDatasetRequest(BaseModel):
 
 
 class TailSignalOutcomeReviewRequest(BaseModel):
-    signal_date: date
+    signal_date: date | None = None
+    start: date | None = None
+    end: date | None = None
+    mode: Literal["single_date", "pending"] = "single_date"
 
 
 class FundTailProxyRefreshRequest(BaseModel):
@@ -725,6 +728,7 @@ def create_app(
                 store,
                 app.state.tail_live_runner,
                 app.state.minute5_sync_runner,
+                app.state.quote_snapshot_sync_runner,
                 app.state.stock_db_path,
                 app.state.tail_signal_repository,
                 job.id,
@@ -736,6 +740,7 @@ def create_app(
                 store,
                 app.state.tail_live_runner,
                 app.state.minute5_sync_runner,
+                app.state.quote_snapshot_sync_runner,
                 app.state.stock_db_path,
                 app.state.tail_signal_repository,
                 job.id,
@@ -764,6 +769,10 @@ def create_app(
 
     @app.post("/api/tail-session/review-outcomes")
     def review_tail_signal_outcomes(payload: TailSignalOutcomeReviewRequest) -> dict[str, Any]:
+        if payload.mode == "pending":
+            return app.state.tail_signal_repository.compute_pending_selected_outcomes(start=payload.start, end=payload.end)
+        if payload.signal_date is None:
+            raise HTTPException(status_code=400, detail="signal_date is required for single-date review")
         return app.state.tail_signal_repository.compute_selected_outcomes(signal_date=payload.signal_date)
 
     return app
@@ -876,6 +885,7 @@ def _run_tail_live_selection_job(
     store: JobStore,
     runner,
     minute5_runner,
+    quote_snapshot_runner,
     stock_db_path: Path,
     signal_repository,
     job_id: str,
@@ -886,7 +896,23 @@ def _run_tail_live_selection_job(
         job_started = perf_counter()
         stage_timings: dict[str, float] = {}
         data_refresh = None
-        if payload.auto_sync_minute5:
+        data_refresh_kind = None
+        refresh_mode = _effective_tail_data_refresh_mode(payload)
+        if refresh_mode == "snapshot":
+            store.update_job(job_id, status="running", progress=_progress(10, "quote_snapshot_sync", "快速刷新行情快照和5m聚合"))
+            stage_started = perf_counter()
+            data_refresh = quote_snapshot_runner(
+                limit=0,
+                include_st=False,
+                progress=lambda percent, stage, message: store.update_job(
+                    job_id,
+                    status="running",
+                    progress=_progress(10 + int(percent * 0.25), stage, message),
+                ),
+            )
+            data_refresh_kind = "quote_snapshot_sync"
+            stage_timings["quote_snapshot_sync"] = _elapsed(stage_started)
+        elif refresh_mode == "standard_minute5":
             store.update_job(job_id, status="running", progress=_progress(10, "minute5_sync", "先补齐当前 5m 分钟线"))
             stage_started = perf_counter()
             data_refresh = minute5_runner(
@@ -901,6 +927,7 @@ def _run_tail_live_selection_job(
                     progress=_progress(10 + int(percent * 0.35), stage, message),
                 ),
             )
+            data_refresh_kind = "minute5_sync"
             stage_timings["minute5_sync"] = _elapsed(stage_started)
         stage_started = perf_counter()
         result = runner(
@@ -915,7 +942,16 @@ def _run_tail_live_selection_job(
         if data_refresh is not None:
             result["data_refresh"] = data_refresh
             diagnostics = result.setdefault("diagnostics", {})
-            diagnostics["minute5_sync"] = _minute5_sync_diagnostic(data_refresh)
+            diagnostics["data_refresh_mode"] = payload.data_refresh_mode
+            diagnostics["effective_data_refresh_mode"] = refresh_mode
+            if data_refresh_kind == "minute5_sync":
+                diagnostics["minute5_sync"] = _minute5_sync_diagnostic(data_refresh)
+            elif data_refresh_kind == "quote_snapshot_sync":
+                diagnostics["quote_snapshot_sync"] = _quote_snapshot_sync_diagnostic(data_refresh)
+        else:
+            diagnostics = result.setdefault("diagnostics", {})
+            diagnostics["data_refresh_mode"] = payload.data_refresh_mode
+            diagnostics["effective_data_refresh_mode"] = refresh_mode
         result["stage_timings"] = {**stage_timings, **(result.get("stage_timings") or {})}
         stage_started = perf_counter()
         result["persistence"] = _persist_tail_signal_result(signal_repository, job_id, result)
@@ -925,6 +961,16 @@ def _run_tail_live_selection_job(
         store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "任务失败"))
         return
     store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "今日尾盘选股完成"))
+
+
+def _effective_tail_data_refresh_mode(payload: TailLiveSelectionRequest) -> str:
+    if payload.data_refresh_mode == "standard_minute5":
+        return "standard_minute5"
+    if payload.data_refresh_mode == "snapshot":
+        return "snapshot"
+    if payload.data_refresh_mode == "none":
+        return "none"
+    return "snapshot" if payload.auto_sync_minute5 else "none"
 
 
 def _minute5_sync_diagnostic(sync_result: dict[str, Any]) -> dict[str, Any]:
@@ -937,6 +983,17 @@ def _minute5_sync_diagnostic(sync_result: dict[str, Any]) -> dict[str, Any]:
         "failed": sync_result.get("failed", 0),
         "inserted_rows": sync_result.get("inserted_rows", 0),
         "latest_datetime": ((sync_result.get("coverage_after") or {}).get("date_range") or {}).get("end"),
+    }
+
+
+def _quote_snapshot_sync_diagnostic(sync_result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "target_symbols": sync_result.get("target_symbols", sync_result.get("requested_symbols", 0)),
+        "inserted_rows": sync_result.get("inserted_rows", sync_result.get("inserted", 0)),
+        "skipped": sync_result.get("skipped", 0),
+        "failed": sync_result.get("failed", 0),
+        "latest_snapshot_at": sync_result.get("latest_snapshot_at"),
+        "latest_bucket": sync_result.get("latest_bucket"),
     }
 
 
@@ -1035,18 +1092,13 @@ def _run_data_health_repair_job(
         requested = set(payload.action_keys or [])
         repairs = []
         skipped = []
-        wants_quality_snapshot = any(
-            action.get("key") == "quality_snapshot"
-            and action.get("auto_repair")
-            and (not requested or action["key"] in requested)
-            for action in plan["actions"]
-        )
         auto_actions = [
             action for action in plan["actions"]
             if action.get("auto_repair")
             and action.get("key") != "quality_snapshot"
             and (not requested or action["key"] in requested)
         ]
+        wants_quality_snapshot = quality_snapshot_writer is not None and bool(auto_actions)
         total = max(1, len(auto_actions))
 
         for index, action in enumerate(auto_actions, start=1):
