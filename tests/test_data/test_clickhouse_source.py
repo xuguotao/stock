@@ -163,6 +163,7 @@ def test_clickhouse_source_uses_quote_snapshot_5m_for_missing_intraday_symbols()
 
     result = source.fetch_intraday_bars_batch(["000001.SZ", "600519.SH"], date(2026, 6, 15), "5m")
 
+    assert any("from stock_quote_snapshots_5m final" in query.lower() for query, _params in client.calls)
     assert sorted(result["symbol"].unique().tolist()) == ["000001.SZ", "600519.SH"]
     fallback = result[result["symbol"] == "600519.SH"]
     assert fallback["datetime"].tolist() == [
@@ -193,6 +194,7 @@ def test_clickhouse_source_fills_single_symbol_newer_5m_buckets_from_quote_snaps
 
     result = source.fetch_intraday_bars("000001.SZ", date(2026, 6, 15), "5m")
 
+    assert any("from stock_quote_snapshots_5m final" in query.lower() for query, _params in client.calls)
     assert result["datetime"].tolist() == [
         datetime(2026, 6, 15, 14, 30),
         datetime(2026, 6, 15, 14, 35),

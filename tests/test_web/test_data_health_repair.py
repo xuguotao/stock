@@ -31,7 +31,12 @@ def test_build_data_health_repair_plan_maps_warning_sections_to_actions() -> Non
                 "completeness_30d": {
                     "affected_symbols": 2,
                     "samples": [{"symbol": "688121.SH", "name": "卓然股份", "data_days": 3}],
-                }
+                },
+                "historical_invalid_prices": {
+                    "bad_rows": 1203,
+                    "affected_symbols": 14,
+                    "samples": [{"symbol": "600188.SH", "name": "兖矿能源", "bad_rows": 282}],
+                },
             },
         }
     }
@@ -43,8 +48,8 @@ def test_build_data_health_repair_plan_maps_warning_sections_to_actions() -> Non
     assert plan["summary"] == {
         "quality_status": "warning",
         "issue_count": 4,
-        "auto_repair_count": 4,
-        "manual_count": 1,
+        "auto_repair_count": 3,
+        "manual_count": 2,
     }
     assert actions["minute5_sync"]["auto_repair"] is True
     assert actions["minute5_sync"]["trade_date"] == "2026-06-22"
@@ -54,7 +59,30 @@ def test_build_data_health_repair_plan_maps_warning_sections_to_actions() -> Non
     assert actions["quote_snapshot_sync"]["auto_repair"] is True
     assert actions["daily_history_backfill"]["auto_repair"] is False
     assert actions["daily_history_backfill"]["status"] == "manual"
-    assert actions["quality_snapshot"]["auto_repair"] is True
+    assert actions["daily_historical_invalid_prices"]["auto_repair"] is False
+    assert actions["daily_historical_invalid_prices"]["status"] == "manual"
+    assert "quality_snapshot" not in actions
+
+
+def test_build_data_health_repair_plan_ignores_non_blocking_quality_warnings() -> None:
+    plan = build_data_health_repair_plan({
+        "quality": {
+            "status": "ok",
+            "issues": [],
+            "ignored_issues": ["daily_kline_30d_incomplete_3_symbols"],
+            "scheduled_checks": {
+                "completeness_30d": {
+                    "affected_symbols": 3,
+                    "samples": [{"symbol": "688121.SH", "name": "卓然股份", "data_days": 3}],
+                }
+            },
+        }
+    })
+
+    assert plan["status"] == "ok"
+    assert plan["summary"]["auto_repair_count"] == 0
+    assert plan["summary"]["manual_count"] == 0
+    assert plan["actions"] == []
 
 
 def test_build_data_health_repair_plan_returns_ok_without_actions() -> None:

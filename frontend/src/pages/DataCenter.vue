@@ -11,8 +11,8 @@
     <div class="panel overview-panel">
       <div class="section-header no-top-margin">
         <div>
-          <h2 class="page-title">数据总览</h2>
-          <p class="section-subtitle">按策略运行视角汇总数据源、时效、覆盖和当前阻塞项</p>
+          <h2 class="page-title">今日尾盘策略可用性</h2>
+          <p class="section-subtitle">只按策略可交易池判断日线、5m、快照和自动采集是否阻塞今日选股</p>
         </div>
         <el-tag :type="qualityTagType(dataStatus?.quality?.status)" effect="plain" size="large">
           {{ overallReadiness }}
@@ -20,9 +20,9 @@
       </div>
       <div class="readiness-grid">
         <div class="readiness-item">
-          <span class="metric-label">股票池</span>
-          <strong>{{ formatNumber(dataStatus?.stock_summary.non_st_stock_count ?? 0) }}</strong>
-          <small>非 ST / 共 {{ formatNumber(dataStatus?.stock_summary.stock_count ?? 0) }}</small>
+          <span class="metric-label">策略可交易池</span>
+          <strong>{{ formatNumber(strategyTradableCount) }}</strong>
+          <small>非 ST {{ formatNumber(dataStatus?.stock_summary.non_st_stock_count ?? 0) }} / 共 {{ formatNumber(dataStatus?.stock_summary.stock_count ?? 0) }}</small>
         </div>
         <div class="readiness-item">
           <span class="metric-label">日线</span>
@@ -39,6 +39,10 @@
           <strong>{{ dataStatus?.health.quote_snapshot_latest_datetime ?? '-' }}</strong>
           <small>{{ quoteSnapshotReadinessText }}</small>
         </div>
+      </div>
+      <div v-if="ignoredIssueCount" class="ignored-issues-strip">
+        <span>已忽略非阻塞异常 {{ ignoredIssueCount }} 项</span>
+        <small>{{ ignoredIssuesText }}</small>
       </div>
       <div v-if="repairPlan?.actions.length" class="repair-plan-panel">
         <div class="repair-plan-head">
@@ -292,16 +296,6 @@
           :status="healthRepairJob.status === 'failed' ? 'exception' : healthRepairJob.status === 'success' ? 'success' : undefined"
         />
       </div>
-      <div v-if="datasetBuildJob" class="sync-progress">
-        <div class="sync-progress-header">
-          <span>数据集构建：{{ datasetBuildJob.progress.message || datasetBuildJob.status }}</span>
-          <el-tag :type="jobStatusType(datasetBuildJob.status)" effect="plain">{{ datasetBuildJob.status }}</el-tag>
-        </div>
-        <el-progress
-          :percentage="datasetBuildJob.progress.percent"
-          :status="datasetBuildJob.status === 'failed' ? 'exception' : datasetBuildJob.status === 'success' ? 'success' : undefined"
-        />
-      </div>
       <div class="sync-progress">
         <div class="sync-progress-header">
           <span>分钟线持续更新：{{ minute5MonitorText }}</span>
@@ -368,6 +362,7 @@
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="大小">{{ formatBytes(dataStatus?.database.size_bytes ?? 0) }}</el-descriptions-item>
+        <el-descriptions-item label="策略可交易池">{{ formatNumber(strategyTradableCount) }}</el-descriptions-item>
         <el-descriptions-item label="非 ST 股票">{{ formatNumber(dataStatus?.stock_summary.non_st_stock_count ?? 0) }}</el-descriptions-item>
         <el-descriptions-item label="ST 股票">{{ formatNumber(dataStatus?.stock_summary.st_stock_count ?? 0) }}</el-descriptions-item>
         <el-descriptions-item label="日线覆盖">
@@ -494,85 +489,14 @@
       </div>
     </div>
 
-    <div class="data-center-grid">
-      <div class="panel dataset-list">
-        <div class="page-header panel-title-row">
-          <h2 class="page-title">本地 Research Datasets</h2>
-          <div class="dataset-build-control">
-            <el-button size="small" :loading="buildingDataset" @click="buildClickHouseDataset">构建回测数据集</el-button>
-            <el-tag effect="plain">{{ datasets.length }}</el-tag>
-          </div>
-        </div>
-        <el-table
-          :data="datasets"
-          height="540"
-          highlight-current-row
-          @row-click="selectDataset"
-        >
-          <el-table-column prop="name" label="名称" min-width="220" show-overflow-tooltip />
-          <el-table-column label="日期范围" min-width="190">
-            <template #default="{ row }">
-              {{ row.start ?? '-' }} / {{ row.end ?? '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="符号" width="90" align="right">
-            <template #default="{ row }">{{ row.symbol_count }}</template>
-          </el-table-column>
-          <el-table-column label="行数" width="110" align="right">
-            <template #default="{ row }">{{ formatNumber(row.row_count) }}</template>
-          </el-table-column>
-        </el-table>
-      </div>
-
-      <div class="panel dataset-detail">
-        <div class="page-header panel-title-row">
-          <h2 class="page-title">数据集详情</h2>
-          <el-tag v-if="detail" type="success" effect="plain">已选择</el-tag>
-        </div>
-
-        <el-empty v-if="!detail" description="选择左侧数据集查看详情" />
-        <template v-else>
-          <el-descriptions :column="1" border>
-            <el-descriptions-item label="文件名">{{ detail.name }}</el-descriptions-item>
-            <el-descriptions-item label="路径">
-              <span class="mono-text">{{ detail.path }}</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="Manifest">
-              <span class="mono-text">{{ detail.manifest_path ?? '-' }}</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="日期范围">
-              {{ detail.start ?? '-' }} / {{ detail.end ?? '-' }}
-            </el-descriptions-item>
-            <el-descriptions-item label="行数">{{ formatNumber(detail.row_count) }}</el-descriptions-item>
-            <el-descriptions-item label="符号数">{{ detail.symbol_count }}</el-descriptions-item>
-            <el-descriptions-item label="大小">{{ formatBytes(detail.size_bytes) }}</el-descriptions-item>
-            <el-descriptions-item label="构建时间">{{ detail.built_at ?? '-' }}</el-descriptions-item>
-          </el-descriptions>
-
-          <div class="symbol-section">
-            <div class="page-header panel-title-row">
-              <h3 class="sub-title">符号列表</h3>
-              <el-tag effect="plain">{{ detail.symbols.length }}</el-tag>
-            </div>
-            <div class="symbol-tags">
-              <el-tag v-for="symbol in detail.symbols" :key="symbol" effect="plain">
-                {{ symbol }}
-              </el-tag>
-            </div>
-          </div>
-        </template>
-      </div>
-    </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataReliabilityReport, type DataStatusResponse, type DatasetDetail, type DatasetSummary, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus } from '../api/client'
+import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataReliabilityReport, type DataStatusResponse, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus } from '../api/client'
 
-const datasets = ref<DatasetSummary[]>([])
-const detail = ref<DatasetDetail | null>(null)
 const dataStatus = ref<DataStatusResponse | null>(null)
 const loading = ref(false)
 const syncing = ref(false)
@@ -580,13 +504,11 @@ const syncingMinute5 = ref(false)
 const maintaining = ref(false)
 const repairingHealth = ref(false)
 const repairPlanLoading = ref(false)
-const buildingDataset = ref(false)
 const monitorChanging = ref(false)
 const syncJob = ref<JobRecord | null>(null)
 const minute5Job = ref<JobRecord | null>(null)
 const maintenanceJob = ref<JobRecord | null>(null)
 const healthRepairJob = ref<JobRecord | null>(null)
-const datasetBuildJob = ref<JobRecord | null>(null)
 const minute5Monitor = ref<Minute5MonitorStatus | null>(null)
 const quoteSnapshotMonitor = ref<QuoteSnapshotMonitorStatus | null>(null)
 const dataOpsScheduler = ref<DataOpsSchedulerStatus | null>(null)
@@ -603,6 +525,9 @@ const tableRows = computed(() => Object.entries(dataStatus.value?.tables ?? {}).
 const datasetHealthRows = computed(() => dataStatus.value?.datasets_health ?? [])
 const quoteSnapshotQuality = computed(() => dataStatus.value?.quality?.quote_snapshots)
 const scheduledQuality = computed(() => dataStatus.value?.quality?.scheduled_checks)
+const strategyTradableCount = computed(() => dataStatus.value?.quality?.expected_strategy_tradable_symbols ?? dataStatus.value?.stock_summary.non_st_stock_count ?? 0)
+const ignoredIssueCount = computed(() => dataStatus.value?.quality?.ignored_issues?.length ?? 0)
+const ignoredIssuesText = computed(() => dataStatus.value?.quality?.ignored_issues?.join('，') || '无')
 const quoteRollupTitles: Record<string, string> = {
   '1m': '1m 聚合',
   '5m': '5m 聚合'
@@ -680,11 +605,11 @@ const assetRows = computed(() => {
   return [
     {
       key: 'base',
-      title: '基础股票池',
+      title: '策略可交易池',
       status: status?.database.exists ? 'ok' : 'missing',
-      range: `${formatNumber(status?.stock_summary.stock_count ?? 0)} 只股票`,
+      range: `${formatNumber(strategyTradableCount.value)} 只可交易标的`,
       symbols: `非 ST ${formatNumber(status?.stock_summary.non_st_stock_count ?? 0)}`,
-      purpose: '股票池、名称、ST过滤'
+      purpose: '尾盘策略目标池、名称、ST过滤'
     },
     {
       key: 'daily',
@@ -718,14 +643,6 @@ const assetRows = computed(() => {
       symbols: `净值 ${formatNumber(status?.tables.fund_tail_nav?.row_count ?? 0)} 行`,
       purpose: '基金尾盘建议、代理行情、基准'
     },
-    {
-      key: 'research',
-      title: '研究数据集',
-      status: datasets.value.length ? 'ok' : 'info',
-      range: `${formatNumber(datasets.value.length)} 个数据集`,
-      symbols: '本地文件',
-      purpose: '回测和因子挖掘产物'
-    }
   ]
 })
 const operationRows = computed(() => [
@@ -763,13 +680,6 @@ const operationRows = computed(() => [
     status: dataOpsScheduler.value?.running ? 'running' : 'stopped',
     type: dataOpsScheduler.value?.running ? 'success' : 'info',
     detail: dataOpsSchedulerText.value
-  },
-  {
-    key: 'dataset',
-    title: '回测数据集构建',
-    status: datasetBuildJob.value?.status ?? (buildingDataset.value ? 'running' : 'idle'),
-    type: jobStatusType(datasetBuildJob.value?.status ?? (buildingDataset.value ? 'running' : 'pending')),
-    detail: datasetBuildJob.value?.progress.message || '生成本地 research dataset'
   }
 ])
 const consumerReadinessRows = computed(() => {
@@ -809,8 +719,9 @@ const scheduledQualityRows = computed(() => {
   if (!quality) return []
   const completeness = quality.completeness_30d
   const anomalies = quality.today_anomalies
+  const historicalInvalid = quality.historical_invalid_prices
   const freshness = quality.freshness
-  return [
+  const rows = [
     {
       key: 'completeness_30d',
       title: '近30日完整性',
@@ -830,6 +741,19 @@ const scheduledQualityRows = computed(() => {
       meta: [`检查日期：${anomalies.latest_date ?? '-'}`, '规则：价格 <= 0 或成交量 <= 0'],
       samples: anomalies.samples.map((item) => `${item.symbol} ${item.date} O:${item.open} H:${item.high} L:${item.low} C:${item.close} V:${formatNumber(item.volume)}`)
     },
+    ...(historicalInvalid
+      ? [{
+          key: 'historical_invalid_prices',
+          title: '历史价格污染',
+          status: historicalInvalid.status,
+          main: `异常 ${formatNumber(historicalInvalid.bad_rows)} 条 / ${formatNumber(historicalInvalid.affected_symbols)} 只`,
+          meta: [
+            `范围：${historicalInvalid.start_date ?? '-'} / ${historicalInvalid.end_date ?? '-'}`,
+            '规则：历史 OHLC <= 0'
+          ],
+          samples: historicalInvalid.samples.map((item) => `${item.symbol} ${item.name} ${formatNumber(item.bad_rows)}条`)
+        }]
+      : []),
     {
       key: 'freshness',
       title: '数据新鲜度',
@@ -843,6 +767,7 @@ const scheduledQualityRows = computed(() => {
       samples: []
     }
   ]
+  return rows
 })
 const databaseLocation = computed(() => {
   const database = dataStatus.value?.database
@@ -938,9 +863,8 @@ const dataOpsSchedulerText = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const [reliabilityResponse, datasetsResponse, monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse] = await Promise.all([
+    const [reliabilityResponse, monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse] = await Promise.all([
       api.getDataReliability(),
-      api.listDatasets(),
       api.getMinute5Monitor(),
       api.getQuoteSnapshotMonitor(),
       api.getDataOpsScheduler()
@@ -948,15 +872,11 @@ async function loadData() {
     reliabilityReport.value = reliabilityResponse
     dataStatus.value = reliabilityResponse.data_status
     repairPlan.value = reliabilityResponse.repair_plan
-    datasets.value = datasetsResponse.items
     minute5Monitor.value = monitorResponse
     quoteSnapshotMonitor.value = quoteSnapshotMonitorResponse
     dataOpsScheduler.value = dataOpsSchedulerResponse
-    if (datasets.value.length && !detail.value) {
-      await selectDataset(datasets.value[0])
-    }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载数据集失败')
+    ElMessage.error(error instanceof Error ? error.message : '加载数据中心失败')
   } finally {
     loading.value = false
   }
@@ -1041,14 +961,6 @@ async function stopMinute5Monitor() {
     ElMessage.error(error instanceof Error ? error.message : '停止持续更新失败')
   } finally {
     monitorChanging.value = false
-  }
-}
-
-async function selectDataset(row: DatasetSummary) {
-  try {
-    detail.value = await api.getDataset(row.id)
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载数据集详情失败')
   }
 }
 
@@ -1162,44 +1074,6 @@ async function repairDataHealth() {
   }
 }
 
-async function buildClickHouseDataset() {
-  const end = dataStatus.value?.health.daily_latest_date
-  if (!end) {
-    ElMessage.warning('没有可用的最新日线日期')
-    return
-  }
-  const start = defaultDatasetStart(end)
-  const name = `daily_clickhouse_${end.replaceAll('-', '')}`
-  try {
-    await ElMessageBox.confirm(
-      `将从 ClickHouse 构建 ${start} 至 ${end} 的回测数据集，默认取前 500 个非 ST 标的。`,
-      '构建回测数据集',
-      { type: 'warning', confirmButtonText: '开始构建', cancelButtonText: '取消' }
-    )
-  } catch {
-    return
-  }
-
-  buildingDataset.value = true
-  try {
-    const response = await api.buildClickHouseDataset({
-      start,
-      end,
-      name,
-      limit: 500
-    })
-    const completed = await pollDatasetBuildJob(response.job_id)
-    if (completed) {
-      ElMessage.success('回测数据集构建完成')
-      await loadData()
-    }
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '回测数据集构建失败')
-  } finally {
-    buildingDataset.value = false
-  }
-}
-
 async function pollSyncJob(jobId: string) {
   for (let attempt = 0; attempt < 600; attempt += 1) {
     syncJob.value = await api.getJob(jobId)
@@ -1254,26 +1128,6 @@ async function pollHealthRepairJob(jobId: string) {
   }
   ElMessage.warning('数据健康修复仍在运行，请稍后刷新任务状态')
   return false
-}
-
-async function pollDatasetBuildJob(jobId: string) {
-  for (let attempt = 0; attempt < 1800; attempt += 1) {
-    datasetBuildJob.value = await api.getJob(jobId)
-    if (datasetBuildJob.value.status === 'success') return true
-    if (datasetBuildJob.value.status === 'failed') {
-      ElMessage.error(datasetBuildJob.value.error ?? '回测数据集构建失败')
-      return false
-    }
-    await sleep(1000)
-  }
-  ElMessage.warning('数据集构建仍在运行，请稍后刷新任务状态')
-  return false
-}
-
-function defaultDatasetStart(end: string) {
-  const value = new Date(`${end}T00:00:00`)
-  value.setFullYear(value.getFullYear() - 2)
-  return value.toISOString().slice(0, 10)
 }
 
 function todayLabel() {
@@ -1420,11 +1274,37 @@ onBeforeUnmount(stopAutoRefresh)
 }
 
 .readiness-item small,
+.ignored-issues-strip small,
 .consumer-desc,
 .operation-desc {
   color: #6b7280;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.ignored-issues-strip {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  color: #606266;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 9px 12px;
+}
+
+.ignored-issues-strip span {
+  color: #303133;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.ignored-issues-strip small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .consumer-strip,
@@ -1546,12 +1426,6 @@ onBeforeUnmount(stopAutoRefresh)
   justify-content: space-between;
   margin-top: 12px;
   padding: 12px;
-}
-
-.dataset-build-control {
-  align-items: center;
-  display: flex;
-  gap: 8px;
 }
 
 .sync-progress {

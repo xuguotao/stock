@@ -50,6 +50,10 @@ class FakeClickHouseClient:
             return [(2,)]
         if "from stock_quote_snapshots_5m" in normalized and "where bucket_start" in normalized:
             return [(2,)]
+        if "from stock_quote_snapshots_1m" in normalized and "group by symbol, bucket_start" in normalized:
+            return [(0, 0)]
+        if "from stock_quote_snapshots_5m" in normalized and "group by symbol, bucket_start" in normalized:
+            return [(1, 2)]
         if "from stock_quote_snapshots" in normalized and "where snapshot_at" in normalized:
             return [(2,)]
         if "from stock_quote_snapshots_1m" in normalized:
@@ -67,12 +71,20 @@ class FakeClickHouseClient:
                 ("000001", date(2026, 6, 15), 10.0, 10.2, 9.9, 10.1, 0.0),
                 ("600000", date(2026, 6, 15), 0.0, 10.2, 9.9, 10.1, 100.0),
             ]
+        if "historical_invalid_prices" in normalized and "group by symbol" in normalized:
+            return []
+        if "count() as bad_rows" in normalized and "historical_invalid_prices" in normalized:
+            return [(0, 0, None, None)]
         if "select uniqexact(k.symbol)" in normalized and "from daily_kline" in normalized:
             return [(3,)]
         if "select uniqexact(k.symbol)" in normalized and "from minute5_kline" in normalized:
             return [(1,)]
+        if "from daily_kline" in normalized and "max(d.date)" in normalized and "d.date <= todatetime" in normalized:
+            return [(date(2026, 6, 15),)]
         if "select count() from stocks s inner join daily_kline d" in normalized and "d.volume >= 1" in normalized:
             return [(2,)]
+        if "from daily_kline" in normalized and "group by symbol, date" in normalized and "having count() > 1" in normalized:
+            return [(0, 0)]
         if "having count() > 1" in normalized and "from minute5_kline" in normalized:
             return [(2, 3)]
         if "left join daily_kline" in normalized or "left join minute5_kline" in normalized:
@@ -120,6 +132,26 @@ class SuspendedSymbolClickHouseClient(FakeClickHouseClient):
         return super().execute(query, params)
 
 
+class IntradayAheadOfDailyClickHouseClient(FakeClickHouseClient):
+    def execute(self, query, params=None):
+        normalized = " ".join(query.lower().split())
+        if normalized.startswith("select count(), min(date), max(date), uniqexact(symbol) from daily_kline"):
+            return [(10, date(2026, 6, 11), date(2026, 6, 22), 3)]
+        if normalized.startswith("select count(), min(datetime), max(datetime), uniqexact(symbol) from minute5_kline"):
+            return [(48, datetime(2026, 6, 23, 9, 35), datetime(2026, 6, 23, 11, 25), 1)]
+        if "select uniqexact(k.symbol)" in normalized and "from daily_kline" in normalized:
+            return [(1,)]
+        if "select uniqexact(k.symbol)" in normalized and "from minute5_kline" in normalized:
+            return [(1,)]
+        if "from daily_kline" in normalized and "max(d.date)" in normalized and "d.date <= todatetime" in normalized:
+            return [(date(2026, 6, 22),)]
+        if "select count() from stocks s inner join daily_kline d" in normalized and "d.volume >= 1" in normalized:
+            return [(1,)]
+        if "left join daily_kline" in normalized or "left join minute5_kline" in normalized:
+            return []
+        return super().execute(query, params)
+
+
 class PartiallyBrokenClickHouseClient(FakeClickHouseClient):
     def execute(self, query, params=None):
         normalized = " ".join(query.lower().split())
@@ -160,7 +192,8 @@ def test_quote_snapshot_interval_stats_ignores_non_trading_session_gaps() -> Non
 
 
 def test_inspect_clickhouse_database_returns_coverage() -> None:
-    payload = inspect_clickhouse_database(client=FakeClickHouseClient(), as_of=date(2026, 6, 17))
+    client = FakeClickHouseClient()
+    payload = inspect_clickhouse_database(client=client, as_of=date(2026, 6, 17))
 
     assert payload["database"] == {
         "type": "clickhouse",
@@ -208,17 +241,25 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
     assert datasets["fund_tail_proxy"]["status"] == "ok"
     assert datasets["fund_tail_benchmark"]["status"] == "ok"
     assert datasets["data_source_health"]["category"] == "运维数据"
+    completeness_queries = [" ".join(query.lower().split()) for query, _params in client.commands if "daily_days <" in query.lower()]
+    assert completeness_queries
+    assert all("inner join daily_kline active" in query for query in completeness_queries)
+    assert all("active.date = %(latest)s" in query for query in completeness_queries)
+    assert all("active.volume >= 1" in query and "active.amount >= 1" in query for query in completeness_queries)
     assert payload["quality"] == {
         "status": "warning",
         "expected_non_st_symbols": 2,
-        "daily": {
-            "latest_date": "2026-06-15",
-            "covered_symbols": 3,
-            "missing_symbols": 0,
-            "coverage_ratio": 1.0,
-            "status": "ok",
-            "expected_symbols": 1,
-        },
+        "expected_strategy_tradable_symbols": 2,
+            "daily": {
+                "latest_date": "2026-06-15",
+                "covered_symbols": 3,
+                "missing_symbols": 0,
+                "coverage_ratio": 1.0,
+                "status": "ok",
+                "expected_symbols": 2,
+                "duplicate_groups": 0,
+                "extra_rows": 0,
+            },
             "minute5": {
                 "latest_datetime": "2026-06-15 15:00:00",
                 "covered_symbols": 1,
@@ -233,7 +274,7 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
                 "status": "warning",
         },
             "quote_snapshots": {
-            "status": "ok",
+            "status": "warning",
             "expected_symbols": 2,
             "expected_interval_seconds": 10,
             "raw_retention_days": 120,
@@ -282,6 +323,8 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
                     "coverage_ratio": 1.0,
                     "retention_days": 1095,
                     "bucket_seconds": 60,
+                    "duplicate_groups": 0,
+                    "extra_rows": 0,
                     "status": "ok",
                 },
                 "5m": {
@@ -294,24 +337,26 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
                     "coverage_ratio": 1.0,
                     "retention_days": 1095,
                     "bucket_seconds": 300,
-                    "status": "ok",
+                    "duplicate_groups": 1,
+                    "extra_rows": 2,
+                    "status": "warning",
                 },
             },
-            "issues": [],
+            "issues": ["stock_quote_snapshots_5m_duplicate_2_extra_rows"],
         },
-        "scheduled_checks": {
+            "scheduled_checks": {
             "status": "warning",
             "completeness_30d": {
-                "status": "warning",
+                "status": "ignored",
                 "window_days": 30,
                 "min_required_days": 15,
                 "affected_symbols": 1,
                 "samples": [{"symbol": "000002.SZ", "name": "万科A", "data_days": 12}],
             },
-            "today_anomalies": {
-                "status": "warning",
-                "latest_date": "2026-06-15",
-                "bad_rows": 2,
+                "today_anomalies": {
+                    "status": "warning",
+                    "latest_date": "2026-06-15",
+                    "bad_rows": 2,
                 "samples": [
                     {
                         "symbol": "000001.SZ",
@@ -330,11 +375,19 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
                         "low": 9.9,
                         "close": 10.1,
                         "volume": 100.0,
-                    },
-                ],
-            },
-            "freshness": {
-                "status": "ok",
+                        },
+                    ],
+                },
+                "historical_invalid_prices": {
+                    "status": "ok",
+                    "bad_rows": 0,
+                    "affected_symbols": 0,
+                    "start_date": None,
+                    "end_date": None,
+                    "samples": [],
+                },
+                "freshness": {
+                    "status": "ok",
                     "latest_date": "2026-06-15",
                     "as_of_date": "2026-06-17",
                     "lag_days": 2,
@@ -342,18 +395,109 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
                     "trading_lag_days": 0,
                     "max_lag_days": 3,
                 },
+                "issues": [
+                    "daily_kline_today_anomalies_2_rows",
+                ],
+                "ignored_issues": [
+                    "daily_kline_30d_incomplete_1_symbols",
+                ],
+            },
             "issues": [
-                "daily_kline_30d_incomplete_1_symbols",
+                "minute5_kline_missing_1_symbols",
+                "minute5_kline_duplicate_3_extra_rows",
+                "stock_quote_snapshots_5m_duplicate_2_extra_rows",
                 "daily_kline_today_anomalies_2_rows",
             ],
-        },
-        "issues": [
-            "minute5_kline_missing_1_symbols",
-            "minute5_kline_duplicate_3_extra_rows",
-            "daily_kline_30d_incomplete_1_symbols",
-            "daily_kline_today_anomalies_2_rows",
-        ],
-    }
+            "ignored_issues": [
+                "daily_kline_30d_incomplete_1_symbols",
+            ],
+        }
+
+
+def test_inspect_clickhouse_database_does_not_warn_for_only_ignored_completeness() -> None:
+    class CompletenessOnlyClient(FakeClickHouseClient):
+        def execute(self, query, params=None):
+            normalized = " ".join(query.lower().split())
+            if "select k.datetime, uniqexact(k.symbol)" in normalized and "from minute5_kline k" in normalized:
+                return [(datetime(2026, 6, 15, 15, 0), 2)]
+            if "select uniqexact(k.symbol)" in normalized and "from minute5_kline" in normalized:
+                return [(2,)]
+            if "having count() > 1" in normalized and "from minute5_kline" in normalized:
+                return [(0, 0)]
+            if "group by symbol, bucket_start" in normalized and "from stock_quote_snapshots_5m" in normalized:
+                return [(0, 0)]
+            if "count() as bad_rows" in normalized and "daily_kline" in normalized and "volume <= 0" in normalized:
+                return [(0,)]
+            return super().execute(query, params)
+
+    payload = inspect_clickhouse_database(client=CompletenessOnlyClient(), as_of=date(2026, 6, 17))
+
+    assert payload["quality"]["status"] == "ok"
+    assert "daily_kline_30d_incomplete_1_symbols" in payload["quality"]["ignored_issues"]
+    assert "daily_kline_30d_incomplete_1_symbols" not in payload["quality"]["issues"]
+    assert payload["quality"]["scheduled_checks"]["completeness_30d"]["status"] == "ignored"
+
+
+def test_inspect_clickhouse_database_warns_on_daily_duplicates() -> None:
+    class DailyDuplicateClient(FakeClickHouseClient):
+        def execute(self, query, params=None):
+            normalized = " ".join(query.lower().split())
+            if "from daily_kline" in normalized and "group by symbol, date" in normalized and "having count() > 1" in normalized:
+                return [(5, 12)]
+            if "select k.datetime, uniqexact(k.symbol)" in normalized and "from minute5_kline k" in normalized:
+                return [(datetime(2026, 6, 15, 15, 0), 2)]
+            if "select uniqexact(k.symbol)" in normalized and "from minute5_kline" in normalized:
+                return [(2,)]
+            if "having count() > 1" in normalized and "from minute5_kline" in normalized:
+                return [(0, 0)]
+            if "count() as bad_rows" in normalized and "daily_kline" in normalized and "volume <= 0" in normalized:
+                return [(0,)]
+            return super().execute(query, params)
+
+    payload = inspect_clickhouse_database(client=DailyDuplicateClient(), as_of=date(2026, 6, 17))
+
+    assert payload["quality"]["daily"]["duplicate_groups"] == 5
+    assert payload["quality"]["daily"]["extra_rows"] == 12
+    assert payload["quality"]["daily"]["status"] == "warning"
+    assert "daily_kline_duplicate_12_extra_rows" in payload["quality"]["issues"]
+
+
+def test_inspect_clickhouse_database_warns_on_historical_invalid_prices() -> None:
+    class HistoricalInvalidClient(FakeClickHouseClient):
+        def execute(self, query, params=None):
+            normalized = " ".join(query.lower().split())
+            if "historical_invalid_prices" in normalized and "group by symbol" in normalized:
+                return [("000937", "冀中能源", 268, date(2020, 1, 2), date(2021, 7, 9))]
+            if "count() as bad_rows" in normalized and "historical_invalid_prices" in normalized:
+                return [(1203, 14, date(2020, 1, 2), date(2022, 4, 27))]
+            if "select k.datetime, uniqexact(k.symbol)" in normalized and "from minute5_kline k" in normalized:
+                return [(datetime(2026, 6, 15, 15, 0), 2)]
+            if "select uniqexact(k.symbol)" in normalized and "from minute5_kline" in normalized:
+                return [(2,)]
+            if "having count() > 1" in normalized and "from minute5_kline" in normalized:
+                return [(0, 0)]
+            if "count() as bad_rows" in normalized and "daily_kline" in normalized and "volume <= 0" in normalized:
+                return [(0,)]
+            return super().execute(query, params)
+
+    payload = inspect_clickhouse_database(client=HistoricalInvalidClient(), as_of=date(2026, 6, 17))
+
+    historical = payload["quality"]["scheduled_checks"]["historical_invalid_prices"]
+    assert historical["status"] == "warning"
+    assert historical["bad_rows"] == 1203
+    assert historical["affected_symbols"] == 14
+    assert historical["start_date"] == "2020-01-02"
+    assert historical["end_date"] == "2022-04-27"
+    assert historical["samples"] == [
+        {
+            "symbol": "000937.SZ",
+            "name": "冀中能源",
+            "bad_rows": 268,
+            "start_date": "2020-01-02",
+            "end_date": "2021-07-09",
+        }
+    ]
+    assert "daily_kline_historical_invalid_prices_1203_rows" in payload["quality"]["issues"]
 
 
 def test_persist_clickhouse_quality_snapshot_writes_health_rows() -> None:
@@ -415,6 +559,17 @@ def test_inspect_clickhouse_database_excludes_no_trade_symbols_from_minute5_miss
     assert payload["quality"]["minute5"]["expected_symbols"] == 1
     assert payload["quality"]["minute5"]["missing_symbols"] == 0
     assert "missing_samples" not in payload["quality"]["minute5"]
+
+
+def test_inspect_clickhouse_database_uses_strategy_tradable_pool_when_intraday_ahead_of_daily() -> None:
+    payload = inspect_clickhouse_database(client=IntradayAheadOfDailyClickHouseClient())
+
+    assert payload["quality"]["daily"]["expected_symbols"] == 1
+    assert payload["quality"]["daily"]["missing_symbols"] == 0
+    assert payload["quality"]["minute5"]["expected_symbols"] == 1
+    assert payload["quality"]["minute5"]["missing_symbols"] == 0
+    assert not any(issue.startswith("daily_kline_missing") for issue in payload["quality"]["issues"])
+    assert not any(issue.startswith("minute5_kline_missing") for issue in payload["quality"]["issues"])
 
 
 class PartialLatestMinute5ClickHouseClient(FakeClickHouseClient):

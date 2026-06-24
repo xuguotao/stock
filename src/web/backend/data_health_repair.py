@@ -56,7 +56,11 @@ def build_data_health_repair_plan(status: dict[str, Any]) -> dict[str, Any]:
 
     scheduled = quality.get("scheduled_checks") or {}
     completeness = scheduled.get("completeness_30d") or {}
-    if int(completeness.get("affected_symbols") or 0) > 0:
+    if (
+        quality.get("status") in {"warning", "missing"}
+        and int(completeness.get("affected_symbols") or 0) > 0
+        and completeness.get("status") != "ignored"
+    ):
         actions.append(
             {
                 "key": "daily_history_backfill",
@@ -68,16 +72,20 @@ def build_data_health_repair_plan(status: dict[str, Any]) -> dict[str, Any]:
                 "runner": None,
             }
         )
-
-    if quality.get("status") in {"warning", "missing"}:
+    historical_invalid = scheduled.get("historical_invalid_prices") or {}
+    if int(historical_invalid.get("bad_rows") or 0) > 0:
         actions.append(
             {
-                "key": "quality_snapshot",
-                "title": "写入修复后的质量快照",
-                "status": "ready",
-                "auto_repair": True,
-                "reason": "记录本次修复前后的质量状态",
-                "runner": "quality_snapshot",
+                "key": "daily_historical_invalid_prices",
+                "title": "重导历史异常价格",
+                "status": "manual",
+                "auto_repair": False,
+                "reason": (
+                    f"历史日线 OHLC 异常 {int(historical_invalid.get('bad_rows') or 0)} 条，"
+                    f"影响 {int(historical_invalid.get('affected_symbols') or 0)} 只标的"
+                ),
+                "samples": historical_invalid.get("samples") or [],
+                "runner": None,
             }
         )
 

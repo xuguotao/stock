@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.constants import format_symbol
-from src.data.clickhouse_table_maintenance import minute5_duplicate_stats
+from src.data.clickhouse_table_maintenance import daily_duplicate_stats, minute5_duplicate_stats
 from src.data.clickhouse_source import ClickHouseStockDataSource
 
 
@@ -597,6 +597,11 @@ def _clickhouse_quality(
     minute5 = tables.get("minute5_kline", {})
     daily_latest = (daily.get("date_range") or {}).get("end")
     minute5_latest = (minute5.get("date_range") or {}).get("end")
+    strategy_tradable_symbols = _strategy_tradable_symbol_count(
+        client=client,
+        latest=minute5_latest or daily_latest,
+        fallback=non_st_count,
+    )
     daily_latest_symbols = _latest_symbol_count(
         client=client,
         table="daily_kline",
@@ -611,18 +616,8 @@ def _clickhouse_quality(
         latest=minute5_latest,
         non_st_only=True,
     )
-    daily_expected_symbols = (
-        minute5_latest_symbols
-        if _as_date(daily_latest) is not None
-        and _as_date(daily_latest) == _as_date(minute5_latest)
-        and minute5_latest_symbols > 0
-        else non_st_count
-    )
-    minute5_expected_symbols = _active_daily_symbol_count(
-        client=client,
-        latest=minute5_latest,
-        fallback=non_st_count,
-    )
+    daily_expected_symbols = strategy_tradable_symbols
+    minute5_expected_symbols = strategy_tradable_symbols
     minute5_complete_latest, minute5_complete_symbols = _latest_complete_intraday_bucket(
         client=client,
         table="minute5_kline",
@@ -638,6 +633,8 @@ def _clickhouse_quality(
         latest_key="latest_date",
     )
     daily_check["expected_symbols"] = daily_expected_symbols
+    daily_duplicates = _safe_daily_duplicate_stats(client)
+    daily_check.update(daily_duplicates)
     minute5_check = _coverage_check(
         latest=minute5_complete_latest or minute5_latest,
         covered=minute5_complete_symbols if minute5_complete_latest else minute5_latest_symbols,
@@ -674,6 +671,10 @@ def _clickhouse_quality(
     issues = []
     if daily_check["missing_symbols"] > 0:
         issues.append(f"daily_kline_missing_{daily_check['missing_symbols']}_symbols")
+    if daily_check.get("extra_rows", 0) > 0:
+        issues.append(f"daily_kline_duplicate_{daily_check['extra_rows']}_extra_rows")
+        if daily_check["status"] == "ok":
+            daily_check["status"] = "warning"
     if minute5_check["missing_symbols"] > 0:
         issues.append(f"minute5_kline_missing_{minute5_check['missing_symbols']}_symbols")
     if minute5_check.get("extra_rows", 0) > 0:
@@ -692,6 +693,7 @@ def _clickhouse_quality(
         as_of=as_of,
     )
     issues.extend(scheduled_checks["issues"])
+    ignored_issues = list(scheduled_checks.get("ignored_issues") or [])
     statuses = {
         daily_check["status"],
         minute5_check["status"],
@@ -702,17 +704,26 @@ def _clickhouse_quality(
     return {
         "status": status,
         "expected_non_st_symbols": non_st_count,
+        "expected_strategy_tradable_symbols": strategy_tradable_symbols,
         "daily": daily_check,
         "minute5": minute5_check,
         "quote_snapshots": quote_snapshot_check,
         "scheduled_checks": scheduled_checks,
         "issues": issues,
+        "ignored_issues": ignored_issues,
     }
 
 
 def _safe_minute5_duplicate_stats(client: Any) -> dict[str, int]:
     try:
         return minute5_duplicate_stats(client=client)
+    except Exception:  # noqa: BLE001 - keep data dashboard best-effort.
+        return {"duplicate_groups": 0, "extra_rows": 0}
+
+
+def _safe_daily_duplicate_stats(client: Any) -> dict[str, int]:
+    try:
+        return daily_duplicate_stats(client=client)
     except Exception:  # noqa: BLE001 - keep data dashboard best-effort.
         return {"duplicate_groups": 0, "extra_rows": 0}
 
@@ -728,6 +739,7 @@ def _quality_health_rows(quality: dict[str, Any], checked_at: datetime) -> list[
         [
             ("scheduled_completeness_30d", scheduled.get("completeness_30d") or {}),
             ("scheduled_today_anomalies", scheduled.get("today_anomalies") or {}),
+            ("scheduled_historical_invalid_prices", scheduled.get("historical_invalid_prices") or {}),
             ("scheduled_freshness", scheduled.get("freshness") or {}),
         ]
     )
@@ -781,6 +793,8 @@ def _quality_check_message(name: str, details: dict[str, Any]) -> str:
         return f"affected_symbols={details.get('affected_symbols')}"
     if name == "scheduled_today_anomalies":
         return f"bad_rows={details.get('bad_rows')}"
+    if name == "scheduled_historical_invalid_prices":
+        return f"bad_rows={details.get('bad_rows')}, affected_symbols={details.get('affected_symbols')}"
     if name == "scheduled_freshness":
         return f"lag_days={details.get('lag_days')}, max_lag_days={details.get('max_lag_days')}"
     return str(details.get("status") or "")
@@ -803,21 +817,28 @@ def _scheduled_data_quality_checks(
         min_required_days=min_required_days,
     )
     anomalies = _daily_today_anomaly_check(client=client, latest=latest_daily_date)
+    historical_invalid = _daily_historical_invalid_price_check(client=client)
     freshness = _daily_freshness_check(
         client=client,
         latest=latest_daily_date,
         as_of=as_of_date,
         max_lag_days=max_lag_days,
     )
-    issues = [*completeness["issues"], *anomalies["issues"], *freshness["issues"]]
-    statuses = {completeness["status"], anomalies["status"], freshness["status"]}
+    issues = [*anomalies["issues"], *historical_invalid["issues"], *freshness["issues"]]
+    ignored_issues = [*completeness["issues"]]
+    statuses = {anomalies["status"], historical_invalid["status"], freshness["status"]}
     status = "missing" if "missing" in statuses else "warning" if "warning" in statuses else "ok"
     return {
         "status": status,
-        "completeness_30d": {key: value for key, value in completeness.items() if key != "issues"},
+        "completeness_30d": {
+            **{key: value for key, value in completeness.items() if key != "issues"},
+            "status": "ignored" if completeness["issues"] else completeness["status"],
+        },
         "today_anomalies": {key: value for key, value in anomalies.items() if key != "issues"},
+        "historical_invalid_prices": {key: value for key, value in historical_invalid.items() if key != "issues"},
         "freshness": {key: value for key, value in freshness.items() if key != "issues"},
         "issues": issues,
+        "ignored_issues": ignored_issues,
     }
 
 
@@ -847,6 +868,11 @@ def _daily_completeness_check(
             from (
                 select s.symbol, countDistinct(k.date) as daily_days
                 from stocks s
+                inner join daily_kline active
+                    on s.symbol = active.symbol
+                    and active.date = %(latest)s
+                    and active.volume >= 1
+                    and active.amount >= 1
                 left join daily_kline k
                     on s.symbol = k.symbol
                     and k.date >= %(window_start)s
@@ -872,6 +898,11 @@ def _daily_completeness_check(
             """
             select s.symbol, any(s.name) as name, countDistinct(k.date) as daily_days
             from stocks s
+            inner join daily_kline active
+                on s.symbol = active.symbol
+                and active.date = %(latest)s
+                and active.volume >= 1
+                and active.amount >= 1
             left join daily_kline k
                 on s.symbol = k.symbol
                 and k.date >= %(window_start)s
@@ -974,6 +1005,78 @@ def _daily_today_anomaly_check(*, client: Any, latest: Any, sample_limit: int = 
                 "volume": float(volume or 0),
             }
             for symbol, day, open_, high, low, close, volume in samples
+        ],
+        "issues": issues,
+    }
+
+
+def _daily_historical_invalid_price_check(*, client: Any, sample_limit: int = 20) -> dict[str, Any]:
+    try:
+        rows = client.execute(
+            """
+            with historical_invalid_prices as (
+                select symbol, date, open, high, low, close
+                from daily_kline
+                where open <= 0 or high <= 0 or low <= 0 or close <= 0
+            )
+            select
+                count() as bad_rows,
+                uniqExact(symbol) as affected_symbols,
+                min(date) as start_date,
+                max(date) as end_date
+            from historical_invalid_prices
+            """
+        )
+        bad_rows, affected_symbols, start_date, end_date = rows[0] if rows else (0, 0, None, None)
+        samples = client.execute(
+            """
+            with historical_invalid_prices as (
+                select symbol, date, open, high, low, close
+                from daily_kline
+                where open <= 0 or high <= 0 or low <= 0 or close <= 0
+            )
+            select
+                p.symbol,
+                any(s.name) as name,
+                count() as bad_rows,
+                min(p.date) as start_date,
+                max(p.date) as end_date
+            from historical_invalid_prices p
+            left join stocks s on p.symbol = s.symbol
+            group by symbol
+            order by bad_rows desc, symbol
+            limit %(limit)s
+            """,
+            {"limit": int(sample_limit)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "status": "warning",
+            "bad_rows": 0,
+            "affected_symbols": 0,
+            "start_date": None,
+            "end_date": None,
+            "samples": [],
+            "error": str(exc),
+            "issues": ["daily_kline_historical_invalid_prices_check_failed"],
+        }
+    bad_count = int(bad_rows or 0)
+    issues = [f"daily_kline_historical_invalid_prices_{bad_count}_rows"] if bad_count > 0 else []
+    return {
+        "status": "warning" if bad_count > 0 else "ok",
+        "bad_rows": bad_count,
+        "affected_symbols": int(affected_symbols or 0),
+        "start_date": _format_status_value(start_date),
+        "end_date": _format_status_value(end_date),
+        "samples": [
+            {
+                "symbol": format_symbol(str(symbol)),
+                "name": str(name or ""),
+                "bad_rows": int(rows or 0),
+                "start_date": _format_status_value(first_date),
+                "end_date": _format_status_value(last_date),
+            }
+            for symbol, name, rows, first_date, last_date in samples
         ],
         "issues": issues,
     }
@@ -1107,6 +1210,8 @@ def _quote_snapshot_quality(
             issues.append(f"stock_quote_snapshots_{label}_missing")
         elif rollup["missing_symbols"] > 0:
             issues.append(f"stock_quote_snapshots_{label}_missing_{rollup['missing_symbols']}_symbols")
+        if int(rollup.get("extra_rows") or 0) > 0:
+            issues.append(f"stock_quote_snapshots_{label}_duplicate_{rollup['extra_rows']}_extra_rows")
 
     statuses = {raw["status"], *(rollup["status"] for rollup in rollups.values())}
     status = "missing" if "missing" in statuses else "warning" if "warning" in statuses else "ok"
@@ -1142,6 +1247,14 @@ def _quote_rollup_quality(
     )
     row_count = int(status.get("row_count") or 0)
     missing_symbols = max(0, expected_symbols - latest_symbols)
+    duplicate_stats = _quote_rollup_duplicate_stats(client=client, table=table)
+    layer_status = _quote_layer_status(
+        latest=latest,
+        missing_symbols=missing_symbols,
+        row_count=row_count,
+    )
+    if layer_status == "ok" and duplicate_stats["extra_rows"] > 0:
+        layer_status = "warning"
     return {
         "table": table,
         "latest_bucket": latest,
@@ -1152,12 +1265,29 @@ def _quote_rollup_quality(
         "coverage_ratio": _coverage_ratio(latest_symbols, expected_symbols),
         "retention_days": QUOTE_SNAPSHOT_AGGREGATE_RETENTION_DAYS,
         "bucket_seconds": bucket_seconds,
-        "status": _quote_layer_status(
-            latest=latest,
-            missing_symbols=missing_symbols,
-            row_count=row_count,
-        ),
+        "duplicate_groups": duplicate_stats["duplicate_groups"],
+        "extra_rows": duplicate_stats["extra_rows"],
+        "status": layer_status,
     }
+
+
+def _quote_rollup_duplicate_stats(*, client: Any, table: str) -> dict[str, int]:
+    try:
+        rows = client.execute(
+            f"""
+            select count() as duplicate_groups, sum(c - 1) as extra_rows
+            from (
+                select symbol, bucket_start, count() as c
+                from {table}
+                group by symbol, bucket_start
+                having count() > 1
+            )
+            """
+        )
+    except Exception:  # noqa: BLE001 - keep rollup quality inspection best-effort.
+        return {"duplicate_groups": 0, "extra_rows": 0}
+    duplicate_groups, extra_rows = rows[0] if rows else (0, 0)
+    return {"duplicate_groups": int(duplicate_groups or 0), "extra_rows": int(extra_rows or 0)}
 
 
 def _latest_quote_symbol_count(
@@ -1386,21 +1516,36 @@ def _latest_complete_intraday_bucket(
     return _format_status_value(rows[0][0]), int(rows[0][1] or 0)
 
 
-def _active_daily_symbol_count(*, client: Any, latest: Any, fallback: int) -> int:
+def _strategy_tradable_symbol_count(*, client: Any, latest: Any, fallback: int) -> int:
     if not latest:
         return fallback
     try:
+        latest_rows = client.execute(
+            """
+            select max(d.date)
+            from daily_kline d
+            inner join stocks s on d.symbol = s.symbol
+            where d.date <= toDate(%(latest)s)
+                and upper(s.name) not like '%%ST%%'
+                and d.volume >= 1
+                and d.amount >= 1
+            """,
+            {"latest": latest},
+        )
+        latest_daily = latest_rows[0][0] if latest_rows else None
+        if not latest_daily:
+            return fallback
         rows = client.execute(
             """
             select count()
             from stocks s
             inner join daily_kline d
-                on s.symbol = d.symbol and d.date = toDate(%(latest)s)
+                on s.symbol = d.symbol and d.date = %(latest_daily)s
             where upper(s.name) not like '%%ST%%'
                 and d.volume >= 1
                 and d.amount >= 1
             """,
-            {"latest": latest},
+            {"latest_daily": latest_daily},
         )
     except Exception:  # noqa: BLE001 - fallback keeps health checks available.
         return fallback

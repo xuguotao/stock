@@ -14,10 +14,17 @@ class FakeClickHouseClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object | None]] = []
         self.counts = [0, 2]
+        self.lock_inserted = True
 
     def execute(self, query, params=None):
         self.calls.append((query, params))
         normalized = " ".join(query.lower().split())
+        if normalized.startswith("create table if not exists daily_kline_repair_locks"):
+            return []
+        if normalized.startswith("insert into daily_kline_repair_locks"):
+            return [(1 if self.lock_inserted else 0,)]
+        if "delete from daily_kline_repair_locks" in normalized:
+            return []
         if normalized.startswith("select count() from daily_kline"):
             return [(self.counts.pop(0),)]
         return []
@@ -52,7 +59,26 @@ def test_sync_clickhouse_daily_from_minute5_derives_missing_daily_rows() -> None
     assert any("insert into daily_kline" in query for query in executed)
     assert any("from minute5_kline" in query for query in executed)
     assert any("group by symbol, datetime" in query for query in executed)
+    assert any("daily_kline_repair_locks" in query for query in executed)
     assert any("where bars.symbol not in" in query for query in executed)
+
+
+def test_sync_clickhouse_daily_from_minute5_skips_when_trade_date_lock_is_held() -> None:
+    client = FakeClickHouseClient()
+    client.lock_inserted = False
+
+    result = sync_clickhouse_daily_from_minute5(client=client, trade_date=date(2026, 6, 18))
+
+    executed = [" ".join(query.lower().split()) for query, _ in client.calls]
+    assert result == {
+        "trade_date": "2026-06-18",
+        "before_rows": 0,
+        "after_rows": 0,
+        "inserted_rows": 0,
+        "skipped": True,
+        "skip_reason": "daily_repair_lock_held",
+    }
+    assert not any("insert into daily_kline (" in query for query in executed)
 
 
 def test_sync_clickhouse_index_daily_fills_existing_index_codes() -> None:

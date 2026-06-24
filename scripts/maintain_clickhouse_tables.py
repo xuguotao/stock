@@ -11,7 +11,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.data.clickhouse_table_maintenance import deduplicate_minute5_kline, minute5_duplicate_stats
+from src.data.clickhouse_table_maintenance import (
+    daily_duplicate_stats,
+    deduplicate_daily_kline,
+    deduplicate_minute5_kline,
+    minute5_duplicate_stats,
+)
 
 
 def main() -> None:
@@ -23,9 +28,13 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("minute5-duplicates", help="Inspect minute5 duplicate keys")
+    subparsers.add_parser("daily-duplicates", help="Inspect daily duplicate keys")
     dedup = subparsers.add_parser("dedup-minute5", help="Rebuild minute5_kline without duplicate keys")
     dedup.add_argument("--execute", action="store_true", help="Actually swap the rebuilt table into place")
     dedup.add_argument("--suffix", default=None, help="Optional maintenance table suffix")
+    dedup_daily = subparsers.add_parser("dedup-daily", help="Rebuild daily_kline without duplicate keys")
+    dedup_daily.add_argument("--execute", action="store_true", help="Actually swap the rebuilt table into place")
+    dedup_daily.add_argument("--suffix", default=None, help="Optional maintenance table suffix")
 
     args = parser.parse_args()
     common = {
@@ -36,6 +45,14 @@ def main() -> None:
     }
     if args.command == "minute5-duplicates":
         result = minute5_duplicate_stats(**common)
+    elif args.command == "daily-duplicates":
+        result = daily_duplicate_stats(**common)
+    elif args.command == "dedup-daily":
+        result = deduplicate_daily_kline(
+            **common,
+            dry_run=not args.execute,
+            suffix=args.suffix,
+        )
     else:
         result = deduplicate_minute5_kline(
             **common,

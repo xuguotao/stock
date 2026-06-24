@@ -177,7 +177,7 @@ class ClickHouseStockDataSource(DataSourceBase):
         rows = self._execute(
             """
             select symbol, bucket_start as datetime, open_price, high_price, low_price, close_price, volume, amount
-            from stock_quote_snapshots_5m
+            from stock_quote_snapshots_5m final
             where symbol in %(symbols)s and bucket_start >= %(start)s and bucket_start <= %(end)s
             order by symbol, bucket_start
             """,

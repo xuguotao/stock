@@ -62,8 +62,8 @@ def build_data_reliability_report(
             automation=_automation_status(scheduler),
             health=str(quality.get("status") or "unknown"),
             latest=(status.get("health") or {}).get("daily_latest_date"),
-            coverage=f"{len(quality.get('issues') or [])} 个当前告警",
-            repair="自动：health-repair-plan + quality_snapshot",
+            coverage=f"{len(quality.get('issues') or [])} 个阻塞告警，{len(quality.get('ignored_issues') or [])} 个已忽略",
+            repair="自动：health-repair-plan；质量快照由日常维护记录",
             issues=list(quality.get("issues") or []),
         ),
     ]

@@ -14,6 +14,11 @@ def test_data_center_page_shows_clickhouse_quality_summary() -> None:
     assert "missing_samples" in source
     assert "missingSampleText" in source
     assert "coverage_ratio" in source
+    assert "策略可交易池" in source
+    assert "strategyTradableCount" in source
+    assert "今日尾盘策略可用性" in source
+    assert "ignored_issues" in source
+    assert "已忽略" in source
 
 
 def test_data_center_minute5_sync_uses_selected_trade_date() -> None:
@@ -104,17 +109,20 @@ def test_data_center_page_shows_scheduled_quality_checks() -> None:
     assert "scheduledQualityRows" in source
     assert "completeness_30d" in source
     assert "today_anomalies" in source
+    assert "historical_invalid_prices" in source
+    assert "历史价格污染" in source
     assert "freshness" in source
     assert "scheduled_checks" in client
     assert "affected_symbols" in client
     assert "bad_rows" in client
+    assert "historical_invalid_prices" in client
     assert "lag_days" in client
 
 
 def test_data_center_page_uses_operations_console_layout() -> None:
     source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
 
-    assert "数据总览" in source
+    assert "今日尾盘策略可用性" in source
     assert "数据可靠性总控" in source
     assert "当前告警" in source
     assert "数据资产地图" in source
@@ -155,7 +163,8 @@ def test_data_center_header_keeps_only_primary_actions() -> None:
     assert "同步旧 Stock DB" not in header
     assert "高级维护" in source
     assert "manual-minute5-control" in source
-    assert "dataset-build-control" in source
+    assert "dataset-build-control" not in source
+    assert "本地 Research Datasets" not in source
 
 
 def test_data_center_page_auto_refreshes_background_status() -> None:
