@@ -1,0 +1,124 @@
+"""Feature construction for tail-session ML samples."""
+
+from __future__ import annotations
+
+from datetime import time
+from typing import Iterable
+
+import pandas as pd
+
+
+DEFAULT_DECISION_TIMES = [time(14, 30), time(14, 35), time(14, 40), time(14, 45), time(14, 50), time(14, 55)]
+
+
+def build_tail_feature_frame(
+    *,
+    daily_bars: pd.DataFrame,
+    minute5_bars: pd.DataFrame,
+    decision_times: Iterable[time] = DEFAULT_DECISION_TIMES,
+) -> pd.DataFrame:
+    """Build one feature row per symbol/date/decision time without future daily leakage."""
+    if daily_bars.empty or minute5_bars.empty:
+        return pd.DataFrame()
+    daily = _prepare_daily(daily_bars)
+    minute5 = _prepare_minute5(minute5_bars)
+    decision_values = sorted(_time_label(value) for value in decision_times)
+    rows = []
+    for (symbol, trade_date), day_bars in minute5.groupby(["symbol", "trade_date"], sort=True):
+        prior_daily = daily[(daily["symbol"] == symbol) & (daily["date"] < trade_date)].sort_values("date")
+        if len(prior_daily) < 6:
+            continue
+        day_bars = day_bars.sort_values("datetime")
+        tail_bars = day_bars[day_bars["bar_time"] >= "14:30"]
+        if tail_bars.empty:
+            continue
+        first_tail_close = float(tail_bars.iloc[0]["close"])
+        prior = _daily_features(prior_daily)
+        for decision_time in decision_values:
+            observed = tail_bars[tail_bars["bar_time"] <= decision_time]
+            if observed.empty:
+                continue
+            latest = observed.iloc[-1]
+            entry_price = float(latest["close"])
+            high_so_far = float(observed["high"].max())
+            volume_sum = float(observed["volume"].sum())
+            rows.append(
+                {
+                    "trade_date": trade_date,
+                    "symbol": symbol,
+                    "decision_time": decision_time,
+                    "entry_price": entry_price,
+                    "tail_return_from_1430": _return(entry_price, first_tail_close),
+                    "tail_high_return_from_1430": _return(high_so_far, first_tail_close),
+                    "tail_pullback_from_high": _return(entry_price, high_so_far),
+                    "tail_volume": volume_sum,
+                    "tail_amount": float(observed["amount"].sum()),
+                    "tail_volume_ratio": volume_sum / max(float(prior.get("avg_5m_volume_20", 0.0)), 1.0),
+                    "last3_close_slope": _last_n_slope(observed["close"], 3),
+                    "last6_close_slope": _last_n_slope(observed["close"], 6),
+                    **prior,
+                }
+            )
+    return pd.DataFrame(rows).sort_values(["trade_date", "symbol", "decision_time"]).reset_index(drop=True)
+
+
+def _prepare_daily(daily_bars: pd.DataFrame) -> pd.DataFrame:
+    daily = daily_bars.copy()
+    daily["symbol"] = daily["symbol"].astype(str)
+    daily["date"] = pd.to_datetime(daily["date"]).dt.date
+    for column in ["open", "high", "low", "close", "volume", "amount"]:
+        daily[column] = pd.to_numeric(daily[column], errors="coerce").fillna(0.0)
+    return daily.sort_values(["symbol", "date"])
+
+
+def _prepare_minute5(minute5_bars: pd.DataFrame) -> pd.DataFrame:
+    minute5 = minute5_bars.copy()
+    minute5["symbol"] = minute5["symbol"].astype(str)
+    minute5["datetime"] = pd.to_datetime(minute5["datetime"])
+    minute5["trade_date"] = minute5["datetime"].dt.date
+    minute5["bar_time"] = minute5["datetime"].dt.strftime("%H:%M")
+    for column in ["open", "high", "low", "close", "volume", "amount"]:
+        minute5[column] = pd.to_numeric(minute5[column], errors="coerce").fillna(0.0)
+    return minute5.sort_values(["symbol", "datetime"])
+
+
+def _daily_features(prior_daily: pd.DataFrame) -> dict[str, float]:
+    close = prior_daily["close"].astype(float)
+    volume = prior_daily["volume"].astype(float)
+    amount = prior_daily["amount"].astype(float)
+    prior_close = float(close.iloc[-1])
+    return {
+        "prior_close": prior_close,
+        "daily_ret_5": _return(prior_close, float(close.iloc[-6])),
+        "daily_ret_10": _window_return(close, 11),
+        "daily_ret_20": _window_return(close, 21),
+        "daily_volatility_20": float(close.pct_change().tail(20).std() or 0.0),
+        "ma5_distance": _return(prior_close, float(close.tail(5).mean())),
+        "ma20_distance": _return(prior_close, float(close.tail(20).mean())) if len(close) >= 20 else 0.0,
+        "avg_volume_20": float(volume.tail(20).mean()),
+        "avg_amount_20": float(amount.tail(20).mean()),
+        "avg_5m_volume_20": float(volume.tail(20).mean() / 48.0),
+    }
+
+
+def _window_return(close: pd.Series, rows: int) -> float:
+    if len(close) < rows:
+        return 0.0
+    return _return(float(close.iloc[-1]), float(close.iloc[-rows]))
+
+
+def _last_n_slope(values: pd.Series, n: int) -> float:
+    if len(values) < 2:
+        return 0.0
+    window = values.tail(n).astype(float)
+    return _return(float(window.iloc[-1]), float(window.iloc[0]))
+
+
+def _return(value: float, base: float) -> float:
+    return value / base - 1.0 if base else 0.0
+
+
+def _time_label(value: time | str) -> str:
+    if isinstance(value, str):
+        return value[:5]
+    return value.strftime("%H:%M")

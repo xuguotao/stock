@@ -76,8 +76,8 @@ Conclusion:
 - Create: `src/ml/tail_dataset.py`
 - Create: `tests/test_ml/test_tail_dataset.py`
 
-- [ ] Build one sample per `(trade_date, symbol, decision_time)` using only data available at or before the decision time.
-- [ ] First supported decision times: `14:30`, `14:35`, `14:40`, `14:45`, `14:50`, `14:55`.
+- [x] Build one sample per `(trade_date, symbol, decision_time)` using only data available at or before the decision time.
+- [x] First supported decision times: `14:30`, `14:35`, `14:40`, `14:45`, `14:50`, `14:55`.
 - [ ] Feature groups:
   - Daily trend: 5d/10d/20d return, volatility, moving-average distance.
   - Tail intraday: 14:30+ return, last 3/6 bar slope, volume expansion, pullback from high.
@@ -90,7 +90,7 @@ Conclusion:
   - `next_low_return`
   - `hit_next_high_1pct`
   - `drawdown_breach_2pct`
-- [ ] Write the dataset to ClickHouse table `tail_ml_samples` or parquet cache only after row count and null-rate checks pass.
+- [x] Write the dataset to ClickHouse table `tail_ml_samples` or parquet cache only after row count and null-rate checks pass.
 
 ### Task 3: Current Rule Baseline
 
