@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 from fastapi.testclient import TestClient
 
+import src.web.backend.backtests as backtests
 from src.web.backend.app import create_app
 
 
@@ -67,7 +70,73 @@ def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
     assert {"time", "close", "volume"}.issubset(verification["bars"][0])
 
 
-def test_backtest_api_rejects_missing_dataset_when_not_sample(tmp_path) -> None:
+def test_backtest_api_defaults_to_clickhouse_source(monkeypatch, tmp_path) -> None:
+    class FakeClickHouseSource:
+        def _client_instance(self):
+            return FakeClickHouseClient()
+
+    class FakeClickHouseClient:
+        def execute(self, query, params=None):
+            params = params or {}
+            if "from stocks" in query:
+                return [
+                    ("000001", "平安银行"),
+                    ("600519", "贵州茅台"),
+                    ("300750", "宁德时代"),
+                ]
+            if "from daily_kline" in query and "group by symbol" in query:
+                return [
+                    ("000001", 45, date(2025, 2, 28), 10000000, 1000000),
+                    ("600519", 45, date(2025, 2, 28), 10000000, 1000000),
+                    ("300750", 45, date(2025, 2, 28), 10000000, 1000000),
+                ]
+            if "from daily_kline" in query:
+                dates = pd.bdate_range(params["start"], params["end"])
+                rows = []
+                for symbol_index, symbol in enumerate(params["symbols"]):
+                    for index, current_date in enumerate(dates):
+                        close = 10 + symbol_index * 5 + index * 0.1
+                        rows.append(
+                            (
+                                symbol,
+                                current_date.date(),
+                                close * 0.99,
+                                close * 1.01,
+                                close * 0.98,
+                                close,
+                                1000000 + index * 1000,
+                                close * (1000000 + index * 1000),
+                            )
+                        )
+                return rows
+            return []
+
+    monkeypatch.setattr(backtests, "ClickHouseStockDataSource", FakeClickHouseSource)
+    app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests/tail-session",
+        json={
+            "start": "2025-01-01",
+            "end": "2025-02-28",
+            "capital": 100000,
+            "top_n": 2,
+        },
+    )
+
+    payload = response.json()
+    job = client.get(f"/api/jobs/{payload['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert job["params"]["source"] == "clickhouse"
+    assert job["result"]["experiment"]["mode"] == "clickhouse"
+    assert job["result"]["experiment"]["universe_source"] == "clickhouse_strategy_tradable"
+    assert job["result"]["symbol_count"] == 3
+
+
+def test_backtest_api_rejects_missing_dataset_when_source_is_dataset(tmp_path) -> None:
     app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
     client = TestClient(app)
 
@@ -77,6 +146,7 @@ def test_backtest_api_rejects_missing_dataset_when_not_sample(tmp_path) -> None:
             "start": "2025-01-01",
             "end": "2025-02-28",
             "sample": False,
+            "source": "dataset",
         },
     )
 

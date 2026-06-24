@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import pandas as pd
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
+from src.core.constants import format_symbol
+from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.research_dataset import load_research_dataset
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
 from src.strategy.factors.tail_session import TailSessionFactor
@@ -29,10 +31,13 @@ class TailBacktestRequest(BaseModel):
     dataset_path: str | None = None
     symbols: list[str] | None = None
     sample: bool = Field(default=False, validation_alias=AliasChoices("sample", "use_sample"))
+    source: Literal["clickhouse", "dataset"] = "clickhouse"
 
     @model_validator(mode="after")
     def require_dataset_or_sample(self) -> "TailBacktestRequest":
-        if not self.sample and not self.dataset_path and not self.dataset_id:
+        if (self.dataset_path or self.dataset_id) and self.source == "clickhouse":
+            self.source = "dataset"
+        if not self.sample and self.source == "dataset" and not self.dataset_path and not self.dataset_id:
             raise ValueError("dataset_path or dataset_id is required unless sample is true")
         return self
 
@@ -46,7 +51,7 @@ def run_tail_backtest(
 ) -> dict[str, Any]:
     """Run a tail-session backtest and return UI-friendly result data."""
     _report_progress(progress, 10, "loading_data", "加载回测数据")
-    bars = _sample_bars(request.start, request.end) if request.sample else _load_dataset(request)
+    bars = _load_bars(request)
     if bars.empty:
         raise ValueError(_empty_bars_message(request))
 
@@ -99,6 +104,14 @@ def _report_progress(
         progress(percent, stage, message)
 
 
+def _load_bars(request: TailBacktestRequest) -> pd.DataFrame:
+    if request.sample:
+        return _sample_bars(request.start, request.end)
+    if request.source == "dataset":
+        return _load_dataset(request)
+    return _load_clickhouse_bars(request)
+
+
 def _load_dataset(request: TailBacktestRequest) -> pd.DataFrame:
     if request.dataset_path is None:
         return pd.DataFrame()
@@ -108,6 +121,66 @@ def _load_dataset(request: TailBacktestRequest) -> pd.DataFrame:
         start=request.start,
         end=request.end,
     )
+
+
+def _load_clickhouse_bars(request: TailBacktestRequest) -> pd.DataFrame:
+    clickhouse = ClickHouseStockDataSource()._client_instance()
+    symbols = _clickhouse_symbols(clickhouse, request)
+    if not symbols:
+        return pd.DataFrame()
+    rows = clickhouse.execute(
+        """
+        select symbol, date, open, high, low, close, volume, amount
+        from daily_kline
+        where symbol in %(symbols)s and date >= %(start)s and date <= %(end)s
+        order by date, symbol
+        """,
+        {
+            "symbols": tuple(symbol.split(".")[0].zfill(6) for symbol in symbols),
+            "start": request.start,
+            "end": request.end,
+        },
+    )
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(
+        rows,
+        columns=["symbol", "date", "open", "high", "low", "close", "volume", "amount"],
+    )
+    df["symbol"] = df["symbol"].astype(str).map(format_symbol)
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    for column in ["open", "high", "low", "close", "volume", "amount"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+    df["adjusted_close"] = df["close"]
+    return df[
+        ["date", "open", "high", "low", "close", "volume", "amount", "adjusted_close", "symbol"]
+    ].drop_duplicates(["date", "symbol"]).set_index(["date", "symbol"]).sort_index()
+
+
+def _clickhouse_symbols(client: Any, request: TailBacktestRequest) -> list[str]:
+    if request.symbols:
+        return [format_symbol(symbol) for symbol in request.symbols]
+    rows = client.execute(
+        """
+        select
+            d.symbol as symbol,
+            count() as bars,
+            max(d.date) as end_date,
+            avg(d.amount) as avg_amount,
+            avg(d.volume) as avg_volume
+        from daily_kline d
+        any left join stocks s on d.symbol = s.symbol
+        where d.date >= %(start)s and d.date <= %(end)s
+            and d.volume > 0
+            and d.amount > 0
+            and positionUTF8(coalesce(s.name, ''), 'ST') = 0
+        group by symbol
+        having bars >= 30
+        order by avg_amount desc, avg_volume desc, d.symbol asc
+        """,
+        {"start": request.start, "end": request.end},
+    )
+    return [format_symbol(str(symbol)) for symbol, *_rest in rows]
 
 
 def _empty_bars_message(request: TailBacktestRequest) -> str:
@@ -466,7 +539,7 @@ def _experiment_summary(
 ) -> dict[str, Any]:
     dates = sorted(bars.index.get_level_values("date").unique())
     return {
-        "mode": "sample" if request.sample else "dataset",
+        "mode": _experiment_mode(request),
         "dataset_id": request.dataset_id,
         "dataset_path": request.dataset_path,
         "start": request.start.isoformat(),
@@ -496,7 +569,15 @@ def _universe_source(request: TailBacktestRequest) -> str:
         return "sample_fixed"
     if request.symbols:
         return "custom_symbols"
+    if request.source == "clickhouse":
+        return "clickhouse_strategy_tradable"
     return "dataset_all"
+
+
+def _experiment_mode(request: TailBacktestRequest) -> str:
+    if request.sample:
+        return "sample"
+    return request.source
 
 
 def _factor_explanations(

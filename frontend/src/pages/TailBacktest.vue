@@ -54,79 +54,47 @@
             </el-form-item>
           </el-col>
           <el-col :span="6">
-            <el-form-item label="样例数据">
-              <el-switch v-model="form.sample" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="6">
             <el-form-item label="股票池">
               <el-segmented
                 v-model="universeMode"
-                :disabled="form.sample"
                 :options="universeModeOptions"
               />
             </el-form-item>
           </el-col>
           <el-col :span="6">
-            <el-form-item label="Dataset">
-              <el-select
-                v-model="form.dataset_id"
-                :disabled="form.sample"
-                :loading="datasetsLoading"
-                filterable
-                placeholder="选择本地 research dataset"
-                @change="applyDatasetDefaults"
-              >
-                <el-option
-                  v-for="dataset in datasets"
-                  :key="dataset.id"
-                  :label="dataset.name"
-                  :value="dataset.id"
-                >
-                  <div class="dataset-option">
-                    <span>{{ dataset.name }}</span>
-                    <span>{{ dataset.start ?? '-' }} / {{ dataset.end ?? '-' }}</span>
-                  </div>
-                </el-option>
-              </el-select>
+            <el-form-item label="数据源">
+              <el-tag effect="plain">ClickHouse</el-tag>
             </el-form-item>
           </el-col>
         </el-row>
-        <el-row v-if="!form.sample && universeMode === 'custom'" :gutter="12">
+        <el-row v-if="universeMode === 'custom'" :gutter="12">
           <el-col :span="24">
             <el-form-item label="自选股票">
               <el-select
                 v-model="selectedSymbols"
-                :loading="datasetDetailLoading"
                 multiple
                 filterable
+                allow-create
+                default-first-option
                 collapse-tags
                 collapse-tags-tooltip
-                placeholder="从当前数据集选择股票"
-              >
-                <el-option
-                  v-for="symbol in datasetSymbols"
-                  :key="symbol"
-                  :label="symbol"
-                  :value="symbol"
-                />
-              </el-select>
+                placeholder="输入股票代码，例如 000001.SZ 或 600519.SH"
+              />
             </el-form-item>
           </el-col>
         </el-row>
       </el-form>
     </div>
 
-    <div v-if="selectedDataset && !form.sample" class="panel compact-panel">
+    <div class="panel compact-panel">
       <div class="dataset-summary">
         <div>
-          <div class="metric-label">当前数据集</div>
-          <div class="summary-title">{{ selectedDataset.name }}</div>
+          <div class="metric-label">当前数据源</div>
+          <div class="summary-title">ClickHouse daily_kline</div>
         </div>
-        <el-tag effect="plain">{{ selectedDataset.symbol_count }} 个标的</el-tag>
-        <el-tag effect="plain">{{ universeMode === 'custom' ? `${selectedSymbols.length} 个自选` : '使用全部标的' }}</el-tag>
-        <el-tag effect="plain">{{ formatNumber(selectedDataset.row_count) }} 行</el-tag>
-        <el-tag effect="plain">{{ selectedDataset.start ?? '-' }} / {{ selectedDataset.end ?? '-' }}</el-tag>
+        <el-tag effect="plain">{{ universeMode === 'custom' ? `${selectedSymbols.length} 个自选` : '策略可交易池' }}</el-tag>
+        <el-tag effect="plain">分钟验证：minute5_kline / 快照5m聚合</el-tag>
+        <el-tag effect="plain">不再依赖本地 parquet</el-tag>
       </div>
     </div>
 
@@ -163,7 +131,7 @@
         <el-tag type="warning" effect="plain">{{ experiment.execution_assumption }}</el-tag>
       </div>
       <el-descriptions :column="3" border>
-        <el-descriptions-item label="模式">{{ experiment.mode === 'sample' ? '样例数据' : '本地数据集' }}</el-descriptions-item>
+        <el-descriptions-item label="模式">{{ experimentModeLabel(experiment.mode) }}</el-descriptions-item>
         <el-descriptions-item label="日期范围">{{ experiment.actual_start }} / {{ experiment.actual_end }}</el-descriptions-item>
         <el-descriptions-item label="Top N">{{ experiment.top_n }}</el-descriptions-item>
         <el-descriptions-item label="持有交易日">{{ experiment.hold_days }}</el-descriptions-item>
@@ -362,9 +330,9 @@
 
 <script setup lang="ts">
 import * as echarts from 'echarts'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { api, type DatasetDetail, type DatasetSummary, type JobRecord, type JobStatus, type TailBacktestPayload } from '../api/client'
+import { api, type JobRecord, type JobStatus, type TailBacktestPayload } from '../api/client'
 
 interface SeriesPoint {
   date: string
@@ -400,13 +368,13 @@ interface TradeRow {
 }
 
 interface ExperimentSummary {
-  mode: 'sample' | 'dataset'
+  mode: 'sample' | 'dataset' | 'clickhouse'
   actual_start: string
   actual_end: string
   capital: number
   top_n: number
   hold_days: number
-  universe_source: 'sample_fixed' | 'dataset_all' | 'custom_symbols'
+  universe_source: 'sample_fixed' | 'dataset_all' | 'custom_symbols' | 'clickhouse_strategy_tradable'
   requested_symbols: string[]
   min_score: number | null
   min_market_breadth_above_ma20: number | null
@@ -468,14 +436,11 @@ const form = ref<TailBacktestPayload>({
   dataset_id: null,
   dataset_path: '',
   symbols: null,
-  sample: false
+  sample: false,
+  source: 'clickhouse'
 })
 const submitting = ref(false)
 const isPolling = ref(false)
-const datasetsLoading = ref(false)
-const datasetDetailLoading = ref(false)
-const datasets = ref<DatasetSummary[]>([])
-const datasetDetail = ref<DatasetDetail | null>(null)
 const selectedSymbols = ref<string[]>([])
 const universeMode = ref<'all' | 'custom'>('all')
 const universeModeOptions = [
@@ -504,8 +469,6 @@ const tailVerifications = computed(() => (result.value?.tail_verifications ?? []
 const outcomeSummary = computed(() => (result.value?.outcome_summary ?? null) as unknown as OutcomeSummary | null)
 const equityTradeMarkers = computed(() => buildTradeMarkers(equityCurve.value, trades.value))
 const latestSelectionDate = computed(() => latestSelection.value[0]?.date ?? '-')
-const selectedDataset = computed(() => datasets.value.find((dataset) => dataset.id === form.value.dataset_id) ?? null)
-const datasetSymbols = computed(() => datasetDetail.value?.symbols ?? [])
 const metricItems = computed(() => [
   { label: '总收益', value: formatPercentMetric(metrics.value.total_return) },
   { label: '年化收益', value: formatPercentMetric(metrics.value.annualized_return) },
@@ -539,19 +502,13 @@ async function submit() {
   try {
     const payload = {
       ...form.value,
-      dataset_id: form.value.sample ? null : form.value.dataset_id,
-      dataset_path: form.value.sample ? null : form.value.dataset_path,
-      symbols: form.value.sample || universeMode.value === 'all' ? null : selectedSymbols.value
+      source: 'clickhouse' as const,
+      sample: false,
+      dataset_id: null,
+      dataset_path: null,
+      symbols: universeMode.value === 'all' ? null : selectedSymbols.value.map(normalizeSymbolInput).filter(Boolean)
     }
-    if (!payload.sample && !payload.dataset_id) {
-      ElMessage.warning('请先选择数据集')
-      return
-    }
-    if (!payload.sample && selectedDataset.value && !dateRangeWithinDataset()) {
-      ElMessage.warning(`日期范围超出当前数据集：${selectedDataset.value.start ?? '-'} / ${selectedDataset.value.end ?? '-'}`)
-      return
-    }
-    if (!payload.sample && universeMode.value === 'custom' && !selectedSymbols.value.length) {
+    if (universeMode.value === 'custom' && !payload.symbols?.length) {
       ElMessage.warning('请至少选择一只股票')
       return
     }
@@ -563,46 +520,6 @@ async function submit() {
     ElMessage.error(error instanceof Error ? error.message : '提交失败')
   } finally {
     submitting.value = false
-  }
-}
-
-async function loadDatasets() {
-  datasetsLoading.value = true
-  try {
-    datasets.value = (await api.listDatasets()).items
-    if (datasets.value.length && !form.value.dataset_id) {
-      form.value.sample = false
-      form.value.dataset_id = datasets.value[0].id
-      await applyDatasetDefaults()
-    } else if (!datasets.value.length) {
-      form.value.sample = true
-    }
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载数据集失败')
-  } finally {
-    datasetsLoading.value = false
-  }
-}
-
-async function applyDatasetDefaults() {
-  const dataset = selectedDataset.value
-  if (!dataset) return
-  form.value.dataset_path = dataset.path
-  if (dataset.start) form.value.start = dataset.start
-  if (dataset.end) form.value.end = dataset.end
-  selectedSymbols.value = []
-  await loadDatasetDetail(dataset.id)
-}
-
-async function loadDatasetDetail(datasetId: string) {
-  datasetDetailLoading.value = true
-  try {
-    datasetDetail.value = await api.getDataset(datasetId)
-  } catch (error) {
-    datasetDetail.value = null
-    ElMessage.error(error instanceof Error ? error.message : '加载数据集标的失败')
-  } finally {
-    datasetDetailLoading.value = false
   }
 }
 
@@ -727,14 +644,28 @@ function formatMoney(value: unknown) {
 function universeSourceLabel(value: unknown) {
   if (value === 'sample_fixed') return '样例固定标的'
   if (value === 'custom_symbols') return '自定义股票池'
+  if (value === 'clickhouse_strategy_tradable') return 'ClickHouse 策略可交易池'
   if (value === 'dataset_all') return '数据集全部标的'
   return '-'
 }
 
-function dateRangeWithinDataset() {
-  const dataset = selectedDataset.value
-  if (!dataset?.start || !dataset?.end) return true
-  return form.value.start >= dataset.start && form.value.end <= dataset.end && form.value.start <= form.value.end
+function experimentModeLabel(value: unknown) {
+  if (value === 'clickhouse') return 'ClickHouse'
+  if (value === 'dataset') return '历史数据集模式'
+  if (value === 'sample') return '样例数据'
+  return '-'
+}
+
+function normalizeSymbolInput(value: string) {
+  const trimmed = value.trim().toUpperCase()
+  if (!trimmed) return ''
+  if (/^\d{6}\.(SH|SZ|BJ)$/.test(trimmed)) return trimmed
+  if (/^\d{6}$/.test(trimmed)) {
+    if (trimmed.startsWith('6')) return `${trimmed}.SH`
+    if (trimmed.startsWith('8') || trimmed.startsWith('4')) return `${trimmed}.BJ`
+    return `${trimmed}.SZ`
+  }
+  return trimmed
 }
 
 function factorTags(row: SelectionRow) {
@@ -779,23 +710,6 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
-watch(
-  () => form.value.sample,
-  (sample) => {
-    if (!sample && !form.value.dataset_id && datasets.value.length) {
-      form.value.dataset_id = datasets.value[0].id
-      void applyDatasetDefaults()
-    }
-  }
-)
-
-watch(
-  () => form.value.dataset_id,
-  (datasetId) => {
-    if (datasetId && !form.value.sample) void applyDatasetDefaults()
-  }
-)
-
 watch(universeMode, (mode) => {
   if (mode === 'all') selectedSymbols.value = []
 })
@@ -808,5 +722,4 @@ watch(
   { immediate: true }
 )
 
-onMounted(loadDatasets)
 </script>
