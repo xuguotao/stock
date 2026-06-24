@@ -18,6 +18,7 @@ from src.data.fund_tail_market_data import refresh_fund_tail_proxy_quotes
 from src.data.clickhouse_research_dataset import build_clickhouse_research_dataset
 from src.data.fund_tail_repository import ClickHouseFundTailRepository
 from src.data.tail_signal_repository import ClickHouseTailSignalRepository
+from src.ml.tail_dataset_audit import audit_tail_ml_data
 from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
 from src.web.backend.data_sync import DEFAULT_REMOTE_STOCK_DB, sync_stock_database
@@ -165,6 +166,7 @@ def create_app(
     data_ops_maintenance_runner=None,
     clickhouse_dataset_builder=build_clickhouse_research_dataset,
     tail_signal_repository=None,
+    tail_ml_audit_runner=audit_tail_ml_data,
     stock_trend_runner=analyze_stock_trend,
     watchlist_monitor_runner=get_watchlist_report,
     watchlist_config_runner=get_watchlist_config,
@@ -247,6 +249,7 @@ def create_app(
     app.state.quality_snapshot_writer = quality_snapshot_writer
     app.state.clickhouse_dataset_builder = clickhouse_dataset_builder
     app.state.tail_signal_repository = tail_signal_repository or ClickHouseTailSignalRepository()
+    app.state.tail_ml_audit_runner = tail_ml_audit_runner
     app.state.stock_trend_runner = stock_trend_runner
     app.state.watchlist_monitor_runner = watchlist_monitor_runner
     app.state.watchlist_config_runner = watchlist_config_runner
@@ -766,6 +769,10 @@ def create_app(
     @app.get("/api/tail-session/signal-stats")
     def get_tail_signal_stats(start: date | None = None, end: date | None = None) -> dict[str, Any]:
         return app.state.tail_signal_repository.signal_stats(start=start, end=end)
+
+    @app.get("/api/ml/tail/audit")
+    def get_tail_ml_audit() -> dict[str, Any]:
+        return app.state.tail_ml_audit_runner()
 
     @app.post("/api/tail-session/review-outcomes")
     def review_tail_signal_outcomes(payload: TailSignalOutcomeReviewRequest) -> dict[str, Any]:

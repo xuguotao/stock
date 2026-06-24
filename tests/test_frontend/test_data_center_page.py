@@ -205,3 +205,16 @@ def test_data_center_page_uses_combined_reliability_status_endpoint() -> None:
     assert "api.getDataHealthRepairPlan()" not in load_data_body
     assert "api.getDataReliability()" in refresh_body
     assert "api.getDataStatus()" not in refresh_body
+
+
+def test_data_center_page_shows_tail_ml_training_data_audit() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "尾盘模型训练数据" in source
+    assert "tailMlAudit" in source
+    assert "getTailMlAudit" in source
+    assert "minute5_usable_days" in source
+    assert "joinable_label_days" in source
+    assert "TailMlAuditResponse" in client
+    assert "/api/ml/tail/audit" in client

@@ -309,6 +309,72 @@ export interface DataReliabilityReport {
   repair_plan: DataHealthRepairPlan
 }
 
+export interface TailMlAuditResponse {
+  status: string
+  as_of: string
+  summary: {
+    daily_rows: number
+    daily_symbols: number
+    minute5_rows: number
+    minute5_symbols: number
+    minute5_usable_days: number
+    joinable_label_days: number
+    tradable_pool: number
+  }
+  stocks?: Record<string, number>
+  daily: {
+    status: string
+    start?: string | null
+    end?: string | null
+    symbol_count: number
+    row_count: number
+    invalid_ohlc_rows: number
+  }
+  minute5: {
+    status: string
+    start?: string | null
+    end?: string | null
+    symbol_count: number
+    row_count: number
+    usable_days: number
+    minimum_usable_days: number
+  }
+  snapshots: {
+    status: string
+    start?: string | null
+    latest_datetime?: string | null
+    symbol_count: number
+    row_count: number
+    training_role: string
+  }
+  strategy_signals: {
+    status: string
+    start?: string | null
+    end?: string | null
+    row_count: number
+    signal_days: number
+    selected_rows: number
+    symbol_count: number
+    outcome_rows: number
+    training_role: string
+  }
+  labels: {
+    status: string
+    start?: string | null
+    end?: string | null
+    outcome_rows: number
+    outcome_days: number
+    symbol_count: number
+    joinable_days: number
+    minimum_joinable_days: number
+  }
+  tradable_pool: {
+    status: string
+    symbol_count: number
+  }
+  issues: string[]
+}
+
 export interface StockDbSyncPayload {
   remote?: string
   backup?: boolean
@@ -797,6 +863,9 @@ export const api = {
   },
   getDataStatus() {
     return request<DataStatusResponse>('/api/data/status')
+  },
+  getTailMlAudit() {
+    return request<TailMlAuditResponse>('/api/ml/tail/audit')
   },
   getStockTrend(symbol: string, tradeDate?: string, dailyWindow = 90, granularity = '5m') {
     const params = new URLSearchParams({ daily_window: String(dailyWindow) })

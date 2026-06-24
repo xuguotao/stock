@@ -94,6 +94,52 @@
     <div class="panel">
       <div class="section-header no-top-margin">
         <div>
+          <h2 class="page-title">尾盘模型训练数据</h2>
+          <p class="section-subtitle">训练前置审计：日线、5m尾盘样本、次日标签和当前策略信号是否足够支撑模型训练</p>
+        </div>
+        <el-tag :type="qualityTagType(tailMlAudit?.status)" effect="plain">
+          {{ tailMlAudit?.status ?? '-' }}
+        </el-tag>
+      </div>
+      <div class="readiness-grid">
+        <div class="readiness-item">
+          <span class="metric-label">日线样本</span>
+          <strong>{{ formatNumber(tailMlAudit?.summary.daily_rows ?? 0) }}</strong>
+          <small>{{ tailMlAudit?.daily.start ?? '-' }} / {{ tailMlAudit?.daily.end ?? '-' }}，异常 {{ formatNumber(tailMlAudit?.daily.invalid_ohlc_rows ?? 0) }} 行</small>
+        </div>
+        <div class="readiness-item">
+          <span class="metric-label">5m 可用交易日</span>
+          <strong>{{ formatNumber(tailMlAudit?.summary.minute5_usable_days ?? 0) }}</strong>
+          <small>目标 {{ formatNumber(tailMlAudit?.minute5.minimum_usable_days ?? 0) }} 天，覆盖 {{ formatNumber(tailMlAudit?.summary.minute5_symbols ?? 0) }} 标的</small>
+        </div>
+        <div class="readiness-item">
+          <span class="metric-label">可生成标签日</span>
+          <strong>{{ formatNumber(tailMlAudit?.summary.joinable_label_days ?? 0) }}</strong>
+          <small>目标 {{ formatNumber(tailMlAudit?.labels.minimum_joinable_days ?? 0) }} 天，outcome {{ formatNumber(tailMlAudit?.labels.outcome_rows ?? 0) }} 条</small>
+        </div>
+        <div class="readiness-item">
+          <span class="metric-label">策略可交易池</span>
+          <strong>{{ formatNumber(tailMlAudit?.summary.tradable_pool ?? 0) }}</strong>
+          <small>快照角色：{{ tailMlAudit?.snapshots.training_role ?? '-' }}</small>
+        </div>
+      </div>
+      <div class="consumer-strip">
+        <div v-for="row in tailMlAuditRows" :key="row.key" class="consumer-item">
+          <div class="consumer-title">
+            <span>{{ row.title }}</span>
+            <el-tag :type="qualityTagType(row.status)" effect="plain" size="small">{{ row.status }}</el-tag>
+          </div>
+          <div class="consumer-desc">{{ row.detail }}</div>
+        </div>
+      </div>
+      <div v-if="tailMlAudit?.issues.length" class="diagnostic-message muted">
+        模型训练限制：{{ tailMlAudit.issues.join('，') }}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="section-header no-top-margin">
+        <div>
           <h2 class="page-title">数据可靠性总控</h2>
           <p class="section-subtitle">从数据源、自动更新、健康检查和修复机制四个维度审计核心链路</p>
         </div>
@@ -495,7 +541,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataReliabilityReport, type DataStatusResponse, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus } from '../api/client'
+import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataReliabilityReport, type DataStatusResponse, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus, type TailMlAuditResponse } from '../api/client'
 
 const dataStatus = ref<DataStatusResponse | null>(null)
 const loading = ref(false)
@@ -514,6 +560,7 @@ const quoteSnapshotMonitor = ref<QuoteSnapshotMonitorStatus | null>(null)
 const dataOpsScheduler = ref<DataOpsSchedulerStatus | null>(null)
 const repairPlan = ref<DataHealthRepairPlan | null>(null)
 const reliabilityReport = ref<DataReliabilityReport | null>(null)
+const tailMlAudit = ref<TailMlAuditResponse | null>(null)
 const minute5TradeDate = ref(todayLabel())
 let operationalRefreshTimer: number | null = null
 let dataStatusRefreshTimer: number | null = null
@@ -714,6 +761,36 @@ const consumerReadinessRows = computed(() => {
     }
   ]
 })
+const tailMlAuditRows = computed(() => {
+  const audit = tailMlAudit.value
+  if (!audit) return []
+  return [
+    {
+      key: 'daily',
+      title: '日线长周期特征',
+      status: audit.daily.status,
+      detail: `${audit.daily.start ?? '-'} / ${audit.daily.end ?? '-'}，${formatNumber(audit.daily.symbol_count)} 标的`
+    },
+    {
+      key: 'minute5',
+      title: '尾盘5m特征',
+      status: audit.minute5.status,
+      detail: `${formatNumber(audit.minute5.usable_days)} / ${formatNumber(audit.minute5.minimum_usable_days)} 个可用交易日`
+    },
+    {
+      key: 'labels',
+      title: '次日收益标签',
+      status: audit.labels.status,
+      detail: `${formatNumber(audit.labels.joinable_days)} / ${formatNumber(audit.labels.minimum_joinable_days)} 个可拼接标签日`
+    },
+    {
+      key: 'signals',
+      title: '现有策略信号',
+      status: audit.strategy_signals.status,
+      detail: `${formatNumber(audit.strategy_signals.signal_days)} 个信号日，${formatNumber(audit.strategy_signals.outcome_rows)} 条 outcome，仅作 baseline`
+    }
+  ]
+})
 const scheduledQualityRows = computed(() => {
   const quality = scheduledQuality.value
   if (!quality) return []
@@ -863,11 +940,12 @@ const dataOpsSchedulerText = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const [reliabilityResponse, monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse] = await Promise.all([
+    const [reliabilityResponse, monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse, tailMlAuditResponse] = await Promise.all([
       api.getDataReliability(),
       api.getMinute5Monitor(),
       api.getQuoteSnapshotMonitor(),
-      api.getDataOpsScheduler()
+      api.getDataOpsScheduler(),
+      api.getTailMlAudit()
     ])
     reliabilityReport.value = reliabilityResponse
     dataStatus.value = reliabilityResponse.data_status
@@ -875,6 +953,7 @@ async function loadData() {
     minute5Monitor.value = monitorResponse
     quoteSnapshotMonitor.value = quoteSnapshotMonitorResponse
     dataOpsScheduler.value = dataOpsSchedulerResponse
+    tailMlAudit.value = tailMlAuditResponse
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载数据中心失败')
   } finally {

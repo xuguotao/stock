@@ -61,12 +61,12 @@ Conclusion:
 - Modify: `src/web/backend/app.py`
 - Modify: `frontend/src/pages/DataCenter.vue`
 
-- [ ] Add a function `audit_tail_ml_data(client=None, as_of=None)` that returns daily, minute5, snapshot, signal, outcome, and tradable-pool readiness.
-- [ ] Include `status` values: `ready`, `limited`, `blocked`.
-- [ ] Mark ML training as `limited` when 5m coverage is less than 180 trading days.
-- [ ] Add tests with a fake ClickHouse client for current observed shape.
-- [ ] Expose `GET /api/ml/tail/audit`.
-- [ ] Show the audit in 数据中心 under a new “尾盘模型训练数据” section.
+- [x] Add a function `audit_tail_ml_data(client=None, as_of=None)` that returns daily, minute5, snapshot, signal, outcome, and tradable-pool readiness.
+- [x] Include `status` values: `ready`, `limited`, `blocked`.
+- [x] Mark ML training as `limited` when 5m coverage is less than 180 trading days.
+- [x] Add tests with a fake ClickHouse client for current observed shape.
+- [x] Expose `GET /api/ml/tail/audit`.
+- [x] Show the audit in 数据中心 under a new “尾盘模型训练数据” section.
 
 ### Task 2: Historical Sample Builder
 
@@ -195,4 +195,3 @@ Conclusion:
   - evaluation UI
   - live inference
   - promotion gate
-
