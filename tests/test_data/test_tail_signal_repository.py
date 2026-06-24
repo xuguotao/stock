@@ -106,6 +106,14 @@ class FakeClickHouseClient:
         return []
 
 
+class StrictPendingDateFilterClient(FakeClickHouseClient):
+    def execute(self, query, params=None):
+        normalized = " ".join(query.lower().split())
+        if "pending_selected_signal_dates" in normalized and "s.trade_date" in normalized:
+            raise AssertionError("pending selected dates query must not use s.trade_date without alias")
+        return super().execute(query, params)
+
+
 def test_save_tail_selection_result_writes_ranked_pool_rows() -> None:
     client = FakeClickHouseClient()
     repo = ClickHouseTailSignalRepository(client=client)
@@ -314,7 +322,7 @@ def test_signal_stats_returns_overall_and_grouped_metrics() -> None:
 
 
 def test_pending_selected_signal_dates_returns_missing_outcome_dates() -> None:
-    repo = ClickHouseTailSignalRepository(client=FakeClickHouseClient())
+    repo = ClickHouseTailSignalRepository(client=StrictPendingDateFilterClient())
 
     result = repo.pending_selected_signal_dates(start=date(2026, 6, 1), end=date(2026, 6, 30))
 

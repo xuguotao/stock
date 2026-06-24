@@ -153,7 +153,7 @@ class ClickHouseTailSignalRepository:
                     trade_date,
                     countDistinct(symbol) as selected_count
                 from {_deduped_signal_source()}
-                where {_stats_date_filter()} and mode = 'selection' and status = 'selected'
+                where {_stats_date_filter("trade_date")} and mode = 'selection' and status = 'selected'
                 group by trade_date
             ) selected
             left join tail_signal_outcomes o
@@ -552,8 +552,8 @@ def _code(symbol: str) -> str:
     return symbol.split(".")[0].zfill(6)
 
 
-def _stats_date_filter() -> str:
-    return "s.trade_date >= %(start)s and s.trade_date <= %(end)s"
+def _stats_date_filter(column: str = "s.trade_date") -> str:
+    return f"{column} >= %(start)s and {column} <= %(end)s"
 
 
 def _deduped_signal_source() -> str:
