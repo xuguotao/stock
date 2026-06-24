@@ -90,8 +90,13 @@
             </el-form-item>
           </el-col>
           <el-col :span="6">
-            <el-form-item label="运行前补数据">
-              <el-switch v-model="form.auto_sync_minute5" />
+            <el-form-item label="数据刷新模式">
+              <el-select v-model="form.data_refresh_mode">
+                <el-option label="自动快速" value="auto" />
+                <el-option label="快照优先" value="snapshot" />
+                <el-option label="标准5m" value="standard_minute5" />
+                <el-option label="不刷新" value="none" />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="6">
@@ -678,6 +683,16 @@ interface TailLiveResult {
       inserted_rows?: number
       latest_datetime?: string | null
     }
+    data_refresh_mode?: 'auto' | 'snapshot' | 'standard_minute5' | 'none'
+    effective_data_refresh_mode?: 'snapshot' | 'standard_minute5' | 'none'
+    quote_snapshot_sync?: {
+      target_symbols?: number
+      inserted_rows?: number
+      skipped?: number
+      failed?: number
+      latest_snapshot_at?: string | null
+      latest_bucket?: string | null
+    }
   }
   stage_timings?: Record<string, number>
   persistence?: {
@@ -706,6 +721,7 @@ const form = ref<TailLiveSelectionPayload>({
   min_strength: null,
   ignore_session: false,
   auto_sync_minute5: true,
+  data_refresh_mode: 'auto',
   output_dir: 'reports/tail_session'
 })
 
@@ -803,18 +819,41 @@ const scanScopeText = computed(() => {
 const scanLimitDisplayText = computed(() => form.value.limit === 0 ? '全市场非ST' : `最多 ${form.value.limit} 只`)
 const syncSummaryText = computed(() => {
   const sync = diagnostics.value?.minute5_sync
-  if (!sync) return form.value.auto_sync_minute5 ? '等待运行' : '未启用'
+  const snapshot = diagnostics.value?.quote_snapshot_sync
+  if (snapshot) return `快照 ${snapshot.inserted_rows ?? 0} 行 / 最新 ${snapshot.latest_snapshot_at ?? snapshot.latest_bucket ?? '-'}`
+  if (!sync) return refreshModeWaitingText.value
   return `${sync.inserted_rows ?? 0} 行 / 最新 ${sync.latest_datetime ?? '-'}`
 })
 const compactSyncSummaryText = computed(() => {
   const sync = diagnostics.value?.minute5_sync
-  if (!sync) return form.value.auto_sync_minute5 ? '等待' : '未启用'
+  const snapshot = diagnostics.value?.quote_snapshot_sync
+  if (snapshot) return `快照${snapshot.inserted_rows ?? 0}行`
+  if (!sync) return refreshModeCompactText.value
   return `${sync.inserted_rows ?? 0}行 / ${formatCompactDateTime(sync.latest_datetime)}`
 })
 const syncDiagnosticText = computed(() => {
   const sync = diagnostics.value?.minute5_sync
-  if (!sync) return form.value.auto_sync_minute5 ? '运行前自动补齐当日5分钟线' : '本次未启用运行前补数据'
+  const snapshot = diagnostics.value?.quote_snapshot_sync
+  if (snapshot) {
+    return `快照优先：目标 ${snapshot.target_symbols ?? 0}，插入 ${snapshot.inserted_rows ?? 0} 行，跳过 ${snapshot.skipped ?? 0}，失败 ${snapshot.failed ?? 0}，最新 ${snapshot.latest_snapshot_at ?? snapshot.latest_bucket ?? '-'}`
+  }
+  if (!sync) return refreshModeDescription.value
   return `目标 ${sync.target_symbols ?? 0}，跳过 ${sync.skipped ?? 0}，成功 ${sync.success ?? 0}，无数据 ${sync.no_data ?? 0}，失败 ${sync.failed ?? 0}，插入 ${sync.inserted_rows ?? 0} 行，最新 ${sync.latest_datetime ?? '-'}`
+})
+const refreshModeWaitingText = computed(() => {
+  if (form.value.data_refresh_mode === 'none') return '未启用'
+  if (form.value.data_refresh_mode === 'standard_minute5') return '等待标准5m'
+  return '等待快照'
+})
+const refreshModeCompactText = computed(() => {
+  if (form.value.data_refresh_mode === 'none') return '未启用'
+  if (form.value.data_refresh_mode === 'standard_minute5') return '标准5m'
+  return '快照优先'
+})
+const refreshModeDescription = computed(() => {
+  if (form.value.data_refresh_mode === 'none') return '本次不执行运行前数据刷新'
+  if (form.value.data_refresh_mode === 'standard_minute5') return '运行前补齐标准5分钟线，适合盘后复核，速度较慢'
+  return '运行前优先刷新腾讯批量快照和5m聚合，适合尾盘实时选股'
 })
 const dataFreshnessText = computed(() => {
   const freshness = diagnostics.value?.data_freshness
@@ -920,6 +959,7 @@ const dataHealthIssues = computed(() => {
 
 function stageTimingLabel(value: string) {
   if (value === 'minute5_sync') return '补数据'
+  if (value === 'quote_snapshot_sync') return '快照'
   if (value === 'strategy_scan') return '策略'
   if (value === 'resolve_and_coverage') return '股票池'
   if (value === 'quote_and_breadth') return '行情'

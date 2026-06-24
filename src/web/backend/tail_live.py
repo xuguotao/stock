@@ -48,6 +48,7 @@ class TailLiveSelectionRequest(BaseModel):
     as_of_time: time | None = None
     ignore_session: bool = False
     auto_sync_minute5: bool = True
+    data_refresh_mode: Literal["auto", "snapshot", "standard_minute5", "none"] = "auto"
     output_dir: str = "reports/tail_session"
 
 

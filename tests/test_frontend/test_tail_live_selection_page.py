@@ -11,13 +11,17 @@ def test_tail_live_selection_page_shows_run_history() -> None:
     assert "@row-click=\"selectRunHistory\"" in source
 
 
-def test_tail_live_selection_page_defaults_to_full_market_and_auto_sync() -> None:
+def test_tail_live_selection_page_defaults_to_full_market_and_fast_refresh_mode() -> None:
     source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
 
     assert "limit: 0" in source
     assert "universe: 'default'" in source
-    assert "auto_sync_minute5: true" in source
-    assert "运行前补数据" in source
+    assert "data_refresh_mode: 'auto'" in source
+    assert "数据刷新模式" in source
+    assert "快照优先" in source
+    assert "standard_minute5" in source
+    assert "data_refresh_mode?: 'auto' | 'snapshot' | 'standard_minute5' | 'none'" in client
     assert "全市场非ST" in source
     assert "抽样分钟" in source
 
