@@ -194,7 +194,15 @@ def _predict_frame(validation_frame: pd.DataFrame, *, models: dict[str, Any], fe
     risk_probability = models["risk"].predict_proba(x_validation)[:, 1]
     expected_high = models["high"].predict(x_validation)
     high_rank = pd.Series(expected_high).rank(pct=True).to_numpy()
-    scores = hit_probability * 0.45 + high_rank * 0.35 - risk_probability * 0.20
+    scores = [
+        _risk_adjusted_score(
+            hit_probability=float(hit_probability[index]),
+            high_rank=float(high_rank[index]),
+            expected_high_return=float(expected_high[index]),
+            risk_probability=float(risk_probability[index]),
+        )
+        for index in range(len(validation_frame))
+    ]
     rows = []
     for index, (_row_index, row) in enumerate(validation_frame.iterrows()):
         rows.append(
@@ -212,6 +220,21 @@ def _predict_frame(validation_frame: pd.DataFrame, *, models: dict[str, Any], fe
             }
         )
     return rows
+
+
+def _risk_adjusted_score(
+    *,
+    hit_probability: float,
+    high_rank: float,
+    expected_high_return: float,
+    risk_probability: float,
+) -> float:
+    return (
+        hit_probability * 0.35
+        + high_rank * 0.20
+        + min(max(expected_high_return / 0.05, 0.0), 1.0) * 0.15
+        - risk_probability * 0.45
+    )
 
 
 def _top_n_metrics(predictions: pd.DataFrame, *, top_n: int) -> dict[str, Any]:

@@ -16,6 +16,7 @@ def evaluate_promotion_gate(
     audit_status: dict[str, Any],
     min_selected_days: int = 30,
     max_drawdown_deterioration: float = 0.005,
+    max_drawdown_breach_deterioration: float = 0.0,
 ) -> dict[str, Any]:
     """Return promotion eligibility relative to the current rule baseline."""
     reasons: list[str] = []
@@ -29,6 +30,10 @@ def evaluate_promotion_gate(
     baseline_drawdown = _number(baseline_metrics.get("avg_next_low_drawdown"))
     if model_drawdown < baseline_drawdown - max_drawdown_deterioration:
         reasons.append("drawdown_worse_than_baseline")
+    model_breach_rate = _number(model_metrics.get("drawdown_breach_2pct_rate"))
+    baseline_breach_rate = _number(baseline_metrics.get("drawdown_breach_2pct_rate"))
+    if baseline_breach_rate > 0 and model_breach_rate > baseline_breach_rate + max_drawdown_breach_deterioration:
+        reasons.append("drawdown_breach_rate_not_improved")
     if audit_status.get("status") == "blocked":
         reasons.append("data_audit_blocked")
     eligible = not reasons

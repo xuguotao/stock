@@ -654,6 +654,44 @@ def test_tail_live_selection_model_mode_reranks_final_candidates() -> None:
     assert result["diagnostics"]["model_selection_applied"] is True
 
 
+def test_tail_live_selection_model_mode_penalizes_high_risk_candidates() -> None:
+    class FakeScorer:
+        def score(self, rows):
+            scores = {
+                "000001.SZ": {"model_score": 0.70, "hit_probability": 0.90, "expected_high_return": 0.050, "risk_probability": 0.85},
+                "000002.SZ": {"model_score": 0.62, "hit_probability": 0.70, "expected_high_return": 0.025, "risk_probability": 0.10},
+            }
+            return [
+                {"symbol": symbol, "model_version": "tail-test-001", **scores[symbol]}
+                for symbol in ["000001.SZ", "000002.SZ"]
+            ]
+
+    result = {
+        "selected_count": 1,
+        "diagnostics": {"strategy_mode": "model"},
+        "ranked_signals": [
+            {
+                "symbol": "000001.SZ",
+                "status": "selected",
+                "final_candidate_rank": 1,
+                "tradability": {"buyable": True},
+            },
+            {
+                "symbol": "000002.SZ",
+                "status": "filtered",
+                "final_candidate_rank": 2,
+                "tradability": {"buyable": True},
+            },
+        ],
+        "selections": [{"symbol": "000001.SZ"}],
+    }
+
+    _apply_model_scores(result, strategy_mode="model", model_scorer=FakeScorer())
+
+    assert [row["symbol"] for row in result["selections"]] == ["000002.SZ"]
+    assert result["ranked_signals"][0]["symbol"] == "000002.SZ"
+
+
 def test_tail_live_selection_model_mode_degrades_to_rule_without_scorer() -> None:
     result = {"diagnostics": {"strategy_mode": "hybrid"}, "ranked_signals": [{"symbol": "000001.SZ"}]}
 

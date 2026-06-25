@@ -15,6 +15,7 @@ from src.core.constants import format_symbol
 from src.data.aggregator import DataAggregator
 from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
 from src.ml.tail_features import build_daily_model_feature_context
+from src.ml.tail_model import _risk_adjusted_score
 from src.strategy.reports import (
     select_tail_session_signals,
     tail_session_selection_rows,
@@ -453,7 +454,7 @@ def _model_ranked_display_key(
 
 def _model_selection_score(row: dict[str, Any], *, strategy_mode: str) -> float:
     model = row.get("model") or {}
-    model_score = _number_or_zero(model.get("model_score"))
+    model_score = _risk_adjusted_model_score(model)
     if strategy_mode == "model":
         return model_score
     credibility = row.get("credibility") or {}
@@ -461,6 +462,19 @@ def _model_selection_score(row: dict[str, Any], *, strategy_mode: str) -> float:
     if calibrated > 1:
         calibrated = calibrated / 100
     return model_score * 0.55 + calibrated * 0.45
+
+
+def _risk_adjusted_model_score(model: dict[str, Any]) -> float:
+    hit_probability = _number_or_zero(model.get("hit_probability"))
+    expected_high = _number_or_zero(model.get("expected_high_return"))
+    risk_probability = _number_or_zero(model.get("risk_probability"))
+    high_rank_proxy = _number_or_zero(model.get("model_score"))
+    return _risk_adjusted_score(
+        hit_probability=hit_probability,
+        high_rank=high_rank_proxy,
+        expected_high_return=expected_high,
+        risk_probability=risk_probability,
+    )
 
 
 def _number_or_zero(value: Any) -> float:

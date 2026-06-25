@@ -6,7 +6,7 @@ import json
 
 import pandas as pd
 
-from src.ml.tail_model import DEFAULT_FEATURE_COLUMNS, train_tail_model_artifact, train_tail_model_walk_forward
+from src.ml.tail_model import DEFAULT_FEATURE_COLUMNS, _risk_adjusted_score, train_tail_model_artifact, train_tail_model_walk_forward
 
 
 def test_train_tail_model_walk_forward_scores_validation_rows_chronologically() -> None:
@@ -43,6 +43,23 @@ def test_train_tail_model_walk_forward_blocks_when_not_enough_history() -> None:
 
     assert result["status"] == "blocked"
     assert result["reason"] == "not_enough_history"
+
+
+def test_tail_model_risk_adjusted_score_penalizes_drawdown_probability() -> None:
+    high_risk = _risk_adjusted_score(
+        hit_probability=0.90,
+        high_rank=1.0,
+        expected_high_return=0.05,
+        risk_probability=0.85,
+    )
+    lower_risk = _risk_adjusted_score(
+        hit_probability=0.70,
+        high_rank=0.7,
+        expected_high_return=0.025,
+        risk_probability=0.10,
+    )
+
+    assert lower_risk > high_risk
 
 
 def test_train_tail_model_artifact_persists_manifest_and_model(tmp_path) -> None:
