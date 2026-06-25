@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from src.core.constants import is_st
 from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
 
@@ -95,16 +96,10 @@ def audit_tail_ml_data(*, client: Any | None = None, as_of: date | None = None) 
 
 
 def _stock_summary(client: Any) -> dict[str, Any]:
-    row = _first_row(
-        client,
-        """
-        select count() as stock_count,
-               countIf(positionUTF8(upper(name), 'ST') > 0) as st_count,
-               countIf(positionUTF8(upper(name), 'ST') = 0) as non_st_count
-        from stocks
-        """,
-    )
-    return {"stock_count": _int(row, 0), "st_count": _int(row, 1), "non_st_count": _int(row, 2)}
+    rows = client.execute("select symbol, name from stocks")
+    stock_count = len(rows)
+    st_count = sum(1 for row in rows if is_st(str(_value(tuple(row), 1) or "")))
+    return {"stock_count": stock_count, "st_count": st_count, "non_st_count": stock_count - st_count}
 
 
 def _daily_summary(client: Any) -> dict[str, Any]:

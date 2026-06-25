@@ -12,6 +12,8 @@ class FakeTailMlAuditClient:
     def execute(self, query, params=None):
         self.queries.append(query)
         normalized = " ".join(query.lower().split())
+        if "select symbol, name from stocks" in normalized:
+            return [("000001", "平安银行"), ("000002", "*ST测试"), ("000003", "best科技")]
         if "label_history_span" in normalized:
             return [(109,)]
         if "joinable_label_days" in normalized:
@@ -65,6 +67,17 @@ def test_audit_tail_ml_data_marks_current_intraday_history_limited() -> None:
     assert "minute5_history_limited_108_days" in result["issues"]
     assert "joinable_label_days_limited_89" in result["issues"]
     assert "tail_signal_outcomes_too_sparse_33_rows" in result["issues"]
+
+
+def test_audit_tail_ml_data_uses_python_st_classifier_for_stock_summary() -> None:
+    client = FakeTailMlAuditClient()
+
+    result = audit_tail_ml_data(client=client, as_of=date(2026, 6, 24))
+
+    assert result["stocks"] == {"stock_count": 3, "st_count": 1, "non_st_count": 2}
+    stock_queries = [query for query in client.queries if "from stocks" in query.lower()]
+    assert any("select symbol, name" in " ".join(query.lower().split()) for query in stock_queries)
+    assert all("positionutf8" not in " ".join(query.lower().split()) for query in stock_queries)
 
 
 def test_audit_tail_ml_data_marks_short_history_as_pending_not_quality_limited() -> None:

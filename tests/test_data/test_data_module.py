@@ -58,6 +58,15 @@ class TestStockInfo:
         assert info.list_date is None
         assert info.is_st is False
 
+    def test_is_st_only_matches_special_treatment_prefix(self) -> None:
+        from src.core.constants import is_st
+
+        assert is_st("*ST国华") is True
+        assert is_st("ST测试") is True
+        assert is_st("SST样本") is True
+        assert is_st("best科技") is False
+        assert is_st("Stable医疗") is False
+
 
 class TestTradeRecord:
     def test_net_amount_buy(self) -> None:

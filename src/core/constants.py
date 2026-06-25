@@ -67,9 +67,15 @@ def format_symbol(code: str) -> str:
 
 # ── ST Stock Identification ───────────────────────────────────
 
-ST_MARKERS = ("ST", "*ST", "SST", "S*ST")
+ST_PREFIXES = ("*ST", "ST", "SST", "S*ST")
 
 
 def is_st(name: str) -> bool:
     """Check if a stock name indicates ST (Special Treatment)."""
-    return any(marker in name.upper() for marker in ST_MARKERS)
+    normalized = name.strip().upper()
+    for prefix in ST_PREFIXES:
+        if not normalized.startswith(prefix):
+            continue
+        suffix = normalized[len(prefix):]
+        return not suffix[:1].isalpha() or not suffix[:1].isascii()
+    return False
