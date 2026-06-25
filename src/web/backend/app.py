@@ -53,7 +53,7 @@ from src.web.backend.fund_tail import (
     run_local_fund_tail_opportunities,
     upsert_fund_watchlist_item,
 )
-from src.web.backend.jobs import JobStore
+from src.web.backend.jobs import JobRecord, JobStore
 from src.web.backend.minute5_monitor import Minute5MonitorConfig, Minute5UpdateMonitor
 from src.web.backend.quote_snapshot_monitor import QuoteSnapshotMonitor, QuoteSnapshotMonitorConfig
 from src.web.backend.stock_trend import analyze_stock_trend
@@ -307,7 +307,7 @@ def create_app(
 
     @app.get("/api/jobs")
     def list_jobs(limit: int = 50) -> dict[str, Any]:
-        return {"items": [job.to_dict() for job in store.list_jobs(limit=limit)]}
+        return {"items": [_job_list_item(job) for job in store.list_jobs(limit=limit)]}
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, Any]:
@@ -1487,6 +1487,46 @@ def _parse_optional_date(value: Any) -> date | None:
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value))
+
+
+def _job_list_item(job: JobRecord) -> dict[str, Any]:
+    item = job.to_dict()
+    result = item.get("result")
+    if isinstance(result, dict):
+        item["result"] = _job_result_summary(result)
+    return item
+
+
+def _job_result_summary(result: dict[str, Any]) -> dict[str, Any]:
+    summary_keys = (
+        "mode",
+        "trade_date",
+        "scanned_count",
+        "candidate_count",
+        "confirmed_count",
+        "selected_count",
+        "preview_count",
+        "empty_reason",
+        "dataset_id",
+    )
+    summary = {key: result[key] for key in summary_keys if key in result}
+    ranked = result.get("ranked_signals")
+    selections = result.get("selections")
+    if isinstance(ranked, list):
+        summary["ranked_count"] = len(ranked)
+    if isinstance(selections, list):
+        summary.setdefault("selected_count", len(selections))
+    diagnostics = result.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        summary["diagnostics"] = {
+            key: diagnostics.get(key)
+            for key in ("empty_reason", "latest_intraday_time", "scan_as_of_time")
+            if key in diagnostics
+        }
+    persistence = result.get("persistence")
+    if isinstance(persistence, dict):
+        summary["persistence"] = persistence
+    return summary
 
 
 def _progress(percent: int, stage: str, message: str) -> dict[str, Any]:

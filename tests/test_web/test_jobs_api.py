@@ -33,6 +33,35 @@ def test_jobs_api_returns_one_job(tmp_path) -> None:
     assert response.json()["id"] == created["id"]
 
 
+def test_jobs_api_lists_result_summaries_without_heavy_signal_rows(tmp_path) -> None:
+    db_path = tmp_path / "jobs.sqlite3"
+    app = create_app(db_path=db_path)
+    client = TestClient(app)
+    created = client.post("/api/jobs", json={"kind": "tail_session_live_selection", "params": {}}).json()
+    store = JobStore(db_path)
+    store.update_job(
+        created["id"],
+        status="success",
+        result={
+            "mode": "selection",
+            "trade_date": "2026-06-25",
+            "scanned_count": 4977,
+            "selected_count": 1,
+            "ranked_signals": [{"symbol": "000001.SZ"}, {"symbol": "600519.SH"}],
+            "selections": [{"symbol": "000001.SZ"}],
+            "diagnostics": {"empty_reason": None, "latest_intraday_time": "15:00:00"},
+        },
+    )
+
+    listed = client.get("/api/jobs").json()["items"][0]
+    detail = client.get(f"/api/jobs/{created['id']}").json()
+
+    assert listed["result"]["ranked_count"] == 2
+    assert listed["result"]["selected_count"] == 1
+    assert "ranked_signals" not in listed["result"]
+    assert len(detail["result"]["ranked_signals"]) == 2
+
+
 def test_job_store_marks_existing_running_jobs_interrupted_on_startup(tmp_path) -> None:
     db_path = tmp_path / "jobs.sqlite3"
     store = JobStore(db_path)

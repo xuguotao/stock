@@ -153,8 +153,8 @@ async function loadJobs() {
   jobs.value = (await api.listJobs(100)).items
 }
 
-function openJob(row: JobRecord) {
-  selectedJob.value = row
+async function openJob(row: JobRecord) {
+  selectedJob.value = await api.getJob(row.id)
   drawerVisible.value = true
 }
 

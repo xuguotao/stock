@@ -238,9 +238,9 @@
       <div class="panel">
         <div class="page-header panel-title-row">
           <h2 class="page-title">{{ strategyPanelTitle }}</h2>
-          <el-tag effect="plain">{{ strategyRows.length }}</el-tag>
+          <el-tag effect="plain">{{ renderedCountText(displayedStrategyRows.length, strategyRows.length) }}</el-tag>
         </div>
-        <el-table v-if="resultMode === 'precheck'" :data="precheckRows" height="420" :empty-text="strategyEmptyText">
+        <el-table v-if="resultMode === 'precheck'" :data="displayedPrecheckRows" height="420" :empty-text="strategyEmptyText">
           <el-table-column prop="rank" label="排名" width="72" />
           <el-table-column label="股票" min-width="120">
             <template #default="{ row }">
@@ -262,7 +262,7 @@
             <template #default="{ row }">{{ row.explanation }}</template>
           </el-table-column>
         </el-table>
-        <el-table v-else :data="rankedSignals" height="420" :empty-text="strategyEmptyText">
+        <el-table v-else :data="displayedRankedSignals" height="420" :empty-text="strategyEmptyText">
           <el-table-column prop="rank" label="排名" width="72" />
           <el-table-column prop="raw_rank" label="原始排名" width="92" />
           <el-table-column prop="final_candidate_rank" label="候选排名" width="92">
@@ -335,6 +335,10 @@
             <template #default="{ row }">{{ filterReasonText(row.filter_reason) }}</template>
           </el-table-column>
         </el-table>
+        <div v-if="strategyRows.length > displayedStrategyRows.length" class="table-footer-actions">
+          <span>仅展示前 {{ displayedStrategyRows.length }} 条，共 {{ strategyRows.length }} 条</span>
+          <el-button size="small" @click="showMoreStrategyRows">显示更多</el-button>
+        </div>
       </div>
 
       <div class="panel">
@@ -432,9 +436,9 @@
       <div class="panel">
         <div class="page-header panel-title-row">
           <h2 class="page-title">候选观察池</h2>
-          <el-tag effect="plain">{{ watchlistSignals.length }}</el-tag>
+          <el-tag effect="plain">{{ renderedCountText(displayedWatchlistSignals.length, watchlistSignals.length) }}</el-tag>
         </div>
-        <el-table :data="watchlistSignals" height="300" empty-text="暂无候选观察信号">
+        <el-table :data="displayedWatchlistSignals" height="300" empty-text="暂无候选观察信号">
           <el-table-column label="股票" min-width="120">
             <template #default="{ row }">
               <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
@@ -454,14 +458,18 @@
           </el-table-column>
           <el-table-column prop="v2_explanation" label="说明" min-width="260" show-overflow-tooltip />
         </el-table>
+        <div v-if="watchlistSignals.length > displayedWatchlistSignals.length" class="table-footer-actions">
+          <span>仅展示前 {{ displayedWatchlistSignals.length }} 条，共 {{ watchlistSignals.length }} 条</span>
+          <el-button size="small" @click="showMoreWatchlistRows">显示更多</el-button>
+        </div>
       </div>
 
       <div class="panel">
         <div class="page-header panel-title-row">
           <h2 class="page-title">弱信号池</h2>
-          <el-tag effect="plain">{{ weakSignals.length }}</el-tag>
+          <el-tag effect="plain">{{ renderedCountText(displayedWeakSignals.length, weakSignals.length) }}</el-tag>
         </div>
-        <el-table :data="weakSignals" height="300" empty-text="暂无弱信号">
+        <el-table :data="displayedWeakSignals" height="300" empty-text="暂无弱信号">
           <el-table-column label="股票" min-width="120">
             <template #default="{ row }">
               <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
@@ -480,6 +488,10 @@
             <template #default="{ row }">{{ row.v2_risks?.join('；') || '-' }}</template>
           </el-table-column>
         </el-table>
+        <div v-if="weakSignals.length > displayedWeakSignals.length" class="table-footer-actions">
+          <span>仅展示前 {{ displayedWeakSignals.length }} 条，共 {{ weakSignals.length }} 条</span>
+          <el-button size="small" @click="showMoreWeakRows">显示更多</el-button>
+        </div>
       </div>
 
       <div class="panel">
@@ -708,6 +720,7 @@ const props = defineProps<{
 }>()
 
 const today = new Date().toISOString().slice(0, 10)
+const RESULT_TABLE_RENDER_BATCH_SIZE = 120
 const form = ref<TailLiveSelectionPayload>({
   trade_date: today,
   symbols: null,
@@ -734,6 +747,9 @@ const job = ref<JobRecord | null>(null)
 const runHistory = ref<JobRecord[]>([])
 const dataHealth = ref<DataStatusResponse | null>(null)
 const dataHealthLoadedAt = ref('')
+const strategyRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
+const watchlistRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
+const weakRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
 const result = computed(() => (job.value?.result ?? null) as unknown as TailLiveResult | null)
 const resultMode = computed(() => result.value?.mode ?? 'selection')
 const resultModeText = computed(() => {
@@ -756,6 +772,11 @@ const weakSignals = computed(() => result.value?.weak_signals ?? [])
 const signalLayers = computed(() => result.value?.signal_layers ?? { strong: 0, watchlist: 0, weak: 0 })
 const precheckRows = computed(() => result.value?.precheck_rows ?? [])
 const strategyRows = computed(() => resultMode.value === 'precheck' ? precheckRows.value : rankedSignals.value)
+const displayedPrecheckRows = computed(() => precheckRows.value.slice(0, strategyRenderLimit.value))
+const displayedRankedSignals = computed(() => rankedSignals.value.slice(0, strategyRenderLimit.value))
+const displayedStrategyRows = computed(() => resultMode.value === 'precheck' ? displayedPrecheckRows.value : displayedRankedSignals.value)
+const displayedWatchlistSignals = computed(() => watchlistSignals.value.slice(0, watchlistRenderLimit.value))
+const displayedWeakSignals = computed(() => weakSignals.value.slice(0, weakRenderLimit.value))
 const strategyRules = computed(() => result.value?.strategy_rules ?? null)
 const diagnostics = computed(() => result.value?.diagnostics ?? null)
 const emptyReasonText = computed(() => {
@@ -1100,6 +1121,28 @@ function runHistorySummary(row: JobRecord) {
   return `${scanned} / ${selected}`
 }
 
+function renderedCountText(rendered: number, total: number) {
+  return rendered >= total ? String(total) : `${rendered}/${total}`
+}
+
+function showMoreStrategyRows() {
+  strategyRenderLimit.value += RESULT_TABLE_RENDER_BATCH_SIZE
+}
+
+function showMoreWatchlistRows() {
+  watchlistRenderLimit.value += RESULT_TABLE_RENDER_BATCH_SIZE
+}
+
+function showMoreWeakRows() {
+  weakRenderLimit.value += RESULT_TABLE_RENDER_BATCH_SIZE
+}
+
+function resetResultTableLimits() {
+  strategyRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
+  watchlistRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
+  weakRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
+}
+
 function filterReasonText(value: unknown) {
   if (value === 'below_candidate_threshold') return '未达候选阈值'
   if (value === 'below_min_strength') return '低于最小强度'
@@ -1181,6 +1224,11 @@ watch(
     if (jobId) void loadJob(jobId)
   },
   { immediate: true }
+)
+
+watch(
+  () => activeJobId.value,
+  () => resetResultTableLimits()
 )
 
 onMounted(() => {

@@ -134,3 +134,17 @@ def test_tail_live_selection_result_summary_uses_compact_status_layout() -> None
     assert "compactDataFreshnessText" in source
     assert "compactQuoteStatusText" in source
     assert "compactSyncSummaryText" in source
+
+
+def test_tail_live_selection_limits_large_result_tables() -> None:
+    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    styles = Path("frontend/src/styles.css").read_text(encoding="utf-8")
+
+    assert "RESULT_TABLE_RENDER_BATCH_SIZE" in source
+    assert ":data=\"displayedRankedSignals\"" in source
+    assert ":data=\"displayedWatchlistSignals\"" in source
+    assert ":data=\"displayedWeakSignals\"" in source
+    assert "slice(0, strategyRenderLimit.value)" in source
+    assert "showMoreStrategyRows" in source
+    assert "仅展示前" in source
+    assert ".table-footer-actions" in styles
