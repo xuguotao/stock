@@ -11,8 +11,10 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from config.settings import reset_settings
+from src.core.constants import format_symbol
 from src.data.aggregator import DataAggregator
 from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
+from src.ml.tail_features import build_daily_model_feature_context
 from src.strategy.reports import (
     select_tail_session_signals,
     tail_session_selection_rows,
@@ -143,6 +145,11 @@ def run_tail_live_selection(
         top_n=request.top_n,
         min_strength=request.min_strength,
     )
+    model_feature_context = (
+        _live_model_feature_context(aggregator, symbols=symbols, trade_date=request.trade_date)
+        if model_scorer is not None and request.strategy_mode != "rule"
+        else {}
+    )
     timings["scan_intraday"] = _elapsed(stage_started)
     return _write_live_selection_result(
         request=request,
@@ -162,6 +169,7 @@ def run_tail_live_selection(
         stage_timings=timings,
         progress=progress,
         model_scorer=model_scorer,
+        model_feature_context=model_feature_context,
     )
 
 
@@ -184,6 +192,7 @@ def _write_live_selection_result(
     stage_timings: dict[str, float] | None = None,
     progress: ProgressCallback | None,
     model_scorer: Any | None = None,
+    model_feature_context: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     _report_progress(progress, 80, "writing_outputs", "写入选股结果文件")
     stage_started = perf_counter()
@@ -276,7 +285,12 @@ def _write_live_selection_result(
         "strategy_rules": _strategy_rules(request),
         "stage_timings": timings,
     }
-    _apply_model_scores(result, strategy_mode=request.strategy_mode, model_scorer=model_scorer)
+    _apply_model_scores(
+        result,
+        strategy_mode=request.strategy_mode,
+        model_scorer=model_scorer,
+        model_feature_context=model_feature_context,
+    )
     return result
 
 
@@ -294,6 +308,7 @@ def _apply_model_scores(
     *,
     strategy_mode: str,
     model_scorer: Any | None,
+    model_feature_context: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     diagnostics = result.setdefault("diagnostics", {})
     diagnostics["strategy_mode"] = strategy_mode
@@ -324,7 +339,10 @@ def _apply_model_scores(
         diagnostics["model_status"] = "no_scoreable_rows"
         return
 
-    feature_rows = [_model_feature_row(rows[0]) for rows in rows_by_symbol.values()]
+    feature_rows = [
+        _model_feature_row(rows[0], model_feature_context=model_feature_context)
+        for rows in rows_by_symbol.values()
+    ]
     scores = model_scorer.score(pd.DataFrame(feature_rows))
     scored_by_symbol = {
         str(row.get("symbol")): row
@@ -395,8 +413,15 @@ def _apply_model_selection(result: dict[str, Any], *, strategy_mode: str) -> Non
     diagnostics["model_selection_mode"] = strategy_mode
 
 
-def _model_feature_row(row: dict[str, Any]) -> dict[str, Any]:
+def _model_feature_row(
+    row: dict[str, Any],
+    *,
+    model_feature_context: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     feature_row = dict(row)
+    symbol = str(row.get("symbol") or "")
+    if model_feature_context and symbol in model_feature_context:
+        feature_row.update(model_feature_context[symbol])
     aliases = {
         "tail_return_from_1430": "tail_return",
         "tail_high_return_from_1430": "tail_high_return",
@@ -569,6 +594,45 @@ def _clickhouse_client_from_aggregator(aggregator: Any) -> Any | None:
             continue
         return client_getter()
     return None
+
+
+def _code(symbol: str) -> str:
+    return str(symbol).split(".", 1)[0].zfill(6)
+
+
+def _live_model_feature_context(
+    aggregator: Any,
+    *,
+    symbols: list[str],
+    trade_date: date,
+) -> dict[str, dict[str, Any]]:
+    client = _clickhouse_client_from_aggregator(aggregator)
+    if client is None or not symbols:
+        return {}
+    codes = tuple(_code(symbol) for symbol in symbols)
+    rows = client.execute(
+        """
+        select symbol, date, open, high, low, close, volume, amount
+        from daily_kline
+        where symbol in %(symbols)s
+            and date >= %(start)s and date <= %(end)s
+            and open > 0 and high > 0 and low > 0 and close > 0 and volume > 0
+        order by symbol, date
+        """,
+        {
+            "symbols": codes,
+            "start": trade_date - timedelta(days=90),
+            "end": trade_date,
+        },
+    )
+    if not rows:
+        return {}
+    frame = pd.DataFrame(
+        rows,
+        columns=["symbol", "date", "open", "high", "low", "close", "volume", "amount"],
+    )
+    frame["symbol"] = frame["symbol"].astype(str).map(format_symbol)
+    return build_daily_model_feature_context(frame, trade_date=trade_date)
 
 
 def _tradability_by_symbol(quotes: Any | None) -> dict[str, dict[str, Any]]:

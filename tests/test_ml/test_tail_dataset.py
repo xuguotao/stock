@@ -8,7 +8,7 @@ import pytest
 from src.ml.tail_dataset import build_tail_ml_samples
 from src.ml.tail_dataset import build_tail_ml_samples_from_clickhouse
 from src.ml.tail_dataset import write_tail_ml_samples_cache
-from src.ml.tail_features import build_tail_feature_frame
+from src.ml.tail_features import build_daily_model_feature_context, build_tail_feature_frame
 from src.ml.tail_labels import build_tail_label_frame
 
 
@@ -156,6 +156,19 @@ def test_build_tail_feature_frame_precomputes_daily_context(monkeypatch) -> None
 
     assert len(features) == 4
     assert calls <= 2
+
+
+def test_build_daily_model_feature_context_returns_live_inference_features() -> None:
+    daily = _daily_fixture()
+
+    context = build_daily_model_feature_context(daily, trade_date=date(2026, 2, 9))
+
+    assert set(context) == {"000001.SZ"}
+    row = context["000001.SZ"]
+    assert row["daily_ret_5"] == pytest.approx(12.6 / 12.1 - 1)
+    assert row["market_ret_5"] == pytest.approx(row["daily_ret_5"])
+    assert row["market_breadth_20"] == pytest.approx(1.0)
+    assert row["relative_ret_5"] == pytest.approx(0.0)
 
 
 def test_build_tail_label_frame_uses_next_session_returns_from_entry_price() -> None:

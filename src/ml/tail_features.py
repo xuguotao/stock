@@ -75,6 +75,32 @@ def build_tail_feature_frame(
     return pd.DataFrame(rows).sort_values(["trade_date", "symbol", "decision_time"]).reset_index(drop=True)
 
 
+def build_daily_model_feature_context(
+    daily_bars: pd.DataFrame,
+    *,
+    trade_date: object,
+) -> dict[str, dict[str, float]]:
+    """Build daily and market-context model features for live inference rows."""
+    if daily_bars.empty:
+        return {}
+    daily = _prepare_daily(daily_bars)
+    daily_features = _daily_feature_table(daily)
+    if daily_features.empty:
+        return {}
+    market = _market_context_by_date(daily_features).get(trade_date, _empty_market_context())
+    rows = daily_features[daily_features["trade_date"] == trade_date]
+    result: dict[str, dict[str, float]] = {}
+    for row in rows.itertuples(index=False):
+        values = row._asdict()
+        symbol = str(values.pop("symbol"))
+        values.pop("trade_date", None)
+        values.update(market)
+        values["relative_ret_5"] = float(values["daily_ret_5"]) - market["market_ret_5"]
+        values["relative_ret_20"] = float(values["daily_ret_20"]) - market["market_ret_20"]
+        result[symbol] = {key: float(value) for key, value in values.items()}
+    return result
+
+
 def _prepare_daily(daily_bars: pd.DataFrame) -> pd.DataFrame:
     daily = daily_bars.copy()
     daily["symbol"] = daily["symbol"].astype(str)

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from src.strategy.scanner import TailSessionSignal
 import src.web.backend.app as app_module
 from src.web.backend.app import create_app
-from src.web.backend.tail_live import TailLiveSelectionRequest, _apply_model_scores, _final_trade_candidates, _ranked_signal_rows, run_tail_live_selection
+from src.web.backend.tail_live import TailLiveSelectionRequest, _apply_model_scores, _final_trade_candidates, _live_model_feature_context, _ranked_signal_rows, run_tail_live_selection
 
 
 def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
@@ -452,6 +452,159 @@ def test_tail_live_selection_model_scoring_enriches_result_rows() -> None:
             {"feature": "tail_volume_ratio", "value": 2.1},
         ],
     }
+
+
+def test_tail_live_selection_model_scoring_uses_daily_feature_context() -> None:
+    class FakeScorer:
+        def score(self, rows):
+            assert rows.iloc[0]["daily_ret_5"] == 0.034
+            assert rows.iloc[0]["market_breadth_20"] == 0.62
+            assert rows.iloc[0]["relative_ret_5"] == 0.014
+            return [
+                {
+                    "symbol": "000001.SZ",
+                    "model_version": "tail-test-001",
+                    "model_score": 0.81,
+                    "hit_probability": 0.74,
+                    "expected_high_return": 0.031,
+                    "risk_probability": 0.16,
+                }
+            ]
+
+    result = {
+        "diagnostics": {"strategy_mode": "model"},
+        "ranked_signals": [{"symbol": "000001.SZ", "tail_return": 0.01, "volume_ratio": 2.1}],
+        "selections": [],
+    }
+
+    _apply_model_scores(
+        result,
+        strategy_mode="model",
+        model_scorer=FakeScorer(),
+        model_feature_context={
+            "000001.SZ": {
+                "daily_ret_5": 0.034,
+                "market_breadth_20": 0.62,
+                "relative_ret_5": 0.014,
+            }
+        },
+    )
+
+    assert result["ranked_signals"][0]["model"]["model_score"] == 0.81
+
+
+def test_live_model_feature_context_loads_recent_daily_bars_in_batch() -> None:
+    class FakeClickHouseClient:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, query, params=None):
+            self.calls.append((query, params))
+            return [
+                (row["symbol"].split(".")[0], row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["amount"])
+                for row in _daily_rows_for_live_context()
+            ]
+
+    class FakeClickHouseSource:
+        name = "clickhouse"
+
+        def __init__(self, client) -> None:
+            self.client = client
+
+        def _client_instance(self):
+            return self.client
+
+    client = FakeClickHouseClient()
+    aggregator = type("FakeAggregator", (), {"sources": [FakeClickHouseSource(client)]})()
+
+    context = _live_model_feature_context(
+        aggregator,
+        symbols=["000001.SZ"],
+        trade_date=pd.Timestamp("2026-02-09").date(),
+    )
+
+    assert context["000001.SZ"]["daily_ret_5"] > 0
+    assert context["000001.SZ"]["market_breadth_20"] == 1.0
+    assert len(client.calls) == 1
+    assert client.calls[0][1]["symbols"] == ("000001",)
+
+
+def test_tail_live_selection_model_mode_passes_live_daily_context(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeClickHouseClient:
+        def execute(self, query, params=None):
+            normalized = " ".join(query.lower().split())
+            if "from daily_kline" in normalized:
+                return [
+                    (row["symbol"].split(".")[0], row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["amount"])
+                    for row in _daily_rows_for_live_context()
+                ]
+            return []
+
+    class FakeClickHouseSource:
+        name = "clickhouse"
+
+        def _client_instance(self):
+            return FakeClickHouseClient()
+
+    class FakeAggregator:
+        sources = [FakeClickHouseSource()]
+
+        def get_csi300_symbols(self):
+            return ["000001.SZ"]
+
+        def get_realtime_quotes(self, symbols):
+            return pd.DataFrame([{"symbol": "000001.SZ", "price": 12.9, "limit_up": 14.0}])
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            return pd.DataFrame(
+                [
+                    {"time": pd.Timestamp("14:00").time(), "open": 12.5, "high": 12.5, "low": 12.5, "close": 12.5, "volume": 1000},
+                    {"time": pd.Timestamp("14:30").time(), "open": 12.6, "high": 12.7, "low": 12.5, "close": 12.6, "volume": 3000},
+                    {"time": pd.Timestamp("14:35").time(), "open": 12.6, "high": 12.9, "low": 12.6, "close": 12.8, "volume": 5000},
+                    {"time": pd.Timestamp("14:40").time(), "open": 12.8, "high": 13.0, "low": 12.8, "close": 12.95, "volume": 5000},
+                    {"time": pd.Timestamp("14:45").time(), "open": 12.95, "high": 13.0, "low": 12.9, "close": 12.98, "volume": 5000},
+                    {"time": pd.Timestamp("14:50").time(), "open": 12.98, "high": 13.1, "low": 12.95, "close": 13.05, "volume": 5000},
+                ]
+            )
+
+    class FakeScorer:
+        def score(self, rows):
+            assert rows.iloc[0]["daily_ret_5"] > 0
+            assert rows.iloc[0]["market_breadth_20"] == 1.0
+            return [
+                {
+                    "symbol": "000001.SZ",
+                    "model_version": "tail-test-001",
+                    "model_score": 0.9,
+                    "hit_probability": 0.8,
+                    "expected_high_return": 0.03,
+                    "risk_probability": 0.1,
+                }
+            ]
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-02-09",
+            universe="default",
+            limit=1,
+            strategy_mode="model",
+            output_dir=str(tmp_path),
+        ),
+        model_scorer=FakeScorer(),
+    )
+
+    assert result["diagnostics"]["model_status"] == "scored"
+    assert result["ranked_signals"][0]["model"]["model_score"] == 0.9
 
 
 def test_tail_live_selection_model_mode_reranks_final_candidates() -> None:
@@ -1540,3 +1693,22 @@ def test_tail_live_selection_reports_realtime_quote_failure(monkeypatch, tmp_pat
     assert result["diagnostics"]["quote_status"]["status"] == "failed"
     assert "quote source down" in result["diagnostics"]["quote_status"]["error"]
     assert result["ranked_signals"][0]["tradability"]["execution_flag"] == "unknown"
+
+
+def _daily_rows_for_live_context() -> list[dict[str, Any]]:
+    rows = []
+    for index, current_date in enumerate(pd.bdate_range("2026-01-01", periods=28)):
+        close = 10.0 + index * 0.1
+        rows.append(
+            {
+                "symbol": "000001.SZ",
+                "date": current_date.date(),
+                "open": close - 0.05,
+                "high": close + 0.2,
+                "low": close - 0.2,
+                "close": close,
+                "volume": 1_000_000 + index * 10_000,
+                "amount": close * (1_000_000 + index * 10_000),
+            }
+        )
+    return rows
