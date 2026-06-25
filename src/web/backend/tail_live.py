@@ -348,6 +348,86 @@ def _apply_model_scores(
     diagnostics["effective_strategy_mode"] = strategy_mode
     diagnostics["model_status"] = "scored"
     diagnostics["model_scored_symbols"] = len(scored_by_symbol)
+    _apply_model_selection(result, strategy_mode=strategy_mode)
+
+
+def _apply_model_selection(result: dict[str, Any], *, strategy_mode: str) -> None:
+    ranked = result.get("ranked_signals")
+    if strategy_mode not in {"model", "hybrid"} or not isinstance(ranked, list):
+        return
+    selected_count = int(result.get("selected_count") or len(result.get("selections") or []) or 0)
+    if selected_count <= 0:
+        result.setdefault("diagnostics", {})["model_selection_applied"] = False
+        return
+
+    candidates = [
+        row for row in ranked
+        if isinstance(row, dict)
+        and row.get("final_candidate_rank") is not None
+        and isinstance(row.get("model"), dict)
+        and (row.get("tradability") or {}).get("buyable", True)
+    ]
+    if not candidates:
+        result.setdefault("diagnostics", {})["model_selection_applied"] = False
+        return
+
+    model_ranked = sorted(candidates, key=lambda row: _model_selection_score(row, strategy_mode=strategy_mode), reverse=True)
+    selected_symbols = {str(row.get("symbol")) for row in model_ranked[:selected_count]}
+    for row in ranked:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("symbol")) in selected_symbols:
+            row["status"] = "selected"
+            row["filter_reason"] = None
+        elif row.get("status") == "selected":
+            row["status"] = "filtered"
+            row["filter_reason"] = "outside_model_top_n"
+
+    ranked.sort(key=lambda row: _model_ranked_display_key(row, selected_symbols=selected_symbols, strategy_mode=strategy_mode))
+    for index, row in enumerate(ranked, start=1):
+        if isinstance(row, dict):
+            row["rank"] = index
+    result["selections"] = [row for row in ranked if isinstance(row, dict) and str(row.get("symbol")) in selected_symbols]
+    result["selected_count"] = len(result["selections"])
+    diagnostics = result.setdefault("diagnostics", {})
+    diagnostics["model_selection_applied"] = True
+    diagnostics["model_selection_mode"] = strategy_mode
+
+
+def _model_ranked_display_key(
+    row: Any,
+    *,
+    selected_symbols: set[str],
+    strategy_mode: str,
+) -> tuple[Any, ...]:
+    if not isinstance(row, dict):
+        return (3, 0)
+    symbol = str(row.get("symbol"))
+    candidate = row.get("final_candidate_rank") is not None and isinstance(row.get("model"), dict)
+    return (
+        0 if symbol in selected_symbols else 1 if candidate else 2,
+        -_model_selection_score(row, strategy_mode=strategy_mode),
+        row.get("raw_rank") or row.get("rank") or 999999,
+    )
+
+
+def _model_selection_score(row: dict[str, Any], *, strategy_mode: str) -> float:
+    model = row.get("model") or {}
+    model_score = _number_or_zero(model.get("model_score"))
+    if strategy_mode == "model":
+        return model_score
+    credibility = row.get("credibility") or {}
+    calibrated = _number_or_zero(credibility.get("calibrated_probability"))
+    if calibrated > 1:
+        calibrated = calibrated / 100
+    return model_score * 0.55 + calibrated * 0.45
+
+
+def _number_or_zero(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _result_mode_from_signal_mode(signal_mode: str) -> str:
