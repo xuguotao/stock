@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_kline
 from src.data.clickhouse_quote_snapshot_sync import sync_clickhouse_quote_snapshots
+from src.data.clickhouse_table_maintenance import optimize_quote_snapshot_rollups
 from src.data.clickhouse_daily_sync import sync_clickhouse_daily_from_minute5, sync_clickhouse_index_daily
 from src.data.fund_tail_market_data import refresh_fund_tail_proxy_quotes
 from src.data.clickhouse_research_dataset import build_clickhouse_research_dataset
@@ -161,6 +162,7 @@ def create_app(
     daily_repair_runner=sync_clickhouse_daily_from_minute5,
     index_daily_sync_runner=sync_clickhouse_index_daily,
     quality_snapshot_writer=persist_clickhouse_quality_snapshot,
+    quote_rollup_optimizer=optimize_quote_snapshot_rollups,
     auto_start_data_ops_scheduler: bool = True,
     data_ops_interval_seconds: int = 60,
     data_ops_maintenance_runner=None,
@@ -247,6 +249,7 @@ def create_app(
     app.state.daily_repair_runner = daily_repair_runner
     app.state.index_daily_sync_runner = index_daily_sync_runner
     app.state.quality_snapshot_writer = quality_snapshot_writer
+    app.state.quote_rollup_optimizer = quote_rollup_optimizer
     app.state.clickhouse_dataset_builder = clickhouse_dataset_builder
     app.state.tail_signal_repository = tail_signal_repository or ClickHouseTailSignalRepository()
     app.state.tail_ml_audit_runner = tail_ml_audit_runner
@@ -388,6 +391,7 @@ def create_app(
                 payload,
                 daily_repair_runner=app.state.daily_repair_runner,
                 quality_snapshot_writer=app.state.quality_snapshot_writer,
+                quote_rollup_optimizer=app.state.quote_rollup_optimizer,
             )
         else:
             background_tasks.add_task(
@@ -401,6 +405,7 @@ def create_app(
                 payload,
                 daily_repair_runner=app.state.daily_repair_runner,
                 quality_snapshot_writer=app.state.quality_snapshot_writer,
+                quote_rollup_optimizer=app.state.quote_rollup_optimizer,
             )
 
         return {"job_id": job.id}
@@ -1091,6 +1096,7 @@ def _run_data_health_repair_job(
     *,
     daily_repair_runner=None,
     quality_snapshot_writer=None,
+    quote_rollup_optimizer=None,
 ) -> None:
     store.update_job(job_id, status="running", progress=_progress(5, "planning", "生成数据健康修复计划"))
     try:
@@ -1148,6 +1154,11 @@ def _run_data_health_repair_job(
                     ),
                 )
                 repairs.append({"key": key, "result": result})
+            elif key == "quote_rollup_optimize":
+                if quote_rollup_optimizer is None:
+                    skipped.append({"key": key, "reason": "缺少快照聚合去重修复器"})
+                    continue
+                repairs.append({"key": key, "result": quote_rollup_optimizer()})
             else:
                 skipped.append({"key": key, "reason": "未知自动修复动作"})
 

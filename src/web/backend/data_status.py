@@ -347,7 +347,6 @@ def _dataset_health_rows(
             "consumer": "今日尾盘预演、实时价格、快照聚合、盘中可信度检查",
             "quality_key": ("quote_snapshots", "raw"),
             "expected_symbols": quote_quality.get("expected_symbols", non_st_count),
-            "issues": quote_quality.get("issues", []),
         },
         {
             "key": "stock_quote_snapshots_1m",
@@ -359,7 +358,6 @@ def _dataset_health_rows(
             "consumer": "盘中复盘、短线统计、快照降采样",
             "quality_key": ("quote_snapshots", "rollups", "1m"),
             "expected_symbols": quote_quality.get("expected_symbols", non_st_count),
-            "issues": quote_quality.get("issues", []),
         },
         {
             "key": "stock_quote_snapshots_5m",
@@ -371,7 +369,6 @@ def _dataset_health_rows(
             "consumer": "尾盘选股 5m 兜底、个股趋势、盘中验证",
             "quality_key": ("quote_snapshots", "rollups", "5m"),
             "expected_symbols": quote_quality.get("expected_symbols", non_st_count),
-            "issues": quote_quality.get("issues", []),
         },
         {
             "key": "index_daily",
@@ -477,7 +474,7 @@ def _dataset_health_row(
         "expected_symbols": expected,
         "coverage_ratio": coverage,
         "status": status,
-        "issues": [str(issue) for issue in definition.get("issues", [])],
+        "issues": [str(issue) for issue in definition.get("issues", quality_row.get("issues", []))],
     }
 
 
@@ -1210,6 +1207,7 @@ def _quote_snapshot_quality(
     )
     if raw["status"] == "ok" and raw["missing_rate"] > 0.2:
         raw["status"] = "warning"
+    raw["issues"] = _quote_raw_issues(raw)
 
     rollups = {
         label: _quote_rollup_quality(
@@ -1224,19 +1222,9 @@ def _quote_snapshot_quality(
     }
 
     issues: list[str] = []
-    if raw["status"] == "missing":
-        issues.append("stock_quote_snapshots_missing")
-    elif raw["missing_symbols"] > 0:
-        issues.append(f"stock_quote_snapshots_missing_{raw['missing_symbols']}_symbols")
-    if raw["missing_rate"] > 0.2:
-        issues.append(f"stock_quote_snapshots_interval_missing_rate_{raw['missing_rate']:.2f}")
-    for label, rollup in rollups.items():
-        if rollup["status"] == "missing":
-            issues.append(f"stock_quote_snapshots_{label}_missing")
-        elif rollup["missing_symbols"] > 0:
-            issues.append(f"stock_quote_snapshots_{label}_missing_{rollup['missing_symbols']}_symbols")
-        if int(rollup.get("extra_rows") or 0) > 0:
-            issues.append(f"stock_quote_snapshots_{label}_duplicate_{rollup['extra_rows']}_extra_rows")
+    issues.extend(raw["issues"])
+    for rollup in rollups.values():
+        issues.extend(rollup["issues"])
 
     statuses = {raw["status"], *(rollup["status"] for rollup in rollups.values())}
     status = "missing" if "missing" in statuses else "warning" if "warning" in statuses else "ok"
@@ -1261,7 +1249,6 @@ def _quote_rollup_quality(
     bucket_seconds: int,
     expected_symbols: int,
 ) -> dict[str, Any]:
-    del label
     status = tables.get(table, {})
     latest = (status.get("date_range") or {}).get("end")
     latest_symbols = _latest_quote_symbol_count(
@@ -1280,6 +1267,12 @@ def _quote_rollup_quality(
     )
     if layer_status == "ok" and duplicate_stats["extra_rows"] > 0:
         layer_status = "warning"
+    issues = _quote_rollup_issues(
+        label=label,
+        status=layer_status,
+        missing_symbols=missing_symbols,
+        extra_rows=duplicate_stats["extra_rows"],
+    )
     return {
         "table": table,
         "latest_bucket": latest,
@@ -1293,7 +1286,30 @@ def _quote_rollup_quality(
         "duplicate_groups": duplicate_stats["duplicate_groups"],
         "extra_rows": duplicate_stats["extra_rows"],
         "status": layer_status,
+        "issues": issues,
     }
+
+
+def _quote_raw_issues(raw: dict[str, Any]) -> list[str]:
+    issues = []
+    if raw["status"] == "missing":
+        issues.append("stock_quote_snapshots_missing")
+    elif int(raw.get("missing_symbols") or 0) > 0:
+        issues.append(f"stock_quote_snapshots_missing_{raw['missing_symbols']}_symbols")
+    if float(raw.get("missing_rate") or 0) > 0.2:
+        issues.append(f"stock_quote_snapshots_interval_missing_rate_{raw['missing_rate']:.2f}")
+    return issues
+
+
+def _quote_rollup_issues(*, label: str, status: str, missing_symbols: int, extra_rows: int) -> list[str]:
+    issues = []
+    if status == "missing":
+        issues.append(f"stock_quote_snapshots_{label}_missing")
+    elif missing_symbols > 0:
+        issues.append(f"stock_quote_snapshots_{label}_missing_{missing_symbols}_symbols")
+    if extra_rows > 0:
+        issues.append(f"stock_quote_snapshots_{label}_duplicate_{extra_rows}_extra_rows")
+    return issues
 
 
 def _quote_rollup_duplicate_stats(*, client: Any, table: str) -> dict[str, int]:
@@ -1302,9 +1318,9 @@ def _quote_rollup_duplicate_stats(*, client: Any, table: str) -> dict[str, int]:
             f"""
             select count() as duplicate_groups, sum(c - 1) as extra_rows
             from (
-                select symbol, bucket_start, count() as c
-                from {table}
-                group by symbol, bucket_start
+                select symbol, bucket_start, source, count() as c
+                from {table} final
+                group by symbol, bucket_start, source
                 having count() > 1
             )
             """

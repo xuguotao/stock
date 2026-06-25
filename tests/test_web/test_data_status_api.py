@@ -339,6 +339,68 @@ def test_data_health_repair_api_runs_inline_auto_repairs(tmp_path) -> None:
     assert job["result"]["after_plan"]["status"] == "ok"
 
 
+def test_data_health_repair_api_runs_quote_rollup_optimizer(tmp_path) -> None:
+    before_status = {
+        "quality": {
+            "status": "warning",
+            "issues": ["stock_quote_snapshots_1m_duplicate_10_extra_rows"],
+            "daily": {"missing_symbols": 0},
+            "minute5": {"missing_symbols": 0},
+            "quote_snapshots": {
+                "status": "warning",
+                "issues": ["stock_quote_snapshots_1m_duplicate_10_extra_rows"],
+                "raw": {"status": "ok", "issues": []},
+                "rollups": {
+                    "1m": {
+                        "status": "warning",
+                        "issues": ["stock_quote_snapshots_1m_duplicate_10_extra_rows"],
+                    },
+                    "5m": {"status": "ok", "issues": []},
+                },
+            },
+            "scheduled_checks": {"completeness_30d": {"affected_symbols": 0}},
+        }
+    }
+    after_status = {
+        "quality": {
+            "status": "ok",
+            "issues": [],
+            "daily": {"missing_symbols": 0},
+            "minute5": {"missing_symbols": 0},
+            "quote_snapshots": {"status": "ok", "issues": []},
+            "scheduled_checks": {"completeness_30d": {"affected_symbols": 0}},
+        }
+    }
+    statuses = [before_status, after_status]
+    calls = []
+
+    def fake_status():
+        return statuses.pop(0) if statuses else after_status
+
+    def fake_rollup_optimizer():
+        calls.append("optimize")
+        return {"tables": ["stock_quote_snapshots_1m", "stock_quote_snapshots_5m"]}
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        run_jobs_inline=True,
+        data_status_runner=fake_status,
+        quote_rollup_optimizer=fake_rollup_optimizer,
+        quality_snapshot_writer=None,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/data/health-repair", json={})
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert calls == ["optimize"]
+    assert job["result"]["repairs"] == [
+        {"key": "quote_rollup_optimize", "result": {"tables": ["stock_quote_snapshots_1m", "stock_quote_snapshots_5m"]}}
+    ]
+
+
 def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None:
     stock_db = tmp_path / "stock.db"
     _create_stock_db(stock_db)
@@ -535,7 +597,7 @@ def test_daily_maintenance_prefers_latest_minute5_date_when_daily_is_stale(tmp_p
 
     response = client.post(
         "/api/data/daily-maintenance",
-        json={"retry_no_data": True, "run_strategy_review": False},
+        json={"trade_date": "2026-06-22", "retry_no_data": True, "run_strategy_review": False},
     )
 
     assert response.status_code == 200

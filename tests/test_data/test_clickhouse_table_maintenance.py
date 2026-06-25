@@ -5,6 +5,7 @@ from src.data.clickhouse_table_maintenance import (
     deduplicate_daily_kline,
     deduplicate_minute5_kline,
     minute5_duplicate_stats,
+    optimize_quote_snapshot_rollups,
 )
 
 
@@ -77,3 +78,17 @@ def test_deduplicate_daily_kline_rebuilds_merge_tree_and_swaps_tables() -> None:
     assert any("engine = mergetree" in query for query in executed)
     assert any("group by symbol, date" in query for query in executed)
     assert any("rename table daily_kline to daily_kline_backup_test, daily_kline_dedup_test to daily_kline" in query for query in executed)
+
+
+def test_optimize_quote_snapshot_rollups_runs_final_merge_for_1m_and_5m() -> None:
+    client = FakeClickHouseClient()
+
+    result = optimize_quote_snapshot_rollups(client=client)
+
+    executed = [" ".join(query.lower().split()) for query, _ in client.commands]
+    assert result == {
+        "tables": ["stock_quote_snapshots_1m", "stock_quote_snapshots_5m"],
+        "optimized": 2,
+    }
+    assert "optimize table stock_quote_snapshots_1m final" in executed
+    assert "optimize table stock_quote_snapshots_5m final" in executed

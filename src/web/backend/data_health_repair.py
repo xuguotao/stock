@@ -42,14 +42,40 @@ def build_data_health_repair_plan(status: dict[str, Any]) -> dict[str, Any]:
 
     quote_quality = quality.get("quote_snapshots") or {}
     quote_issues = list(quote_quality.get("issues") or [])
-    if quote_quality.get("status") in {"warning", "missing"}:
+    raw_issues = list((quote_quality.get("raw") or {}).get("issues") or [])
+    rollup_issues = [
+        str(issue)
+        for rollup in (quote_quality.get("rollups") or {}).values()
+        if isinstance(rollup, dict)
+        for issue in (rollup.get("issues") or [])
+    ]
+    if not raw_issues and not rollup_issues:
+        raw_issues = [str(issue) for issue in quote_issues]
+    duplicate_issues = [issue for issue in rollup_issues if "_duplicate_" in issue]
+    actionable_quote_sync_issues = [
+        str(issue)
+        for issue in [*raw_issues, *rollup_issues]
+        if "_duplicate_" not in str(issue)
+    ]
+    if duplicate_issues:
+        actions.append(
+            {
+                "key": "quote_rollup_optimize",
+                "title": "合并去重 1m/5m 快照聚合",
+                "status": "ready",
+                "auto_repair": True,
+                "reason": "；".join(duplicate_issues),
+                "runner": "quote_rollup_optimize",
+            }
+        )
+    if quote_quality.get("status") in {"warning", "missing"} and actionable_quote_sync_issues:
         actions.append(
             {
                 "key": "quote_snapshot_sync",
                 "title": "重新采集行情快照并刷新 1m/5m 聚合",
                 "status": "ready",
                 "auto_repair": True,
-                "reason": "；".join(str(issue) for issue in quote_issues) or "行情快照覆盖不足",
+                "reason": "；".join(actionable_quote_sync_issues) or "行情快照覆盖不足",
                 "runner": "quote_snapshot_sync",
             }
         )

@@ -185,6 +185,22 @@ def deduplicate_daily_kline(
     return result
 
 
+def optimize_quote_snapshot_rollups(
+    *,
+    client: Any | None = None,
+    host: str = "10.211.49.42",
+    user: str = "default",
+    password: str = "stock123",
+    database: str = "stock",
+) -> dict[str, Any]:
+    """Trigger ReplacingMergeTree final merges for quote snapshot rollup tables."""
+    clickhouse = client or _client(host=host, user=user, password=password, database=database)
+    tables = ["stock_quote_snapshots_1m", "stock_quote_snapshots_5m"]
+    for table in tables:
+        clickhouse.execute(f"optimize table {table} final")
+    return {"tables": tables, "optimized": len(tables)}
+
+
 def _client(*, host: str, user: str, password: str, database: str) -> Any:
     source = ClickHouseStockDataSource(host=host, user=user, password=password, database=database)
     return source._client_instance()

@@ -64,6 +64,36 @@ def test_build_data_health_repair_plan_maps_warning_sections_to_actions() -> Non
     assert "quality_snapshot" not in actions
 
 
+def test_build_data_health_repair_plan_maps_quote_rollup_duplicates_to_optimize() -> None:
+    plan = build_data_health_repair_plan({
+        "quality": {
+            "status": "warning",
+            "issues": ["stock_quote_snapshots_1m_duplicate_248840_extra_rows"],
+            "daily": {"missing_symbols": 0},
+            "minute5": {"missing_symbols": 0},
+            "quote_snapshots": {
+                "status": "warning",
+                "issues": ["stock_quote_snapshots_1m_duplicate_248840_extra_rows"],
+                "raw": {"status": "ok", "issues": []},
+                "rollups": {
+                    "1m": {
+                        "status": "warning",
+                        "issues": ["stock_quote_snapshots_1m_duplicate_248840_extra_rows"],
+                    },
+                    "5m": {"status": "ok", "issues": []},
+                },
+            },
+            "scheduled_checks": {"completeness_30d": {"affected_symbols": 0}},
+        }
+    })
+
+    actions = {action["key"]: action for action in plan["actions"]}
+    assert plan["status"] == "ready"
+    assert actions["quote_rollup_optimize"]["auto_repair"] is True
+    assert actions["quote_rollup_optimize"]["runner"] == "quote_rollup_optimize"
+    assert "quote_snapshot_sync" not in actions
+
+
 def test_build_data_health_repair_plan_ignores_non_blocking_quality_warnings() -> None:
     plan = build_data_health_repair_plan({
         "quality": {

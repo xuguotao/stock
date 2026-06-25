@@ -50,9 +50,9 @@ class FakeClickHouseClient:
             return [(2,)]
         if "from stock_quote_snapshots_5m" in normalized and "where bucket_start" in normalized:
             return [(2,)]
-        if "from stock_quote_snapshots_1m" in normalized and "group by symbol, bucket_start" in normalized:
-            return [(0, 0)]
-        if "from stock_quote_snapshots_5m" in normalized and "group by symbol, bucket_start" in normalized:
+        if "from stock_quote_snapshots_1m final" in normalized and "group by symbol, bucket_start, source" in normalized:
+            return [(1, 2)]
+        if "from stock_quote_snapshots_5m final" in normalized and "group by symbol, bucket_start, source" in normalized:
             return [(1, 2)]
         if "from stock_quote_snapshots" in normalized and "where snapshot_at" in normalized:
             return [(2,)]
@@ -234,6 +234,12 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
     assert datasets["daily_kline"]["coverage_ratio"] == 1.0
     assert datasets["minute5_kline"]["status"] == "warning"
     assert datasets["stock_quote_snapshots_5m"]["consumer"] == "尾盘选股 5m 兜底、个股趋势、盘中验证"
+    assert datasets["stock_quote_snapshots"]["status"] == "ok"
+    assert datasets["stock_quote_snapshots"]["issues"] == []
+    assert datasets["stock_quote_snapshots_1m"]["status"] == "warning"
+    assert datasets["stock_quote_snapshots_1m"]["issues"] == ["stock_quote_snapshots_1m_duplicate_2_extra_rows"]
+    assert datasets["stock_quote_snapshots_5m"]["status"] == "warning"
+    assert datasets["stock_quote_snapshots_5m"]["issues"] == ["stock_quote_snapshots_5m_duplicate_2_extra_rows"]
     assert datasets["fund_tail_nav"]["status"] == "warning"
     assert datasets["fund_tail_nav"]["rows"] == 100
     assert datasets["fund_tail_nav"]["symbols"] == 16
@@ -312,6 +318,7 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
                     },
                 },
                 "status": "ok",
+                "issues": [],
             },
             "rollups": {
                 "1m": {
@@ -324,9 +331,10 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
                     "coverage_ratio": 1.0,
                     "retention_days": 1095,
                     "bucket_seconds": 60,
-                    "duplicate_groups": 0,
-                    "extra_rows": 0,
-                    "status": "ok",
+                    "duplicate_groups": 1,
+                    "extra_rows": 2,
+                    "status": "warning",
+                    "issues": ["stock_quote_snapshots_1m_duplicate_2_extra_rows"],
                 },
                 "5m": {
                     "table": "stock_quote_snapshots_5m",
@@ -341,9 +349,13 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
                     "duplicate_groups": 1,
                     "extra_rows": 2,
                     "status": "warning",
+                    "issues": ["stock_quote_snapshots_5m_duplicate_2_extra_rows"],
                 },
             },
-            "issues": ["stock_quote_snapshots_5m_duplicate_2_extra_rows"],
+            "issues": [
+                "stock_quote_snapshots_1m_duplicate_2_extra_rows",
+                "stock_quote_snapshots_5m_duplicate_2_extra_rows",
+            ],
         },
             "scheduled_checks": {
             "status": "warning",
@@ -406,6 +418,7 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
             "issues": [
                 "minute5_kline_missing_1_symbols",
                 "minute5_kline_duplicate_3_extra_rows",
+                "stock_quote_snapshots_1m_duplicate_2_extra_rows",
                 "stock_quote_snapshots_5m_duplicate_2_extra_rows",
                 "daily_kline_today_anomalies_2_rows",
             ],
@@ -425,7 +438,9 @@ def test_inspect_clickhouse_database_does_not_warn_for_only_ignored_completeness
                 return [(2,)]
             if "having count() > 1" in normalized and "from minute5_kline" in normalized:
                 return [(0, 0)]
-            if "group by symbol, bucket_start" in normalized and "from stock_quote_snapshots_5m" in normalized:
+            if "group by symbol, bucket_start, source" in normalized and "from stock_quote_snapshots_5m final" in normalized:
+                return [(0, 0)]
+            if "group by symbol, bucket_start, source" in normalized and "from stock_quote_snapshots_1m final" in normalized:
                 return [(0, 0)]
             if "count() as bad_rows" in normalized and "daily_kline" in normalized and "volume <= 0" in normalized:
                 return [(0,)]
