@@ -76,6 +76,31 @@ def test_evaluate_promotion_gate_rejects_drawdown_breach_rate_not_improved() -> 
     assert "drawdown_breach_rate_not_improved" in decision["reasons"]
 
 
+def test_evaluate_promotion_gate_rejects_risk_adjusted_return_not_above_baseline() -> None:
+    decision = evaluate_promotion_gate(
+        model_metrics={
+            "selected_days": 35,
+            "hit_next_high_1pct_rate": 0.72,
+            "avg_next_high_return": 0.030,
+            "avg_next_low_drawdown": -0.040,
+            "risk_adjusted_return": 0.010,
+            "drawdown_breach_2pct_rate": 0.30,
+        },
+        baseline_metrics={
+            "selected_days": 35,
+            "next_high_hit_1pct_rate": 0.55,
+            "avg_next_high_return": 0.019,
+            "avg_next_low_drawdown": -0.012,
+            "risk_adjusted_return": 0.013,
+            "drawdown_breach_2pct_rate": 0.50,
+        },
+        audit_status={"status": "ready", "issues": []},
+    )
+
+    assert decision["eligible"] is False
+    assert "risk_adjusted_return_not_above_baseline" in decision["reasons"]
+
+
 def test_model_registry_promotes_only_one_model_at_a_time() -> None:
     registry = ModelRegistry()
 

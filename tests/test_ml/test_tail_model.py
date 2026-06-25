@@ -27,6 +27,7 @@ def test_train_tail_model_walk_forward_scores_validation_rows_chronologically() 
     assert result["metrics"]["selected_rows"] == result["metrics"]["selected_days"]
     assert 0 <= result["metrics"]["hit_next_high_1pct_rate"] <= 1
     assert "avg_expected_high_return" in result["metrics"]
+    assert result["metrics"]["risk_adjusted_return"] == result["metrics"]["avg_next_high_return"] + result["metrics"]["avg_next_low_drawdown"] * 0.5
     first_prediction = result["predictions"][0]
     assert {
         "trade_date",

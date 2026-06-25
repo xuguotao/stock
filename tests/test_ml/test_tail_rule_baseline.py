@@ -34,6 +34,7 @@ def test_evaluate_tail_rule_baseline_scores_top_n_by_rule_quality() -> None:
     assert top1["next_high_hit_1pct_rate"] == pytest.approx(2 / 3)
     assert top1["avg_next_open_return"] == pytest.approx((0.010 + 0.012 - 0.006) / 3)
     assert top1["avg_next_high_return"] == pytest.approx((0.030 + 0.025 + 0.002) / 3)
+    assert top1["risk_adjusted_return"] == pytest.approx(top1["avg_next_high_return"] + top1["avg_next_low_drawdown"] * 0.5)
     assert top1["avg_next_low_drawdown"] == pytest.approx((-0.005 - 0.006 - 0.020) / 3)
     assert top1["max_consecutive_losing_selections"] == 1
     assert top2["top_n"] == 2

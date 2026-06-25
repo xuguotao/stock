@@ -246,15 +246,19 @@ def _top_n_metrics(predictions: pd.DataFrame, *, top_n: int) -> dict[str, Any]:
             "avg_expected_high_return": 0.0,
             "avg_next_high_return": 0.0,
             "avg_next_low_drawdown": 0.0,
+            "risk_adjusted_return": 0.0,
             "drawdown_breach_2pct_rate": 0.0,
         }
     selected = predictions.sort_values(["trade_date", "model_score", "symbol"], ascending=[True, False, True]).groupby("trade_date", group_keys=False).head(top_n)
+    avg_next_high_return = float(selected["next_high_return"].mean())
+    avg_next_low_drawdown = float(selected["next_low_return"].mean())
     return {
         "selected_days": int(selected["trade_date"].nunique()),
         "selected_rows": int(len(selected)),
         "hit_next_high_1pct_rate": float(selected["hit_next_high_1pct"].astype(bool).mean()),
         "avg_expected_high_return": float(selected["expected_high_return"].mean()),
-        "avg_next_high_return": float(selected["next_high_return"].mean()),
-        "avg_next_low_drawdown": float(selected["next_low_return"].mean()),
+        "avg_next_high_return": avg_next_high_return,
+        "avg_next_low_drawdown": avg_next_low_drawdown,
+        "risk_adjusted_return": avg_next_high_return + avg_next_low_drawdown * 0.5,
         "drawdown_breach_2pct_rate": float(selected["drawdown_breach_2pct"].astype(bool).mean()),
     }

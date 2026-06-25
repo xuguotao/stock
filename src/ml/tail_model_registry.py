@@ -26,6 +26,8 @@ def evaluate_promotion_gate(
         reasons.append("hit_rate_not_above_baseline")
     if _number(model_metrics.get("avg_next_high_return")) <= _number(baseline_metrics.get("avg_next_high_return")):
         reasons.append("avg_high_return_not_above_baseline")
+    if _risk_adjusted_return(model_metrics) <= _risk_adjusted_return(baseline_metrics):
+        reasons.append("risk_adjusted_return_not_above_baseline")
     model_drawdown = _number(model_metrics.get("avg_next_low_drawdown"))
     baseline_drawdown = _number(baseline_metrics.get("avg_next_low_drawdown"))
     if model_drawdown < baseline_drawdown - max_drawdown_deterioration:
@@ -146,3 +148,9 @@ def _number(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _risk_adjusted_return(metrics: dict[str, Any]) -> float:
+    if "risk_adjusted_return" in metrics:
+        return _number(metrics.get("risk_adjusted_return"))
+    return _number(metrics.get("avg_next_high_return")) + _number(metrics.get("avg_next_low_drawdown")) * 0.5

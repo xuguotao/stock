@@ -44,6 +44,8 @@ def _top_n_metrics(ranked: pd.DataFrame, *, trade_days: list[object], top_n: int
     selected = ranked.groupby("trade_date", group_keys=False).head(top_n)
     selected_days = int(selected["trade_date"].nunique()) if not selected.empty else 0
     empty_days = max(0, len(trade_days) - selected_days)
+    avg_next_high_return = _mean_number(selected, "next_high_return")
+    avg_next_low_drawdown = _mean_number(selected, "next_low_return")
     return {
         "top_n": int(top_n),
         "selected_days": selected_days,
@@ -52,8 +54,9 @@ def _top_n_metrics(ranked: pd.DataFrame, *, trade_days: list[object], top_n: int
         "next_open_win_rate": _mean_bool(selected, "next_open_return", threshold=0),
         "next_high_hit_1pct_rate": _mean_bool_column(selected, "hit_next_high_1pct"),
         "avg_next_open_return": _mean_number(selected, "next_open_return"),
-        "avg_next_high_return": _mean_number(selected, "next_high_return"),
-        "avg_next_low_drawdown": _mean_number(selected, "next_low_return"),
+        "avg_next_high_return": avg_next_high_return,
+        "avg_next_low_drawdown": avg_next_low_drawdown,
+        "risk_adjusted_return": avg_next_high_return + avg_next_low_drawdown * 0.5,
         "drawdown_breach_2pct_rate": _mean_bool_column(selected, "drawdown_breach_2pct"),
         "max_consecutive_losing_selections": _max_consecutive_losses(selected),
     }
