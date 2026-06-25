@@ -54,6 +54,7 @@ data/paper_trading/
 data/runtime/
 data/web/
 reports/
+models/
 
 # Frontend dependencies and build output
 node_modules/

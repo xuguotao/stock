@@ -26,6 +26,8 @@ from src.ml.tail_dataset_audit import audit_tail_ml_data
 from src.ml.tail_dataset import build_tail_ml_samples_from_clickhouse
 from src.ml.tail_inference import TailModelInference
 from src.ml.tail_model import train_tail_model_artifact
+from src.ml.tail_model_registry import evaluate_promotion_gate
+from src.ml.tail_rule_baseline import evaluate_tail_rule_baseline
 from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
 from src.web.backend.data_sync import DEFAULT_REMOTE_STOCK_DB, sync_stock_database
@@ -951,6 +953,19 @@ def _run_tail_ml_train_job(
             validation_days=payload.validation_days,
             top_n=payload.top_n,
         )
+        baseline_report = evaluate_tail_rule_baseline(dataset.samples, top_ns=(payload.top_n,))
+        baseline_metrics = _tail_baseline_metrics_for_top_n(baseline_report, top_n=payload.top_n)
+        promotion_decision = evaluate_promotion_gate(
+            model_metrics=dict(manifest.get("metrics") or {}),
+            baseline_metrics=baseline_metrics,
+            audit_status={"status": "ready", "issues": []},
+        )
+        manifest = {
+            **manifest,
+            "baseline_metrics": baseline_metrics,
+            "promotion_decision": promotion_decision,
+        }
+        _write_tail_model_manifest_if_present(manifest)
         result = {
             "version": version,
             "dataset_summary": dict(dataset.summary),
@@ -960,6 +975,24 @@ def _run_tail_ml_train_job(
         store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "尾盘模型训练失败"))
         return
     store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "尾盘模型训练完成"))
+
+
+def _tail_baseline_metrics_for_top_n(baseline_report: dict[str, Any], *, top_n: int) -> dict[str, Any]:
+    for row in baseline_report.get("by_top_n") or []:
+        if int(row.get("top_n") or 0) == top_n:
+            return dict(row)
+    return {}
+
+
+def _write_tail_model_manifest_if_present(manifest: dict[str, Any]) -> None:
+    artifact_dir = manifest.get("artifact_dir")
+    if not artifact_dir:
+        return
+    manifest_path = Path(str(artifact_dir)) / "manifest.json"
+    if not manifest_path.exists():
+        return
+    payload = {key: value for key, value in manifest.items() if key != "artifact_dir"}
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _run_tail_backtest_job(store: JobStore, job_id: str, payload: TailBacktestRequest) -> None:

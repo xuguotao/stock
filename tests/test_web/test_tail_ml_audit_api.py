@@ -105,7 +105,14 @@ def test_tail_ml_train_api_runs_inline_training_job(tmp_path) -> None:
                         "trade_date": "2026-06-01",
                         "symbol": "000001.SZ",
                         "tail_return_from_1430": 0.01,
+                        "tail_volume_ratio": 2.0,
+                        "last3_close_slope": 0.01,
+                        "tail_pullback_from_high": -0.001,
                         "next_high_return": 0.02,
+                        "next_open_return": 0.01,
+                        "next_low_return": -0.01,
+                        "hit_next_high_1pct": True,
+                        "drawdown_breach_2pct": False,
                     }
                 ]
             ),
@@ -120,7 +127,12 @@ def test_tail_ml_train_api_runs_inline_training_job(tmp_path) -> None:
             "artifact_dir": str(tmp_path / "models" / kwargs["version"]),
             "sample_count": int(len(samples)),
             "fold_count": 1,
-            "metrics": {"selected_days": 1},
+            "metrics": {
+                "selected_days": 1,
+                "hit_next_high_1pct_rate": 1.0,
+                "avg_next_high_return": 0.03,
+                "avg_next_low_drawdown": -0.01,
+            },
             "feature_columns": ["tail_return_from_1430"],
         }
 
@@ -155,6 +167,8 @@ def test_tail_ml_train_api_runs_inline_training_job(tmp_path) -> None:
     assert calls["trainer"]["output_root"] == tmp_path / "models"
     assert job["result"]["dataset_summary"]["sample_rows"] == 1
     assert job["result"]["manifest"]["version"] == "tail-test-train"
+    assert job["result"]["manifest"]["baseline_metrics"]["top_n"] == 2
+    assert job["result"]["manifest"]["promotion_decision"]["status"] == "rejected"
 
 
 def test_tail_ml_promote_api_marks_only_requested_model_promoted(tmp_path) -> None:
