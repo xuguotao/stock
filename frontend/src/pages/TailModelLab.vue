@@ -32,6 +32,12 @@
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间" min-width="170" />
+        <el-table-column label="样本窗口" min-width="170">
+          <template #default="{ row }">{{ sampleWindowText(row) }}</template>
+        </el-table-column>
+        <el-table-column label="训练配置" width="150">
+          <template #default="{ row }">{{ trainingConfigText(row) }}</template>
+        </el-table-column>
         <el-table-column label="样本/折数" width="120" align="right">
           <template #default="{ row }">{{ row.sample_count ?? 0 }} / {{ row.fold_count ?? 0 }}</template>
         </el-table-column>
@@ -152,6 +158,18 @@ function metric(row: TailMlModelManifest, key: string) {
 
 function baselineMetric(row: TailMlModelManifest, key: string) {
   return row.baseline_metrics?.[key] ?? null
+}
+
+function sampleWindowText(row: TailMlModelManifest) {
+  return row.sample_window?.start && row.sample_window?.end
+    ? `${row.sample_window.start} / ${row.sample_window.end}`
+    : '-'
+}
+
+function trainingConfigText(row: TailMlModelManifest) {
+  const config = row.training_config
+  if (!config) return '-'
+  return `${config.train_days ?? '-'} / ${config.validation_days ?? '-'} / Top${config.top_n ?? '-'}`
 }
 
 function formatPercent(value: unknown) {

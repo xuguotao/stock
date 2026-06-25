@@ -44,6 +44,8 @@ def test_tail_model_lab_exposes_training_action() -> None:
     assert "推广" in source
     assert "promoteTailMlModel" in source
     assert "training" in source
+    assert "样本窗口" in source
+    assert "训练配置" in source
 
 
 def test_jobs_page_can_open_tail_replay_results() -> None:

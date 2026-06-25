@@ -384,6 +384,15 @@ export interface TailMlModelManifest {
   sample_count?: number
   fold_count?: number
   top_n?: number
+  sample_window?: {
+    start?: string | null
+    end?: string | null
+  }
+  training_config?: {
+    train_days?: number
+    validation_days?: number
+    top_n?: number
+  }
   feature_columns?: string[]
   metrics?: Record<string, number | string | null>
   promotion_decision?: {
