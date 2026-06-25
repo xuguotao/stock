@@ -10,6 +10,7 @@ from typing import Any, Iterable
 import pandas as pd
 
 from src.core.constants import format_symbol
+from src.core.trading_windows import TAIL_SESSION_START
 from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.ml.tail_features import DEFAULT_DECISION_TIMES, build_tail_feature_frame
 from src.ml.tail_labels import build_tail_label_frame
@@ -122,7 +123,12 @@ def _load_daily_bars(client: Any, *, start: date, end: date, symbols: tuple[str,
 
 
 def _load_minute5_bars(client: Any, *, start: date, end: date, symbols: tuple[str, ...]) -> pd.DataFrame:
-    params: dict[str, Any] = {"start": start, "end": end}
+    params: dict[str, Any] = {
+        "start": start,
+        "end": end,
+        "tail_start_hour": TAIL_SESSION_START.hour,
+        "tail_start_minute": TAIL_SESSION_START.minute,
+    }
     symbol_filter = ""
     if symbols:
         params["symbols"] = symbols
@@ -134,7 +140,7 @@ def _load_minute5_bars(client: Any, *, start: date, end: date, symbols: tuple[st
         where toDate(datetime) >= %(start)s and toDate(datetime) <= %(end)s
             {symbol_filter}
             and open > 0 and high > 0 and low > 0 and close > 0 and volume > 0
-            and toHour(datetime) = 14 and toMinute(datetime) >= 30
+            and toHour(datetime) = %(tail_start_hour)s and toMinute(datetime) >= %(tail_start_minute)s
         order by symbol, datetime
         """,
         params,

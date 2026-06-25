@@ -195,6 +195,12 @@ def test_build_tail_ml_samples_from_clickhouse_queries_daily_and_minute5() -> No
     assert result.samples.iloc[0]["symbol"] == "000001.SZ"
     assert any("from daily_kline" in query.lower() for query, _params in client.queries)
     assert any("from minute5_kline" in query.lower() for query, _params in client.queries)
+    minute5_query, minute5_params = next((query, params) for query, params in client.queries if "from minute5_kline" in query.lower())
+    normalized_minute5_query = " ".join(minute5_query.lower().split())
+    assert "tohour(datetime) = %(tail_start_hour)s" in normalized_minute5_query
+    assert "tominute(datetime) >= %(tail_start_minute)s" in normalized_minute5_query
+    assert minute5_params["tail_start_hour"] == 14
+    assert minute5_params["tail_start_minute"] == 30
 
 
 def test_write_tail_ml_samples_cache_requires_non_empty_labels(tmp_path) -> None:
