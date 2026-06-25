@@ -115,11 +115,24 @@ def train_tail_model_artifact(
         "sample_count": result["sample_count"],
         "fold_count": result["fold_count"],
         "feature_columns": features,
+        "sample_window": _sample_window(frame),
+        "training_config": {
+            "train_days": train_days,
+            "validation_days": validation_days,
+            "top_n": top_n,
+        },
         "metrics": result["metrics"],
         "top_n": top_n,
     }
     (artifact_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return {**manifest, "artifact_dir": str(artifact_dir)}
+
+
+def _sample_window(frame: pd.DataFrame) -> dict[str, str | None]:
+    if frame.empty or "trade_date" not in frame:
+        return {"start": None, "end": None}
+    dates = sorted(pd.to_datetime(frame["trade_date"]).dt.date.unique())
+    return {"start": dates[0].isoformat(), "end": dates[-1].isoformat()}
 
 
 def _prepared_samples(samples: pd.DataFrame, features: list[str]) -> pd.DataFrame:

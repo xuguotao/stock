@@ -64,6 +64,8 @@ def test_train_tail_model_artifact_persists_manifest_and_model(tmp_path) -> None
     assert manifest["version"] == "tail-test-001"
     assert manifest["feature_columns"] == DEFAULT_FEATURE_COLUMNS
     assert {"market_ret_5", "market_breadth_20", "relative_ret_5"}.issubset(DEFAULT_FEATURE_COLUMNS)
+    assert manifest["training_config"] == {"train_days": 4, "validation_days": 2, "top_n": 1}
+    assert manifest["sample_window"] == {"start": "2026-01-01", "end": "2026-01-10"}
     assert manifest["metrics"]["selected_days"] > 0
 
 
