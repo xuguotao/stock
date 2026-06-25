@@ -687,6 +687,13 @@ def _credibility(signal: Any, *, mode: str) -> dict[str, Any]:
     return {
         "score": score,
         "grade": _credibility_grade(score),
+        "rule_score": score,
+        "rule_grade": _credibility_grade(score),
+        "historical_hit_rate": None,
+        "historical_avg_return": None,
+        "sample_size": 0,
+        "calibrated_probability": None,
+        "history_status": "pending",
         "phase": "盘中预演" if mode == "preview" else "正式尾盘",
         "components": {
             "signal_strength": round(signal_strength, 2),

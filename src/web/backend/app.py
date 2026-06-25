@@ -1174,6 +1174,7 @@ def _apply_tail_historical_calibration(signal_repository, result: dict[str, Any]
                         "note": f"历史校准查询失败：{exc}",
                     }
             credibility["history"] = cache[key]
+            _update_tail_calibrated_credibility(credibility, cache[key])
 
 
 def _number_or_none(value: Any) -> float | None:
@@ -1183,6 +1184,31 @@ def _number_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _update_tail_calibrated_credibility(credibility: dict[str, Any], history: dict[str, Any]) -> None:
+    sample_size = int(history.get("sample_count") or 0)
+    historical_hit_rate = _number_or_none(history.get("close_win_rate"))
+    historical_avg_return = _number_or_none(history.get("avg_close_return"))
+    rule_score = _number_or_none(credibility.get("rule_score") or credibility.get("score")) or 0.0
+    credibility["rule_score"] = rule_score
+    credibility["rule_grade"] = credibility.get("rule_grade") or credibility.get("grade") or _tail_rule_grade(rule_score)
+    credibility["history_status"] = str(history.get("status") or "pending")
+    credibility["sample_size"] = sample_size
+    credibility["historical_hit_rate"] = historical_hit_rate
+    credibility["historical_avg_return"] = historical_avg_return
+    if history.get("status") == "ready" and sample_size >= 10 and historical_hit_rate is not None:
+        credibility["calibrated_probability"] = round(historical_hit_rate * 0.7 + (rule_score / 100) * 0.3, 2)
+    else:
+        credibility["calibrated_probability"] = None
+
+
+def _tail_rule_grade(score: float) -> str:
+    if score >= 75:
+        return "高"
+    if score >= 55:
+        return "中"
+    return "低"
 
 
 def _run_stock_db_sync_job(

@@ -293,12 +293,15 @@
           <el-table-column label="V2分" width="100" align="right">
             <template #default="{ row }">{{ formatScore(row.v2_score) }}</template>
           </el-table-column>
-          <el-table-column label="信号质量分" width="130" align="right">
+          <el-table-column label="规则分" width="120" align="right">
             <template #default="{ row }">
-              <el-tag :type="credibilityType(row.credibility?.score)" effect="plain">
-                {{ row.credibility?.score ?? '-' }} {{ row.credibility?.grade ?? '' }}
+              <el-tag :type="credibilityType(row.credibility?.rule_score ?? row.credibility?.score)" effect="plain">
+                {{ row.credibility?.rule_score ?? row.credibility?.score ?? '-' }} {{ row.credibility?.rule_grade ?? row.credibility?.grade ?? '' }}
               </el-tag>
             </template>
+          </el-table-column>
+          <el-table-column label="校准概率" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.credibility?.calibrated_probability) }}</template>
           </el-table-column>
           <el-table-column label="量比" width="110" align="right">
             <template #default="{ row }">{{ formatScore(row.volume_ratio) }}</template>
@@ -366,14 +369,17 @@
             <template #default="{ row }">
               <div class="credibility-detail">
                 <el-descriptions :column="2" border>
-                  <el-descriptions-item label="信号质量分">{{ row.credibility?.score ?? '-' }} / 100（{{ row.credibility?.grade ?? '-' }}）</el-descriptions-item>
+                  <el-descriptions-item label="规则分">{{ row.credibility?.rule_score ?? row.credibility?.score ?? '-' }} / 100（{{ row.credibility?.rule_grade ?? row.credibility?.grade ?? '-' }}）</el-descriptions-item>
+                  <el-descriptions-item label="校准概率">{{ formatPercent(row.credibility?.calibrated_probability) }}</el-descriptions-item>
                   <el-descriptions-item label="阶段">{{ row.credibility?.phase ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="历史胜率">{{ formatPercent(row.credibility?.historical_hit_rate) }}</el-descriptions-item>
                   <el-descriptions-item label="原始排名">{{ row.raw_rank ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="历史平均收益">{{ formatPercent(row.credibility?.historical_avg_return) }}</el-descriptions-item>
                   <el-descriptions-item label="候选排名">{{ row.final_candidate_rank ?? '-' }}</el-descriptions-item>
                   <el-descriptions-item label="信号强度">{{ formatScore(row.credibility?.components?.signal_strength) }}</el-descriptions-item>
                   <el-descriptions-item label="量能质量">{{ formatScore(row.credibility?.components?.volume_quality) }}</el-descriptions-item>
                   <el-descriptions-item label="涨幅质量">{{ formatScore(row.credibility?.components?.return_quality) }}</el-descriptions-item>
-                  <el-descriptions-item label="历史样本">{{ row.credibility?.history?.status ?? '-' }}：{{ row.credibility?.history?.note ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="历史样本">{{ row.credibility?.sample_size ?? row.credibility?.history?.sample_count ?? 0 }}，{{ row.credibility?.history_status ?? row.credibility?.history?.status ?? '-' }}：{{ row.credibility?.history?.note ?? '-' }}</el-descriptions-item>
                 </el-descriptions>
                 <div class="credibility-lists">
                   <div>
@@ -397,12 +403,15 @@
               <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="信号质量分" width="130" align="right">
+          <el-table-column label="规则分" width="120" align="right">
             <template #default="{ row }">
-              <el-tag :type="credibilityType(row.credibility?.score)" effect="plain">
-                {{ row.credibility?.score ?? '-' }} {{ row.credibility?.grade ?? '' }}
+              <el-tag :type="credibilityType(row.credibility?.rule_score ?? row.credibility?.score)" effect="plain">
+                {{ row.credibility?.rule_score ?? row.credibility?.score ?? '-' }} {{ row.credibility?.rule_grade ?? row.credibility?.grade ?? '' }}
               </el-tag>
             </template>
+          </el-table-column>
+          <el-table-column label="校准概率" width="120" align="right">
+            <template #default="{ row }">{{ formatPercent(row.credibility?.calibrated_probability) }}</template>
           </el-table-column>
           <el-table-column label="强度" width="110" align="right">
             <template #default="{ row }">{{ formatScore(row.strength) }}</template>
@@ -592,6 +601,13 @@ interface SelectionRow {
 interface Credibility {
   score: number
   grade: '高' | '中' | '低'
+  rule_score?: number
+  rule_grade?: '高' | '中' | '低'
+  historical_hit_rate?: number | null
+  historical_avg_return?: number | null
+  sample_size?: number
+  calibrated_probability?: number | null
+  history_status?: string
   phase: string
   components: {
     signal_strength: number
@@ -605,6 +621,8 @@ interface Credibility {
     status: string
     sample_count: number
     note: string
+    close_win_rate?: number
+    avg_close_return?: number
   }
 }
 

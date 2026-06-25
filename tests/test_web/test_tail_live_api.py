@@ -171,6 +171,13 @@ def test_tail_live_selection_api_enriches_signal_credibility_with_historical_cal
     assert ranked_history["sample_count"] == 12
     assert ranked_history["close_win_rate"] == 0.67
     assert selected_history == ranked_history
+    credibility = job["result"]["ranked_signals"][0]["credibility"]
+    assert credibility["rule_score"] == 87.0
+    assert credibility["rule_grade"] == "高"
+    assert credibility["sample_size"] == 12
+    assert credibility["historical_hit_rate"] == 0.67
+    assert credibility["historical_avg_return"] == 0.018
+    assert credibility["calibrated_probability"] == 0.73
 
 
 def test_tail_signal_stats_api_returns_repository_metrics(tmp_path) -> None:
@@ -754,6 +761,10 @@ def test_tail_live_selection_runs_intraday_preview_before_tail_window(monkeypatc
     credibility = result["ranked_signals"][0]["credibility"]
     assert 0 <= credibility["score"] <= 100
     assert credibility["grade"] in {"高", "中", "低"}
+    assert credibility["rule_score"] == credibility["score"]
+    assert credibility["rule_grade"] == credibility["grade"]
+    assert credibility["historical_hit_rate"] is None
+    assert credibility["calibrated_probability"] is None
     assert credibility["phase"] == "盘中预演"
     assert credibility["components"]["signal_strength"] > 0
     assert credibility["components"]["volume_quality"] > 0
