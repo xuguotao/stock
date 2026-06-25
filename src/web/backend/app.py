@@ -23,6 +23,7 @@ from src.data.fund_tail_repository import ClickHouseFundTailRepository
 from src.data.tail_signal_repository import ClickHouseTailSignalRepository
 from src.core.constants import format_symbol
 from src.ml.tail_dataset_audit import audit_tail_ml_data
+from src.ml.tail_inference import TailModelInference
 from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
 from src.web.backend.data_sync import DEFAULT_REMOTE_STOCK_DB, sync_stock_database
@@ -744,6 +745,7 @@ def create_app(
                 app.state.quote_snapshot_sync_runner,
                 app.state.stock_db_path,
                 app.state.tail_signal_repository,
+                app.state.tail_model_root,
                 job.id,
                 payload,
             )
@@ -756,6 +758,7 @@ def create_app(
                 app.state.quote_snapshot_sync_runner,
                 app.state.stock_db_path,
                 app.state.tail_signal_repository,
+                app.state.tail_model_root,
                 job.id,
                 payload,
             )
@@ -835,6 +838,17 @@ def _list_tail_model_manifests(model_root: Path) -> dict[str, Any]:
             items.append(manifest)
     items.sort(key=lambda item: str(item.get("created_at") or item.get("version") or ""), reverse=True)
     return {"model_root": str(model_root), "items": items}
+
+
+def _load_promoted_tail_model_scorer(model_root: Path) -> TailModelInference | None:
+    manifests = _list_tail_model_manifests(model_root)["items"]
+    for manifest in manifests:
+        if manifest.get("status") != "promoted":
+            continue
+        model_path = Path(str(manifest["artifact_dir"])) / "model.joblib"
+        if model_path.exists():
+            return TailModelInference(model_path)
+    return None
 
 
 app = create_app()
@@ -939,6 +953,7 @@ def _run_tail_live_selection_job(
     quote_snapshot_runner,
     stock_db_path: Path,
     signal_repository,
+    tail_model_root: Path,
     job_id: str,
     payload: TailLiveSelectionRequest,
 ) -> None:
@@ -1003,14 +1018,16 @@ def _run_tail_live_selection_job(
             data_refresh_kind = "minute5_sync"
             stage_timings["minute5_sync"] = _elapsed(stage_started)
         stage_started = perf_counter()
-        result = runner(
-            payload,
-            progress=lambda percent, stage, message: store.update_job(
-                job_id,
-                status="running",
-                progress=_progress(45 + int(percent * 0.5), stage, message),
-            ),
+        model_scorer = _load_promoted_tail_model_scorer(tail_model_root) if payload.strategy_mode != "rule" else None
+        progress_callback = lambda percent, stage, message: store.update_job(
+            job_id,
+            status="running",
+            progress=_progress(45 + int(percent * 0.5), stage, message),
         )
+        if payload.strategy_mode == "rule":
+            result = runner(payload, progress=progress_callback)
+        else:
+            result = runner(payload, progress=progress_callback, model_scorer=model_scorer)
         stage_timings["strategy_scan"] = _elapsed(stage_started)
         if data_refresh is not None:
             result["data_refresh"] = data_refresh

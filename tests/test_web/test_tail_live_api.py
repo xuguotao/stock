@@ -6,6 +6,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from src.strategy.scanner import TailSessionSignal
+import src.web.backend.app as app_module
 from src.web.backend.app import create_app
 from src.web.backend.tail_live import TailLiveSelectionRequest, _apply_model_scores, _final_trade_candidates, _ranked_signal_rows, run_tail_live_selection
 
@@ -356,6 +357,67 @@ def test_tail_live_selection_model_mode_degrades_to_rule_without_scorer() -> Non
 
     assert result["diagnostics"]["effective_strategy_mode"] == "rule"
     assert result["diagnostics"]["model_status"] == "no_promoted_model"
+
+
+def test_tail_live_selection_job_passes_promoted_model_scorer(monkeypatch, tmp_path) -> None:
+    model_dir = tmp_path / "models" / "tail-v1"
+    model_dir.mkdir(parents=True)
+    (model_dir / "manifest.json").write_text(
+        '{"version":"tail-v1","status":"promoted","created_at":"2026-06-25T10:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    (model_dir / "model.joblib").write_text("stub", encoding="utf-8")
+    loaded_paths: list[str] = []
+
+    class FakeSignalRepository:
+        def save_selection_result(self, *, job_id, result):
+            return {"trade_date": result["trade_date"], "signal_count": 0, "selected_count": 0}
+
+        def compute_and_save_outcomes(self, *, signal_date, symbols):
+            return {"signal_date": signal_date.isoformat(), "outcome_count": 0, "missing_symbols": symbols}
+
+    class FakeScorer:
+        def __init__(self, model_path):
+            loaded_paths.append(str(model_path))
+
+    def fake_tail_runner(payload: TailLiveSelectionRequest, progress=None, *, model_scorer=None) -> dict[str, Any]:
+        assert payload.strategy_mode == "hybrid"
+        assert isinstance(model_scorer, FakeScorer)
+        return {
+            "trade_date": payload.trade_date.isoformat(),
+            "scanned_count": 1,
+            "candidate_count": 0,
+            "confirmed_count": 0,
+            "selected_count": 0,
+            "selections": [],
+            "files": {"json": "x", "csv": "x", "report": "x"},
+            "market_breadth": None,
+            "diagnostics": {"strategy_mode": payload.strategy_mode},
+        }
+
+    monkeypatch.setattr(app_module, "TailModelInference", FakeScorer)
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        run_jobs_inline=True,
+        tail_live_runner=fake_tail_runner,
+        tail_signal_repository=FakeSignalRepository(),
+        tail_model_root=tmp_path / "models",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/tail-session/live-selection",
+        json={
+            "trade_date": "2026-06-12",
+            "symbols": ["000001.SZ"],
+            "ignore_session": True,
+            "auto_sync_minute5": False,
+            "strategy_mode": "hybrid",
+        },
+    )
+
+    assert response.status_code == 200
+    assert loaded_paths == [str(model_dir / "model.joblib")]
 
 
 def test_tail_live_selection_job_defaults_to_snapshot_refresh_before_scanning(tmp_path) -> None:
