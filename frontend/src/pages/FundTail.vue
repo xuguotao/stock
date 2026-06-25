@@ -5,7 +5,7 @@
       <div class="toolbar">
         <el-date-picker v-model="tradeDate" type="date" value-format="YYYY-MM-DD" />
         <el-button :loading="submitting" type="primary" @click="runAdvice">刷新行情并生成建议</el-button>
-        <el-button :loading="loading" @click="loadAll">刷新页面</el-button>
+        <el-button :loading="loading" @click="refreshVisibleData">刷新页面</el-button>
       </div>
     </div>
 
@@ -565,26 +565,57 @@ const jobProgressStatus = computed(() => {
 async function loadAll() {
   loading.value = true
   try {
-    const [universeResponse, watchlistResponse, reportResponse, opportunityResponse] = await Promise.all([
+    const results = await Promise.allSettled([
       api.listFundTailUniverse(),
       api.listFundTailWatchlist(),
       api.getFundTailReport(),
       api.getFundTailOpportunities()
     ])
-    universe.value = universeResponse.items
-    watchlist.value = watchlistResponse.items
-    opportunityReport.value = opportunityResponse
-    report.value = {
-      ...reportResponse,
-      data_refreshed: reportResponse.data_refreshed ?? false,
-      proxy_refresh: reportResponse.proxy_refresh ?? null,
-      data_status: reportResponse.data_status ?? universeResponse.items
-    }
+    applyLoadResult(results)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载基金尾盘数据失败')
   } finally {
     loading.value = false
   }
+}
+
+function applyLoadResult(results: PromiseSettledResult<unknown>[]) {
+  const [universeResult, watchlistResult, reportResult, opportunityResult] = results
+  let failed = 0
+  if (universeResult.status === 'fulfilled') {
+    universe.value = (universeResult.value as { items: FundTailUniverseItem[] }).items
+  } else {
+    failed += 1
+  }
+  if (watchlistResult.status === 'fulfilled') {
+    watchlist.value = (watchlistResult.value as { items: FundWatchlistItem[] }).items
+  } else {
+    failed += 1
+  }
+  if (reportResult.status === 'fulfilled') {
+    const reportResponse = reportResult.value as FundTailReportResponse
+    report.value = {
+      ...reportResponse,
+      data_refreshed: reportResponse.data_refreshed ?? false,
+      proxy_refresh: reportResponse.proxy_refresh ?? null,
+      data_status: reportResponse.data_status ?? universe.value
+    }
+  } else {
+    failed += 1
+  }
+  if (opportunityResult.status === 'fulfilled') {
+    opportunityReport.value = opportunityResult.value as FundTailOpportunityResponse
+  } else {
+    failed += 1
+  }
+  if (failed > 0) {
+    ElMessage.warning(`基金尾盘部分数据加载失败：${failed} 项`)
+  }
+}
+
+async function refreshVisibleData() {
+  await loadAll()
+  await refreshProxyData(true)
 }
 
 async function refreshProxyData(silent = false) {
@@ -595,7 +626,8 @@ async function refreshProxyData(silent = false) {
     report.value = {
       ...report.value,
       data_refreshed: true,
-      proxy_refresh: response.proxy_refresh
+      proxy_refresh: response.proxy_refresh,
+      data_status: response.universe
     }
     if (!silent) ElMessage.success('基金代理行情已刷新')
   } catch (error) {

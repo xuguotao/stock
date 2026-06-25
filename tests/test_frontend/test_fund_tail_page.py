@@ -129,6 +129,23 @@ def test_fund_tail_page_auto_refreshes_proxy_data_for_trust_status() -> None:
     assert "const dataStatus = computed<FundTailDataStatusItem[]>(() => universe.value.length ? universe.value : report.value.data_status ?? [])" in source
 
 
+def test_fund_tail_page_loads_sections_resiliently() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert "Promise.allSettled" in source
+    assert "applyLoadResult" in source
+    assert "基金尾盘部分数据加载失败" in source
+
+
+def test_fund_tail_page_refresh_button_refreshes_visible_data() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert '@click="refreshVisibleData"' in source
+    assert "async function refreshVisibleData()" in source
+    assert "await loadAll()" in source
+    assert "await refreshProxyData(true)" in source
+
+
 def test_fund_tail_advice_refresh_button_regenerates_advice_without_job_id() -> None:
     source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
 
