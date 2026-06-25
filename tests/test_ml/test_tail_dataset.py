@@ -171,6 +171,23 @@ def test_build_daily_model_feature_context_returns_live_inference_features() -> 
     assert row["relative_ret_5"] == pytest.approx(0.0)
 
 
+def test_build_daily_model_feature_context_adds_industry_relative_features() -> None:
+    base = _daily_fixture().assign(industry="银行")
+    peer_same = _daily_fixture().assign(symbol="000002.SZ", industry="银行")
+    peer_other = _daily_fixture().assign(symbol="000003.SZ", industry="科技")
+    peer_same["close"] = peer_same["close"] * 1.2
+    peer_other["close"] = peer_other["close"] * (1 + pd.Series(range(len(peer_other))) * 0.02)
+    daily = pd.concat([base, peer_same, peer_other], ignore_index=True)
+
+    context = build_daily_model_feature_context(daily, trade_date=date(2026, 2, 9))
+
+    row = context["000001.SZ"]
+    assert row["industry_ret_5"] == pytest.approx(row["daily_ret_5"])
+    assert row["industry_breadth_20"] == pytest.approx(1.0)
+    assert row["industry_relative_ret_5"] == pytest.approx(0.0)
+    assert context["000003.SZ"]["industry_ret_5"] != pytest.approx(row["industry_ret_5"])
+
+
 def test_build_tail_label_frame_uses_next_session_returns_from_entry_price() -> None:
     features = build_tail_feature_frame(
         daily_bars=_daily_fixture(),
@@ -238,7 +255,7 @@ def test_build_tail_ml_samples_from_clickhouse_queries_daily_and_minute5() -> No
             normalized = " ".join(query.lower().split())
             if "from daily_kline" in normalized:
                 return [
-                    (row["symbol"].split(".")[0], row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["amount"])
+                    (row["symbol"].split(".")[0], "银行", row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["amount"])
                     for row in _daily_fixture().to_dict("records")
                 ]
             if "from minute5_kline" in normalized:
@@ -261,6 +278,9 @@ def test_build_tail_ml_samples_from_clickhouse_queries_daily_and_minute5() -> No
     assert len(result.samples) == 1
     assert result.samples.iloc[0]["symbol"] == "000001.SZ"
     assert any("from daily_kline" in query.lower() for query, _params in client.queries)
+    daily_query = next(query for query, _params in client.queries if "from daily_kline" in query.lower())
+    assert "industry" in " ".join(daily_query.lower().split())
+    assert result.samples.iloc[0]["industry_ret_5"] == pytest.approx(result.samples.iloc[0]["daily_ret_5"])
     assert any("from minute5_kline" in query.lower() for query, _params in client.queries)
     minute5_query, minute5_params = next((query, params) for query, params in client.queries if "from minute5_kline" in query.lower())
     normalized_minute5_query = " ".join(minute5_query.lower().split())

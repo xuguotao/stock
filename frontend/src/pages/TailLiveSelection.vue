@@ -1231,6 +1231,11 @@ const modelFeatureLabels: Record<string, string> = {
   market_breadth_20: '市场宽度',
   relative_ret_5: '相对5日',
   relative_ret_20: '相对20日',
+  industry_ret_5: '行业5日',
+  industry_ret_20: '行业20日',
+  industry_breadth_20: '行业宽度',
+  industry_relative_ret_5: '相对行业5日',
+  industry_relative_ret_20: '相对行业20日',
 }
 
 function modelFeatureText(items?: ModelFeatureSnapshot[]) {

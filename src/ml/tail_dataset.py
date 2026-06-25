@@ -107,19 +107,21 @@ def _load_daily_bars(client: Any, *, start: date, end: date, symbols: tuple[str,
     symbol_filter = ""
     if symbols:
         params["symbols"] = symbols
-        symbol_filter = "and symbol in %(symbols)s"
+        symbol_filter = "and d.symbol in %(symbols)s"
     rows = client.execute(
         f"""
-        select symbol, date, open, high, low, close, volume, amount
-        from daily_kline
-        where date >= %(start)s and date <= %(end)s
+        select d.symbol, any(s.industry) as industry, d.date, d.open, d.high, d.low, d.close, d.volume, d.amount
+        from daily_kline d
+        any left join stocks s on d.symbol = s.symbol
+        where d.date >= %(start)s and d.date <= %(end)s
             {symbol_filter}
-            and open > 0 and high > 0 and low > 0 and close > 0 and volume > 0
-        order by symbol, date
+            and d.open > 0 and d.high > 0 and d.low > 0 and d.close > 0 and d.volume > 0
+        group by d.symbol, d.date, d.open, d.high, d.low, d.close, d.volume, d.amount
+        order by d.symbol, d.date
         """,
         params,
     )
-    return _bars_dataframe(rows, date_col="date")
+    return _bars_dataframe(rows, date_col="date", has_industry=True)
 
 
 def _load_minute5_bars(client: Any, *, start: date, end: date, symbols: tuple[str, ...]) -> pd.DataFrame:
@@ -148,8 +150,8 @@ def _load_minute5_bars(client: Any, *, start: date, end: date, symbols: tuple[st
     return _bars_dataframe(rows, date_col="datetime")
 
 
-def _bars_dataframe(rows: list[tuple[Any, ...]], *, date_col: str) -> pd.DataFrame:
-    columns = ["symbol", date_col, "open", "high", "low", "close", "volume", "amount"]
+def _bars_dataframe(rows: list[tuple[Any, ...]], *, date_col: str, has_industry: bool = False) -> pd.DataFrame:
+    columns = ["symbol", "industry", date_col, "open", "high", "low", "close", "volume", "amount"] if has_industry else ["symbol", date_col, "open", "high", "low", "close", "volume", "amount"]
     df = pd.DataFrame(rows, columns=columns)
     if df.empty:
         return df

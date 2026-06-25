@@ -75,6 +75,8 @@ def test_tail_live_selection_page_shows_model_feature_snapshot() -> None:
     assert "模型因子" in source
     assert "feature_snapshot" in source
     assert "modelFeatureText" in source
+    assert "行业5日" in source
+    assert "相对行业5日" in source
 
 
 def test_tail_live_selection_page_shows_executability_fields() -> None:

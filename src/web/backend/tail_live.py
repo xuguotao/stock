@@ -612,12 +612,14 @@ def _live_model_feature_context(
     codes = tuple(_code(symbol) for symbol in symbols)
     rows = client.execute(
         """
-        select symbol, date, open, high, low, close, volume, amount
-        from daily_kline
-        where symbol in %(symbols)s
-            and date >= %(start)s and date <= %(end)s
-            and open > 0 and high > 0 and low > 0 and close > 0 and volume > 0
-        order by symbol, date
+        select d.symbol, any(s.industry) as industry, d.date, d.open, d.high, d.low, d.close, d.volume, d.amount
+        from daily_kline d
+        any left join stocks s on d.symbol = s.symbol
+        where d.symbol in %(symbols)s
+            and d.date >= %(start)s and d.date <= %(end)s
+            and d.open > 0 and d.high > 0 and d.low > 0 and d.close > 0 and d.volume > 0
+        group by d.symbol, d.date, d.open, d.high, d.low, d.close, d.volume, d.amount
+        order by d.symbol, d.date
         """,
         {
             "symbols": codes,
@@ -629,7 +631,7 @@ def _live_model_feature_context(
         return {}
     frame = pd.DataFrame(
         rows,
-        columns=["symbol", "date", "open", "high", "low", "close", "volume", "amount"],
+        columns=["symbol", "industry", "date", "open", "high", "low", "close", "volume", "amount"],
     )
     frame["symbol"] = frame["symbol"].astype(str).map(format_symbol)
     return build_daily_model_feature_context(frame, trade_date=trade_date)

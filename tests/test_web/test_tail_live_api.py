@@ -501,7 +501,7 @@ def test_live_model_feature_context_loads_recent_daily_bars_in_batch() -> None:
         def execute(self, query, params=None):
             self.calls.append((query, params))
             return [
-                (row["symbol"].split(".")[0], row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["amount"])
+                (row["symbol"].split(".")[0], "银行", row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["amount"])
                 for row in _daily_rows_for_live_context()
             ]
 
@@ -525,7 +525,9 @@ def test_live_model_feature_context_loads_recent_daily_bars_in_batch() -> None:
 
     assert context["000001.SZ"]["daily_ret_5"] > 0
     assert context["000001.SZ"]["market_breadth_20"] == 1.0
+    assert context["000001.SZ"]["industry_breadth_20"] == 1.0
     assert len(client.calls) == 1
+    assert "industry" in " ".join(client.calls[0][0].lower().split())
     assert client.calls[0][1]["symbols"] == ("000001",)
 
 
@@ -542,7 +544,7 @@ def test_tail_live_selection_model_mode_passes_live_daily_context(monkeypatch, t
             normalized = " ".join(query.lower().split())
             if "from daily_kline" in normalized:
                 return [
-                    (row["symbol"].split(".")[0], row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["amount"])
+                    (row["symbol"].split(".")[0], "银行", row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["amount"])
                     for row in _daily_rows_for_live_context()
                 ]
             return []

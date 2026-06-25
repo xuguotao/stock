@@ -30,6 +30,11 @@ DEFAULT_FEATURE_COLUMNS = [
     "market_breadth_20",
     "relative_ret_5",
     "relative_ret_20",
+    "industry_ret_5",
+    "industry_ret_20",
+    "industry_breadth_20",
+    "industry_relative_ret_5",
+    "industry_relative_ret_20",
 ]
 
 
