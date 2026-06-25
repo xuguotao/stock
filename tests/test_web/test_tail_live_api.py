@@ -281,6 +281,71 @@ def test_tail_live_selection_job_defaults_to_snapshot_refresh_before_scanning(tm
     assert job["result"]["persistence"]["signals"]["signal_count"] == 0
 
 
+def test_tail_live_selection_auto_mode_skips_snapshot_refresh_when_fresh(monkeypatch, tmp_path) -> None:
+    snapshot_calls: list[dict[str, Any]] = []
+
+    class FakeSignalRepository:
+        def save_selection_result(self, *, job_id, result):
+            return {"trade_date": result["trade_date"], "signal_count": 0, "selected_count": 0}
+
+        def compute_and_save_outcomes(self, *, signal_date, symbols):
+            return {"signal_date": signal_date.isoformat(), "outcome_count": 0, "missing_symbols": symbols}
+
+    def fake_snapshot_runner(**kwargs):
+        snapshot_calls.append(kwargs)
+        return {"inserted_rows": 2}
+
+    def fake_tail_runner(payload: TailLiveSelectionRequest, progress=None) -> dict[str, Any]:
+        return {
+            "trade_date": payload.trade_date.isoformat(),
+            "scanned_count": 2,
+            "candidate_count": 0,
+            "confirmed_count": 0,
+            "selected_count": 0,
+            "selections": [],
+            "files": {"json": "x", "csv": "x", "report": "x"},
+            "market_breadth": None,
+            "diagnostics": {},
+        }
+
+    monkeypatch.setattr(
+        "src.web.backend.app._fresh_quote_snapshot_available",
+        lambda **kwargs: {
+            "fresh": True,
+            "latest_snapshot_at": "2026-06-12 14:45:01",
+            "covered_symbols": 2,
+            "expected_symbols": 2,
+            "age_seconds": 8.0,
+        },
+    )
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=tmp_path / "stock.db",
+        run_jobs_inline=True,
+        quote_snapshot_sync_runner=fake_snapshot_runner,
+        tail_live_runner=fake_tail_runner,
+        tail_signal_repository=FakeSignalRepository(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/tail-session/live-selection",
+        json={
+            "trade_date": "2026-06-12",
+            "symbols": ["000001.SZ", "600519.SH"],
+            "ignore_session": True,
+        },
+    )
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+
+    assert response.status_code == 200
+    assert snapshot_calls == []
+    assert job["status"] == "success"
+    assert job["result"]["data_refresh"]["skipped"] is True
+    assert job["result"]["data_refresh"]["skip_reason"] == "fresh_quote_snapshot"
+    assert job["result"]["diagnostics"]["quote_snapshot_sync"]["skipped"] is True
+
+
 def test_tail_live_selection_job_can_force_standard_minute5_refresh(tmp_path) -> None:
     minute5_calls: list[dict[str, Any]] = []
     snapshot_calls: list[dict[str, Any]] = []

@@ -193,7 +193,7 @@ class ClickHouseStockDataSource(DataSourceBase):
         )
 
     def fetch_realtime_quotes(self, symbols: list[str]) -> pd.DataFrame:
-        return pd.DataFrame()
+        return self.fetch_latest_quote_snapshots(symbols, date.today())
 
     def fetch_latest_quote_snapshots(
         self,

@@ -220,6 +220,18 @@ def test_clickhouse_source_reads_latest_quote_snapshots() -> None:
     assert str(result["quote_time"].iloc[0]) == "2026-06-15 14:57:55"
 
 
+def test_clickhouse_source_uses_latest_snapshots_for_realtime_quotes() -> None:
+    client = FakeClickHouseClient()
+    source = ClickHouseStockDataSource(client=client)
+
+    result = source.fetch_realtime_quotes(["000001.SZ"])
+
+    assert any("from stock_quote_snapshots" in query.lower() for query, _params in client.calls)
+    assert result["symbol"].tolist() == ["000001.SZ"]
+    assert result["price"].tolist() == [10.8]
+    assert result["limit_up"].tolist() == [11.88]
+
+
 def test_clickhouse_source_ranks_liquid_symbols() -> None:
     client = FakeClickHouseClient()
     source = ClickHouseStockDataSource(client=client)

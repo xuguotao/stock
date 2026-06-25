@@ -13,12 +13,14 @@ from pydantic import BaseModel, Field
 
 from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_kline
 from src.data.clickhouse_quote_snapshot_sync import sync_clickhouse_quote_snapshots
+from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.clickhouse_table_maintenance import optimize_quote_snapshot_rollups
 from src.data.clickhouse_daily_sync import sync_clickhouse_daily_from_minute5, sync_clickhouse_index_daily
 from src.data.fund_tail_market_data import refresh_fund_tail_proxy_quotes
 from src.data.clickhouse_research_dataset import build_clickhouse_research_dataset
 from src.data.fund_tail_repository import ClickHouseFundTailRepository
 from src.data.tail_signal_repository import ClickHouseTailSignalRepository
+from src.core.constants import format_symbol
 from src.ml.tail_dataset_audit import audit_tail_ml_data
 from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
@@ -911,18 +913,40 @@ def _run_tail_live_selection_job(
         data_refresh_kind = None
         refresh_mode = _effective_tail_data_refresh_mode(payload)
         if refresh_mode == "snapshot":
-            store.update_job(job_id, status="running", progress=_progress(10, "quote_snapshot_sync", "快速刷新行情快照和5m聚合"))
+            data_refresh_kind = "quote_snapshot_sync"
             stage_started = perf_counter()
-            data_refresh = quote_snapshot_runner(
-                limit=0,
-                include_st=False,
-                progress=lambda percent, stage, message: store.update_job(
+            freshness = (
+                _fresh_quote_snapshot_available(
+                    trade_date=payload.trade_date,
+                    symbols=payload.symbols,
+                    limit=payload.limit,
+                )
+                if payload.data_refresh_mode == "auto"
+                else {"fresh": False, "reason": "forced_snapshot_refresh"}
+            )
+            if freshness.get("fresh"):
+                data_refresh = {
+                    "skipped": True,
+                    "skip_reason": "fresh_quote_snapshot",
+                    "message": "已有足够新鲜的行情快照，跳过重复刷新",
+                    **freshness,
+                }
+                store.update_job(
                     job_id,
                     status="running",
-                    progress=_progress(10 + int(percent * 0.25), stage, message),
-                ),
-            )
-            data_refresh_kind = "quote_snapshot_sync"
+                    progress=_progress(35, "quote_snapshot_fresh", "行情快照足够新鲜，跳过重复刷新"),
+                )
+            else:
+                store.update_job(job_id, status="running", progress=_progress(10, "quote_snapshot_sync", "快速刷新行情快照和5m聚合"))
+                data_refresh = quote_snapshot_runner(
+                    limit=0,
+                    include_st=False,
+                    progress=lambda percent, stage, message: store.update_job(
+                        job_id,
+                        status="running",
+                        progress=_progress(10 + int(percent * 0.25), stage, message),
+                    ),
+                )
             stage_timings["quote_snapshot_sync"] = _elapsed(stage_started)
         elif refresh_mode == "standard_minute5":
             store.update_job(job_id, status="running", progress=_progress(10, "minute5_sync", "先补齐当前 5m 分钟线"))
@@ -985,6 +1009,83 @@ def _effective_tail_data_refresh_mode(payload: TailLiveSelectionRequest) -> str:
     return "snapshot" if payload.auto_sync_minute5 else "none"
 
 
+def _fresh_quote_snapshot_available(
+    *,
+    trade_date: date,
+    symbols: list[str] | None,
+    limit: int,
+    max_age_seconds: int = 45,
+    min_all_market_symbols: int = 4500,
+) -> dict[str, Any]:
+    if trade_date != date.today():
+        return {"fresh": False, "reason": "not_today"}
+    expected_symbols = len(symbols or [])
+    if expected_symbols == 0:
+        expected_symbols = limit if limit > 0 else min_all_market_symbols
+    if expected_symbols <= 0:
+        return {"fresh": False, "reason": "empty_expected_symbols"}
+    try:
+        client = ClickHouseStockDataSource()._client_instance()
+        normalized_symbols = tuple(format_symbol(symbol) for symbol in symbols or [])
+        latest = _latest_quote_snapshot_at(client, trade_date=trade_date, symbols=normalized_symbols)
+        if latest is None:
+            return {"fresh": False, "reason": "missing_snapshot"}
+        covered = _quote_snapshot_batch_coverage(client, snapshot_at=latest, symbols=normalized_symbols)
+    except Exception as exc:  # noqa: BLE001 - stale check should not block a manual refresh fallback.
+        return {"fresh": False, "reason": "freshness_check_failed", "error": str(exc)}
+
+    age_seconds = max(0.0, (datetime.now() - latest).total_seconds())
+    required = max(1, int(expected_symbols * 0.95))
+    fresh = covered >= required and age_seconds <= max_age_seconds
+    reason = "fresh" if fresh else "stale_or_incomplete_snapshot"
+    return {
+        "fresh": fresh,
+        "reason": reason,
+        "latest_snapshot_at": latest.isoformat(sep=" ", timespec="seconds"),
+        "covered_symbols": covered,
+        "expected_symbols": expected_symbols,
+        "required_symbols": required,
+        "age_seconds": round(age_seconds, 3),
+        "max_age_seconds": max_age_seconds,
+    }
+
+
+def _latest_quote_snapshot_at(client: Any, *, trade_date: date, symbols: tuple[str, ...]) -> datetime | None:
+    symbol_filter = "and symbol in %(symbols)s" if symbols else ""
+    params: dict[str, Any] = {"trade_date": trade_date}
+    if symbols:
+        params["symbols"] = symbols
+    rows = client.execute(
+        f"""
+        select max(snapshot_at)
+        from stock_quote_snapshots
+        where toDate(snapshot_at) = %(trade_date)s
+        {symbol_filter}
+        """,
+        params,
+    )
+    if not rows or rows[0][0] is None:
+        return None
+    return rows[0][0] if isinstance(rows[0][0], datetime) else datetime.fromisoformat(str(rows[0][0]))
+
+
+def _quote_snapshot_batch_coverage(client: Any, *, snapshot_at: datetime, symbols: tuple[str, ...]) -> int:
+    symbol_filter = "and symbol in %(symbols)s" if symbols else ""
+    params: dict[str, Any] = {"snapshot_at": snapshot_at}
+    if symbols:
+        params["symbols"] = symbols
+    rows = client.execute(
+        f"""
+        select countDistinct(symbol)
+        from stock_quote_snapshots
+        where snapshot_at = %(snapshot_at)s
+        {symbol_filter}
+        """,
+        params,
+    )
+    return int(rows[0][0] or 0) if rows else 0
+
+
 def _minute5_sync_diagnostic(sync_result: dict[str, Any]) -> dict[str, Any]:
     return {
         "trade_date": sync_result.get("trade_date"),
@@ -1000,9 +1101,13 @@ def _minute5_sync_diagnostic(sync_result: dict[str, Any]) -> dict[str, Any]:
 
 def _quote_snapshot_sync_diagnostic(sync_result: dict[str, Any]) -> dict[str, Any]:
     return {
+        "skipped": bool(sync_result.get("skipped", False)),
+        "skip_reason": sync_result.get("skip_reason"),
         "target_symbols": sync_result.get("target_symbols", sync_result.get("requested_symbols", 0)),
+        "covered_symbols": sync_result.get("covered_symbols"),
+        "expected_symbols": sync_result.get("expected_symbols"),
+        "age_seconds": sync_result.get("age_seconds"),
         "inserted_rows": sync_result.get("inserted_rows", sync_result.get("inserted", 0)),
-        "skipped": sync_result.get("skipped", 0),
         "failed": sync_result.get("failed", 0),
         "latest_snapshot_at": sync_result.get("latest_snapshot_at"),
         "latest_bucket": sync_result.get("latest_bucket"),
