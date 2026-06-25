@@ -137,6 +137,15 @@ def test_fund_tail_page_loads_sections_resiliently() -> None:
     assert "基金尾盘部分数据加载失败" in source
 
 
+def test_fund_tail_page_keeps_visible_load_error_instead_of_silent_zero_state() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert "loadError" in source
+    assert "v-if=\"loadError\"" in source
+    assert "基金尾盘数据加载异常" in source
+    assert "loadError.value =" in source
+
+
 def test_fund_tail_page_refresh_button_refreshes_visible_data() -> None:
     source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
 

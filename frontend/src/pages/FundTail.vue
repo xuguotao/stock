@@ -9,6 +9,15 @@
       </div>
     </div>
 
+    <el-alert
+      v-if="loadError"
+      :title="loadError"
+      type="error"
+      show-icon
+      :closable="false"
+      class="compact-alert"
+    />
+
     <div class="metric-grid">
       <div class="metric-card">
         <div class="metric-label">基金池</div>
@@ -469,6 +478,7 @@ import { api, type FundTailDataStatusItem, type FundTailOpportunityResponse, typ
 
 const loading = ref(false)
 const submitting = ref(false)
+const loadError = ref('')
 const universe = ref<FundTailUniverseItem[]>([])
 const watchlist = ref<FundWatchlistItem[]>([])
 const watchlistStatusFilter = ref('all')
@@ -564,6 +574,7 @@ const jobProgressStatus = computed(() => {
 
 async function loadAll() {
   loading.value = true
+  loadError.value = ''
   try {
     const results = await Promise.allSettled([
       api.listFundTailUniverse(),
@@ -573,7 +584,8 @@ async function loadAll() {
     ])
     applyLoadResult(results)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载基金尾盘数据失败')
+    loadError.value = error instanceof Error ? error.message : '基金尾盘数据加载异常'
+    ElMessage.error(loadError.value)
   } finally {
     loading.value = false
   }
@@ -609,6 +621,7 @@ function applyLoadResult(results: PromiseSettledResult<unknown>[]) {
     failed += 1
   }
   if (failed > 0) {
+    loadError.value = `基金尾盘数据加载异常：${failed} 项接口失败，请检查后端服务或稍后刷新`
     ElMessage.warning(`基金尾盘部分数据加载失败：${failed} 项`)
   }
 }

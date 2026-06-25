@@ -298,7 +298,7 @@ def create_app(
     )
 
     @app.get("/api/health")
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.post("/api/jobs")
