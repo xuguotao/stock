@@ -326,6 +326,74 @@ class ClickHouseTailSignalRepository:
             "details": details,
         }
 
+    def historical_calibration_for_signal(
+        self,
+        *,
+        v2_score: float | None,
+        volume_ratio: float | None,
+        tail_return: float | None,
+        start: date | None = None,
+        end: date | None = None,
+        min_samples: int = 10,
+    ) -> dict[str, Any]:
+        """Return historical outcome stats for signals in the same quality buckets."""
+        self.ensure_tables()
+        confidence_bucket = _confidence_bucket(_float_or_none(v2_score))
+        volume_ratio_bucket = _volume_ratio_bucket(_float_or_none(volume_ratio))
+        tail_return_bucket = _tail_return_bucket(_float_or_none(tail_return))
+        params = {
+            "start": start or date(1970, 1, 1),
+            "end": end or date(2999, 12, 31),
+            "confidence_bucket": confidence_bucket,
+            "volume_ratio_bucket": volume_ratio_bucket,
+            "tail_return_bucket": tail_return_bucket,
+        }
+        rows = self.client.execute(
+            f"""
+            -- historical_calibration_for_signal
+            select
+                count(),
+                countIf(o.close_return > 0),
+                countIf(o.open_return > 0),
+                countIf(o.max_return > 0),
+                avg(o.open_return),
+                avg(o.close_return),
+                avg(o.max_return),
+                avg(o.min_return)
+            from {_deduped_signal_source()} s
+            inner join tail_signal_outcomes o
+                on s.trade_date = o.signal_date and s.symbol = o.symbol
+            where {_stats_date_filter()}
+                and s.status = 'selected'
+                and {_confidence_bucket_expr()} = %(confidence_bucket)s
+                and {_volume_ratio_bucket_expr()} = %(volume_ratio_bucket)s
+                and {_tail_return_bucket_expr()} = %(tail_return_bucket)s
+            """,
+            params,
+        )
+        row = rows[0] if rows else None
+        sample_count = int((row or [0])[0] or 0)
+        result = {
+            "status": "ready" if sample_count >= min_samples else "样本不足",
+            "sample_count": sample_count,
+            "confidence_bucket": confidence_bucket,
+            "volume_ratio_bucket": volume_ratio_bucket,
+            "tail_return_bucket": tail_return_bucket,
+            "close_win_rate": _ratio(row[1], sample_count) if row else 0.0,
+            "open_win_rate": _ratio(row[2], sample_count) if row else 0.0,
+            "max_win_rate": _ratio(row[3], sample_count) if row else 0.0,
+            "avg_open_return": _safe_float(row[4]) if row else 0.0,
+            "avg_close_return": _safe_float(row[5]) if row else 0.0,
+            "avg_max_return": _safe_float(row[6]) if row else 0.0,
+            "avg_min_return": _safe_float(row[7]) if row else 0.0,
+        }
+        result["note"] = (
+            "基于历史相同可信度/量比/尾盘涨幅分桶统计。"
+            if sample_count >= min_samples
+            else "历史相同分桶样本不足，不能给出可靠胜率。"
+        )
+        return result
+
     def _overall_rows(self, params: dict[str, date], status: str | None = None) -> list[tuple[Any, ...]]:
         status_filter = f"and s.status = '{status}'" if status else ""
         return self.client.execute(
@@ -792,6 +860,61 @@ def _confidence_bucket(v2_score: float | None) -> str:
     return "低可信"
 
 
+def _volume_ratio_bucket(volume_ratio: float | None) -> str:
+    if volume_ratio is None or volume_ratio <= 0:
+        return "无量比"
+    if volume_ratio >= 2:
+        return "放量确认"
+    if volume_ratio >= 1.2:
+        return "量能一般"
+    return "量能不足"
+
+
+def _tail_return_bucket(tail_return: float | None) -> str:
+    if tail_return is None:
+        return "尾盘震荡"
+    if tail_return >= 0.015:
+        return "尾盘强拉"
+    if tail_return >= 0.003:
+        return "温和走强"
+    if tail_return > -0.003:
+        return "尾盘震荡"
+    return "尾盘转弱"
+
+
+def _confidence_bucket_expr() -> str:
+    return """
+    multiIf(
+        s.v2_score >= 85, '高可信',
+        s.v2_score >= 70, '中可信',
+        s.v2_score > 0, '低可信',
+        '未评分'
+    )
+    """
+
+
+def _volume_ratio_bucket_expr() -> str:
+    return """
+    multiIf(
+        s.volume_ratio >= 2, '放量确认',
+        s.volume_ratio >= 1.2, '量能一般',
+        s.volume_ratio > 0, '量能不足',
+        '无量比'
+    )
+    """
+
+
+def _tail_return_bucket_expr() -> str:
+    return """
+    multiIf(
+        s.tail_return >= 0.015, '尾盘强拉',
+        s.tail_return >= 0.003, '温和走强',
+        s.tail_return > -0.003, '尾盘震荡',
+        '尾盘转弱'
+    )
+    """
+
+
 def _execution_label(*, review_status: str, open_return: float, max_return: float, close_return: float) -> str:
     if review_status != "completed":
         return "待验证"
@@ -848,6 +971,10 @@ def _first_positive(*values: Any) -> float:
         if number > 0:
             return number
     return 0.0
+
+
+def _ratio(numerator: Any, denominator: int) -> float:
+    return (int(numerator or 0) / denominator) if denominator else 0.0
 
 
 def _safe_float(value: Any) -> float:

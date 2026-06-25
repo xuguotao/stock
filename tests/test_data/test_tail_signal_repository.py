@@ -44,6 +44,8 @@ class FakeClickHouseClient:
                 ("selection", 10, 6, 7, 9, 0.01, 0.02, 0.05, -0.015),
                 ("preview", 4, 1, 1, 2, -0.005, -0.01, 0.02, -0.03),
             ]
+        if "historical_calibration_for_signal" in normalized:
+            return [(12, 8, 7, 10, 0.012, 0.018, 0.041, -0.014)]
         if "confidence_bucket" in normalized:
             return [
                 ("高可信", 6, 5, 5, 6, 0.018, 0.026, 0.055, -0.01),
@@ -319,6 +321,33 @@ def test_signal_stats_returns_overall_and_grouped_metrics() -> None:
     assert result["details"][0]["confidence_bucket"] == "中可信"
     assert result["details"][0]["execution_label"] == "开盘可盈利"
     assert result["details"][0]["risk_label"] == "低回撤"
+
+
+def test_historical_calibration_for_signal_returns_bucket_performance() -> None:
+    repo = ClickHouseTailSignalRepository(client=FakeClickHouseClient())
+
+    result = repo.historical_calibration_for_signal(
+        v2_score=88.0,
+        volume_ratio=2.2,
+        tail_return=0.018,
+        min_samples=5,
+    )
+
+    assert result == {
+        "status": "ready",
+        "sample_count": 12,
+        "confidence_bucket": "高可信",
+        "volume_ratio_bucket": "放量确认",
+        "tail_return_bucket": "尾盘强拉",
+        "close_win_rate": pytest.approx(8 / 12),
+        "open_win_rate": pytest.approx(7 / 12),
+        "max_win_rate": pytest.approx(10 / 12),
+        "avg_open_return": 0.012,
+        "avg_close_return": 0.018,
+        "avg_max_return": 0.041,
+        "avg_min_return": -0.014,
+        "note": "基于历史相同可信度/量比/尾盘涨幅分桶统计。",
+    }
 
 
 def test_pending_selected_signal_dates_returns_missing_outcome_dates() -> None:

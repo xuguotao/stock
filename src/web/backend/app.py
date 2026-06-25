@@ -997,6 +997,9 @@ def _run_tail_live_selection_job(
             diagnostics = result.setdefault("diagnostics", {})
             diagnostics["data_refresh_mode"] = payload.data_refresh_mode
             diagnostics["effective_data_refresh_mode"] = refresh_mode
+        stage_started = perf_counter()
+        _apply_tail_historical_calibration(signal_repository, result)
+        stage_timings["historical_calibration"] = _elapsed(stage_started)
         result["stage_timings"] = {**stage_timings, **(result.get("stage_timings") or {})}
         stage_started = perf_counter()
         result["persistence"] = _persist_tail_signal_result(signal_repository, job_id, result)
@@ -1135,6 +1138,51 @@ def _persist_tail_signal_result(signal_repository, job_id: str, result: dict[str
         symbols=symbols,
     )
     return {"signals": signals, "outcomes": outcomes}
+
+
+def _apply_tail_historical_calibration(signal_repository, result: dict[str, Any]) -> None:
+    calibrate = getattr(signal_repository, "historical_calibration_for_signal", None)
+    if not callable(calibrate):
+        return
+
+    cache: dict[tuple[float | None, float | None, float | None], dict[str, Any]] = {}
+    for section in ("ranked_signals", "selections", "preview_signals", "watchlist_signals", "weak_signals"):
+        rows = result.get(section)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            credibility = row.get("credibility")
+            if not isinstance(credibility, dict):
+                continue
+            v2_score = _number_or_none(row.get("v2_score") or credibility.get("score"))
+            volume_ratio = _number_or_none(row.get("volume_ratio"))
+            tail_return = _number_or_none(row.get("tail_return"))
+            key = (v2_score, volume_ratio, tail_return)
+            if key not in cache:
+                try:
+                    cache[key] = calibrate(
+                        v2_score=v2_score,
+                        volume_ratio=volume_ratio,
+                        tail_return=tail_return,
+                    )
+                except Exception as exc:
+                    cache[key] = {
+                        "status": "校准失败",
+                        "sample_count": 0,
+                        "note": f"历史校准查询失败：{exc}",
+                    }
+            credibility["history"] = cache[key]
+
+
+def _number_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _run_stock_db_sync_job(

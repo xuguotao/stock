@@ -101,6 +101,78 @@ def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
     assert repository.outcomes[0][1] == ["000001.SZ"]
 
 
+def test_tail_live_selection_api_enriches_signal_credibility_with_historical_calibration(tmp_path) -> None:
+    class FakeSignalRepository:
+        def historical_calibration_for_signal(self, *, v2_score, volume_ratio, tail_return):
+            return {
+                "status": "ready",
+                "sample_count": 12,
+                "confidence_bucket": "高可信",
+                "volume_ratio_bucket": "放量确认",
+                "tail_return_bucket": "尾盘强拉",
+                "close_win_rate": 0.67,
+                "avg_close_return": 0.018,
+            }
+
+        def save_selection_result(self, *, job_id, result):
+            return {"trade_date": result["trade_date"], "signal_count": 1, "selected_count": 1}
+
+        def compute_and_save_outcomes(self, *, signal_date, symbols):
+            return {"signal_date": signal_date.isoformat(), "outcome_count": 0, "missing_symbols": symbols}
+
+    def fake_runner(payload: TailLiveSelectionRequest, progress=None) -> dict[str, Any]:
+        row = {
+            "symbol": "000001.SZ",
+            "trade_date": payload.trade_date.isoformat(),
+            "strength": 0.9,
+            "last_price": 10.5,
+            "volume_ratio": 2.2,
+            "tail_return": 0.018,
+            "v2_score": 88.0,
+            "credibility": {"score": 87.0, "history": {"status": "样本不足", "sample_count": 0}},
+        }
+        return {
+            "trade_date": payload.trade_date.isoformat(),
+            "scanned_count": 1,
+            "candidate_count": 1,
+            "confirmed_count": 1,
+            "selected_count": 1,
+            "ranked_signals": [dict(row)],
+            "selections": [dict(row)],
+            "files": {"json": "x", "csv": "x", "report": "x"},
+            "market_breadth": None,
+            "diagnostics": {},
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        run_jobs_inline=True,
+        tail_live_runner=fake_runner,
+        tail_signal_repository=FakeSignalRepository(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/tail-session/live-selection",
+        json={
+            "trade_date": "2026-06-12",
+            "symbols": ["000001.SZ"],
+            "ignore_session": True,
+            "auto_sync_minute5": False,
+        },
+    )
+
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+
+    assert response.status_code == 200
+    ranked_history = job["result"]["ranked_signals"][0]["credibility"]["history"]
+    selected_history = job["result"]["selections"][0]["credibility"]["history"]
+    assert ranked_history["status"] == "ready"
+    assert ranked_history["sample_count"] == 12
+    assert ranked_history["close_win_rate"] == 0.67
+    assert selected_history == ranked_history
+
+
 def test_tail_signal_stats_api_returns_repository_metrics(tmp_path) -> None:
     class FakeSignalRepository:
         def signal_stats(self, *, start=None, end=None):
