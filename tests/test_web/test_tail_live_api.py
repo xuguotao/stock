@@ -282,9 +282,37 @@ def test_tail_live_selection_defaults_to_expanded_scan_pool() -> None:
 
     assert request.limit == 0
     assert request.universe == "default"
+    assert request.strategy_mode == "rule"
     assert request.auto_sync_minute5 is True
     assert request.liquidity_min_bars == 60
     assert request.top_n == 2
+
+
+def test_tail_live_selection_preserves_requested_strategy_mode(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeAggregator:
+        def get_csi300_symbols(self):
+            return []
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            strategy_mode="hybrid",
+            ignore_session=True,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["diagnostics"]["strategy_mode"] == "hybrid"
 
 
 def test_tail_live_selection_job_defaults_to_snapshot_refresh_before_scanning(tmp_path) -> None:

@@ -633,6 +633,7 @@ export interface TailLiveSelectionPayload {
   ignore_session: boolean
   auto_sync_minute5?: boolean
   data_refresh_mode?: 'auto' | 'snapshot' | 'standard_minute5' | 'none'
+  strategy_mode?: 'rule' | 'model' | 'hybrid'
   output_dir: string
 }
 

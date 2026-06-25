@@ -50,6 +50,7 @@ class TailLiveSelectionRequest(BaseModel):
     ignore_session: bool = False
     auto_sync_minute5: bool = True
     data_refresh_mode: Literal["auto", "snapshot", "standard_minute5", "none"] = "auto"
+    strategy_mode: Literal["rule", "model", "hybrid"] = "rule"
     output_dir: str = "reports/tail_session"
 
 
@@ -219,6 +220,7 @@ def _write_live_selection_result(
         breadth_result=breadth_result,
         blocked_by_market_breadth=blocked_by_market_breadth,
         requested_scan_limit=request.limit,
+        strategy_mode=request.strategy_mode,
         scan_as_of_time=scan_as_of_time,
         data_freshness=data_freshness,
         quote_status=quote_status,
@@ -883,6 +885,7 @@ def _diagnostics(
     breadth_result: Any | None,
     blocked_by_market_breadth: bool,
     requested_scan_limit: int,
+    strategy_mode: str,
     scan_as_of_time: time | None,
     data_freshness: dict[str, Any] | None = None,
     quote_status: dict[str, Any] | None = None,
@@ -950,6 +953,7 @@ def _diagnostics(
         "blocked_by_market_breadth": blocked_by_market_breadth,
         "market_breadth": _market_breadth_row(breadth_result),
         "requested_scan_limit": requested_scan_limit,
+        "strategy_mode": strategy_mode,
         "resolved_scan_count": len(symbols),
         "data_freshness": data_freshness or {},
         "quote_status": quote_status or {},

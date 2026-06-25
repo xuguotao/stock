@@ -100,6 +100,15 @@
             </el-form-item>
           </el-col>
           <el-col :span="6">
+            <el-form-item label="策略模式">
+              <el-select v-model="form.strategy_mode">
+                <el-option label="规则优先" value="rule" />
+                <el-option label="模型排序" value="model" />
+                <el-option label="混合模式" value="hybrid" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="6">
             <el-form-item label="输出目录">
               <el-input v-model="form.output_dir" />
             </el-form-item>
@@ -715,6 +724,7 @@ interface TailLiveResult {
     }
     data_refresh_mode?: 'auto' | 'snapshot' | 'standard_minute5' | 'none'
     effective_data_refresh_mode?: 'snapshot' | 'standard_minute5' | 'none'
+    strategy_mode?: 'rule' | 'model' | 'hybrid'
     quote_snapshot_sync?: {
       target_symbols?: number
       inserted_rows?: number
@@ -753,6 +763,7 @@ const form = ref<TailLiveSelectionPayload>({
   ignore_session: false,
   auto_sync_minute5: true,
   data_refresh_mode: 'auto',
+  strategy_mode: 'rule',
   output_dir: 'reports/tail_session'
 })
 

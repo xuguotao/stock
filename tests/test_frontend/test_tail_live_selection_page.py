@@ -18,10 +18,16 @@ def test_tail_live_selection_page_defaults_to_full_market_and_fast_refresh_mode(
     assert "limit: 0" in source
     assert "universe: 'default'" in source
     assert "data_refresh_mode: 'auto'" in source
+    assert "strategy_mode: 'rule'" in source
+    assert "策略模式" in source
+    assert "规则优先" in source
+    assert "模型排序" in source
+    assert "混合模式" in source
     assert "数据刷新模式" in source
     assert "快照优先" in source
     assert "standard_minute5" in source
     assert "data_refresh_mode?: 'auto' | 'snapshot' | 'standard_minute5' | 'none'" in client
+    assert "strategy_mode?: 'rule' | 'model' | 'hybrid'" in client
     assert "全市场非ST" in source
     assert "抽样分钟" in source
 
