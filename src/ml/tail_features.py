@@ -23,9 +23,17 @@ def build_tail_feature_frame(
     daily = _prepare_daily(daily_bars)
     minute5 = _prepare_minute5(minute5_bars)
     decision_values = sorted(_time_label(value) for value in decision_times)
+    daily_by_symbol = {
+        symbol: symbol_daily.reset_index(drop=True)
+        for symbol, symbol_daily in daily.groupby("symbol", sort=True)
+    }
     rows = []
     for (symbol, trade_date), day_bars in minute5.groupby(["symbol", "trade_date"], sort=True):
-        prior_daily = daily[(daily["symbol"] == symbol) & (daily["date"] < trade_date)].sort_values("date")
+        symbol_daily = daily_by_symbol.get(symbol)
+        if symbol_daily is None:
+            continue
+        cutoff = int(symbol_daily["date"].searchsorted(trade_date, side="left"))
+        prior_daily = symbol_daily.iloc[:cutoff]
         if len(prior_daily) < 6:
             continue
         day_bars = day_bars.sort_values("datetime")
