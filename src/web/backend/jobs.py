@@ -22,6 +22,8 @@ class JobRecord:
     result: dict[str, Any] | None
     error: str | None
     progress: dict[str, Any]
+    heartbeat_at: str | None
+    health: str
     created_at: str
     updated_at: str
 
@@ -34,6 +36,8 @@ class JobRecord:
             "result": self.result,
             "error": self.error,
             "progress": self.progress,
+            "heartbeat_at": self.heartbeat_at,
+            "health": self.health,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -57,14 +61,16 @@ class JobStore:
             result=None,
             error=None,
             progress=_progress(0, "pending", "等待执行"),
+            heartbeat_at=None,
+            health="pending",
             created_at=now,
             updated_at=now,
         )
         with self._connect() as conn:
             conn.execute(
                 """
-                insert into jobs (id, kind, status, params, result, error, progress, created_at, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                insert into jobs (id, kind, status, params, result, error, progress, heartbeat_at, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job.id,
@@ -74,6 +80,7 @@ class JobStore:
                     None,
                     None,
                     json.dumps(job.progress, ensure_ascii=False),
+                    job.heartbeat_at,
                     job.created_at,
                     job.updated_at,
                 ),
@@ -103,11 +110,17 @@ class JobStore:
         progress: dict[str, Any] | None = None,
     ) -> JobRecord:
         updated_at = _now()
+        heartbeat_at = updated_at if status == "running" else None
         with self._connect() as conn:
             conn.execute(
                 """
                 update jobs
-                set status = ?, result = ?, error = ?, progress = coalesce(?, progress), updated_at = ?
+                set status = ?,
+                    result = ?,
+                    error = ?,
+                    progress = coalesce(?, progress),
+                    heartbeat_at = coalesce(?, heartbeat_at),
+                    updated_at = ?
                 where id = ?
                 """,
                 (
@@ -115,6 +128,7 @@ class JobStore:
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
                     error,
                     json.dumps(progress, ensure_ascii=False) if progress is not None else None,
+                    heartbeat_at,
                     updated_at,
                     job_id,
                 ),
@@ -136,6 +150,7 @@ class JobStore:
                     result = null,
                     error = ?,
                     progress = ?,
+                    heartbeat_at = null,
                     updated_at = ?
                 where status = 'running'
                 """,
@@ -159,6 +174,7 @@ class JobStore:
                     result text,
                     error text,
                     progress text,
+                    heartbeat_at text,
                     created_at text not null,
                     updated_at text not null
                 )
@@ -171,6 +187,8 @@ class JobStore:
                     "update jobs set progress = ? where progress is null",
                     (json.dumps(_progress(0, "unknown", "历史任务未记录进度"), ensure_ascii=False),),
                 )
+            if "heartbeat_at" not in columns:
+                conn.execute("alter table jobs add column heartbeat_at text")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -186,6 +204,11 @@ class JobStore:
             result=json.loads(row["result"]) if row["result"] else None,
             error=row["error"],
             progress=json.loads(row["progress"]) if row["progress"] else _progress(0, "unknown", "未记录进度"),
+            heartbeat_at=row["heartbeat_at"] if "heartbeat_at" in row.keys() else None,
+            health=_job_health(
+                row["status"],
+                row["heartbeat_at"] if "heartbeat_at" in row.keys() else None,
+            ),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -197,3 +220,23 @@ def _now() -> str:
 
 def _progress(percent: int, stage: str, message: str) -> dict[str, Any]:
     return {"percent": percent, "stage": stage, "message": message}
+
+
+def _job_health(status: str, heartbeat_at: str | None, *, stale_after_seconds: int = 180) -> str:
+    if status == "running":
+        if not heartbeat_at:
+            return "stale"
+        try:
+            heartbeat = datetime.fromisoformat(heartbeat_at)
+        except ValueError:
+            return "stale"
+        if (datetime.now() - heartbeat).total_seconds() > stale_after_seconds:
+            return "stale"
+        return "running"
+    if status == "pending":
+        return "pending"
+    if status == "success":
+        return "completed"
+    if status == "failed":
+        return "failed"
+    return status

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+from datetime import datetime, timedelta
+
 from fastapi.testclient import TestClient
 
 from src.web.backend.app import create_app
@@ -17,8 +20,11 @@ def test_jobs_api_creates_and_lists_jobs(tmp_path) -> None:
     assert response.status_code == 200
     assert created["kind"] == "noop"
     assert created["status"] == "pending"
+    assert created["health"] == "pending"
+    assert created["heartbeat_at"] is None
     assert created["progress"] == {"percent": 0, "stage": "pending", "message": "等待执行"}
     assert listed["items"][0]["id"] == created["id"]
+    assert listed["items"][0]["health"] == "pending"
     assert listed["items"][0]["progress"]["percent"] == 0
 
 
@@ -31,6 +37,33 @@ def test_jobs_api_returns_one_job(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["id"] == created["id"]
+
+
+def test_job_store_records_running_heartbeat_and_marks_stale_jobs(tmp_path) -> None:
+    db_path = tmp_path / "jobs.sqlite3"
+    store = JobStore(db_path)
+    job = store.create_job("minute5_sync", {})
+
+    running = store.update_job(
+        job.id,
+        status="running",
+        progress={"percent": 40, "stage": "fetching", "message": "更新分钟线"},
+    )
+
+    assert running.status == "running"
+    assert running.health == "running"
+    assert running.heartbeat_at is not None
+
+    old_heartbeat = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("update jobs set heartbeat_at = ? where id = ?", (old_heartbeat, job.id))
+
+    stale = store.get_job(job.id)
+
+    assert stale is not None
+    assert stale.status == "running"
+    assert stale.health == "stale"
+    assert stale.heartbeat_at == old_heartbeat
 
 
 def test_jobs_api_lists_result_summaries_without_heavy_signal_rows(tmp_path) -> None:

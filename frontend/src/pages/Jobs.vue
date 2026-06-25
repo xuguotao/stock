@@ -22,6 +22,11 @@
             <el-tag :type="statusType(row.status)">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="健康状态" width="120">
+          <template #default="{ row }">
+            <el-tag :type="healthType(row.health)" effect="plain">{{ row.health ?? '-' }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="进度" min-width="220">
           <template #default="{ row }">
             <div class="job-progress-cell">
@@ -36,6 +41,7 @@
         </el-table-column>
         <el-table-column prop="error" label="错误" min-width="220" />
         <el-table-column prop="created_at" label="创建时间" min-width="180" />
+        <el-table-column prop="heartbeat_at" label="心跳时间" min-width="180" />
         <el-table-column prop="updated_at" label="更新时间" min-width="180" />
         <el-table-column label="结果" width="120" fixed="right">
           <template #default="{ row }">
@@ -62,6 +68,9 @@
           <el-descriptions-item label="状态">
             <el-tag :type="statusType(selectedJob.status)">{{ selectedJob.status }}</el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="健康状态">
+            <el-tag :type="healthType(selectedJob.health)" effect="plain">{{ selectedJob.health ?? '-' }}</el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="进度">
             <el-progress
               :percentage="progressPercent(selectedJob)"
@@ -72,6 +81,7 @@
           <el-descriptions-item label="阶段">{{ selectedJob.progress?.stage ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="说明">{{ selectedJob.progress?.message ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ selectedJob.created_at }}</el-descriptions-item>
+          <el-descriptions-item label="心跳时间">{{ selectedJob.heartbeat_at ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="更新时间">{{ selectedJob.updated_at }}</el-descriptions-item>
           <el-descriptions-item label="错误">{{ selectedJob.error ?? '-' }}</el-descriptions-item>
         </el-descriptions>
@@ -137,6 +147,13 @@ const filteredJobs = computed(() => {
 
 function statusType(status: JobStatus) {
   return status === 'success' ? 'success' : status === 'failed' ? 'danger' : status === 'running' ? 'warning' : 'info'
+}
+
+function healthType(health: JobRecord['health']) {
+  if (health === 'completed') return 'success'
+  if (health === 'failed' || health === 'stale') return 'danger'
+  if (health === 'running') return 'warning'
+  return 'info'
 }
 
 function progressPercent(job: JobRecord) {

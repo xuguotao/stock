@@ -4,6 +4,7 @@ export interface JobRecord {
   id: string
   kind: string
   status: JobStatus
+  health: 'pending' | 'running' | 'stale' | 'completed' | 'failed' | string
   params: Record<string, unknown>
   result: Record<string, unknown> | null
   error: string | null
@@ -12,6 +13,7 @@ export interface JobRecord {
     stage: string
     message: string
   }
+  heartbeat_at: string | null
   created_at: string
   updated_at: string
 }
