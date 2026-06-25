@@ -32,6 +32,8 @@ def test_tail_model_inference_scores_feature_rows(tmp_path) -> None:
     assert scored[0]["risk_probability"] == 0.2
     assert scored[0]["expected_high_return"] == 0.025
     assert scored[0]["model_score"] == 0.625
+    assert scored[0]["feature_snapshot"][0] == {"feature": DEFAULT_FEATURE_COLUMNS[0], "value": 0.01}
+    assert scored[0]["feature_snapshot"][-1] == {"feature": DEFAULT_FEATURE_COLUMNS[-1], "value": 0.01}
 
 
 class ConstantProbabilityModel:

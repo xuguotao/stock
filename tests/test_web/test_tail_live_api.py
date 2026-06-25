@@ -332,6 +332,10 @@ def test_tail_live_selection_model_scoring_enriches_result_rows() -> None:
                     "hit_probability": 0.68,
                     "expected_high_return": 0.025,
                     "risk_probability": 0.18,
+                    "feature_snapshot": [
+                        {"feature": "tail_return_from_1430", "value": 0.01},
+                        {"feature": "tail_volume_ratio", "value": 2.1},
+                    ],
                 }
             ]
 
@@ -359,6 +363,10 @@ def test_tail_live_selection_model_scoring_enriches_result_rows() -> None:
         "hit_probability": 0.68,
         "expected_high_return": 0.025,
         "risk_probability": 0.18,
+        "feature_snapshot": [
+            {"feature": "tail_return_from_1430", "value": 0.01},
+            {"feature": "tail_volume_ratio", "value": 2.1},
+        ],
     }
 
 

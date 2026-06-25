@@ -68,6 +68,14 @@ def test_tail_live_selection_page_labels_signal_quality_and_rank_context() -> No
     assert "V2分" in source
 
 
+def test_tail_live_selection_page_shows_model_feature_snapshot() -> None:
+    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+
+    assert "模型因子" in source
+    assert "feature_snapshot" in source
+    assert "modelFeatureText" in source
+
+
 def test_tail_live_selection_page_shows_executability_fields() -> None:
     source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
 

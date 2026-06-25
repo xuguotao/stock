@@ -395,6 +395,7 @@
                   <el-descriptions-item label="原始排名">{{ row.raw_rank ?? '-' }}</el-descriptions-item>
                   <el-descriptions-item label="历史平均收益">{{ formatPercent(row.credibility?.historical_avg_return) }}</el-descriptions-item>
                   <el-descriptions-item v-if="row.model" label="模型收益/风险">{{ formatPercent(row.model.expected_high_return) }} / {{ formatPercent(row.model.risk_probability) }}</el-descriptions-item>
+                  <el-descriptions-item v-if="row.model" label="模型因子">{{ modelFeatureText(row.model.feature_snapshot) }}</el-descriptions-item>
                   <el-descriptions-item label="候选排名">{{ row.final_candidate_rank ?? '-' }}</el-descriptions-item>
                   <el-descriptions-item label="信号强度">{{ formatScore(row.credibility?.components?.signal_strength) }}</el-descriptions-item>
                   <el-descriptions-item label="量能质量">{{ formatScore(row.credibility?.components?.volume_quality) }}</el-descriptions-item>
@@ -633,6 +634,12 @@ interface ModelScore {
   hit_probability?: number | null
   expected_high_return?: number | null
   risk_probability?: number | null
+  feature_snapshot?: ModelFeatureSnapshot[]
+}
+
+interface ModelFeatureSnapshot {
+  feature: string
+  value: number | null
 }
 
 interface Credibility {
@@ -1199,6 +1206,45 @@ function resetResultTableLimits() {
   strategyRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
   watchlistRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
   weakRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
+}
+
+const modelFeatureLabels: Record<string, string> = {
+  daily_ret_5: '5日涨幅',
+  daily_ret_10: '10日涨幅',
+  daily_ret_20: '20日涨幅',
+  daily_volatility_20: '20日波动',
+  ma5_distance: 'MA5距离',
+  ma20_distance: 'MA20距离',
+  avg_amount_20: '20日成交额',
+  tail_return_from_1430: '尾盘涨幅',
+  tail_high_return_from_1430: '尾盘高点',
+  tail_pullback_from_high: '高点回撤',
+  tail_volume_ratio: '尾盘量比',
+  last3_close_slope: '近3根斜率',
+  last6_close_slope: '近6根斜率',
+  market_ret_5: '市场5日',
+  market_ret_20: '市场20日',
+  market_breadth_20: '市场宽度',
+  relative_ret_5: '相对5日',
+  relative_ret_20: '相对20日',
+}
+
+function modelFeatureText(items?: ModelFeatureSnapshot[]) {
+  if (!items?.length) return '-'
+  return items
+    .filter((item) => typeof item.value === 'number')
+    .slice(0, 8)
+    .map((item) => `${modelFeatureLabels[item.feature] ?? item.feature} ${formatModelFeatureValue(item)}`)
+    .join('，')
+}
+
+function formatModelFeatureValue(item: ModelFeatureSnapshot) {
+  if (typeof item.value !== 'number') return '-'
+  if (item.feature.includes('return') || item.feature.includes('distance') || item.feature.includes('slope') || item.feature.includes('breadth')) {
+    return formatPercent(item.value)
+  }
+  if (item.feature.includes('amount')) return `${(item.value / 100000000).toFixed(2)}亿`
+  return item.value.toFixed(2)
 }
 
 function filterReasonText(value: unknown) {

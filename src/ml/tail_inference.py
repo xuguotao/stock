@@ -33,6 +33,7 @@ class TailModelInference:
         model_score = hit_probability * 0.45 + high_rank * 0.35 - risk_probability * 0.20
         scored = []
         for index, (_row_index, row) in enumerate(frame.iterrows()):
+            feature_values = x_frame.iloc[index]
             scored.append(
                 {
                     "symbol": str(row.get("symbol") or ""),
@@ -41,6 +42,10 @@ class TailModelInference:
                     "hit_probability": round(float(hit_probability[index]), 6),
                     "expected_high_return": round(float(expected_high_return[index]), 6),
                     "risk_probability": round(float(risk_probability[index]), 6),
+                    "feature_snapshot": [
+                        {"feature": column, "value": round(float(feature_values[column]), 6)}
+                        for column in self.feature_columns
+                    ],
                 }
             )
         return scored

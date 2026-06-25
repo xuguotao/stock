@@ -341,6 +341,7 @@ def _apply_model_scores(
             "hit_probability": score.get("hit_probability"),
             "expected_high_return": score.get("expected_high_return"),
             "risk_probability": score.get("risk_probability"),
+            "feature_snapshot": score.get("feature_snapshot") or [],
         }
         for row in rows:
             row["model"] = model_payload
