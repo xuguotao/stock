@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
+import joblib
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 
@@ -71,6 +75,46 @@ def train_tail_model_walk_forward(
         "predictions": predictions,
         "metrics": _top_n_metrics(pd.DataFrame(predictions), top_n=top_n),
     }
+
+
+def train_tail_model_artifact(
+    samples: pd.DataFrame,
+    *,
+    version: str,
+    output_root: str | Path = "models/tail_session",
+    feature_columns: list[str] | None = None,
+    train_days: int = 60,
+    validation_days: int = 10,
+    top_n: int = 2,
+) -> dict[str, Any]:
+    """Train/evaluate a candidate model and persist manifest + final estimators."""
+    features = feature_columns or DEFAULT_FEATURE_COLUMNS
+    result = train_tail_model_walk_forward(
+        samples,
+        feature_columns=features,
+        train_days=train_days,
+        validation_days=validation_days,
+        top_n=top_n,
+    )
+    artifact_dir = Path(output_root) / version
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    frame = _prepared_samples(samples, features)
+    if result["status"] == "ready" and not frame.empty and frame["hit_next_high_1pct"].nunique() >= 2:
+        models = _fit_models(frame, features)
+        joblib.dump({"feature_columns": features, "models": models}, artifact_dir / "model.joblib")
+    manifest = {
+        "version": version,
+        "status": result["status"],
+        "reason": result.get("reason"),
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "sample_count": result["sample_count"],
+        "fold_count": result["fold_count"],
+        "feature_columns": features,
+        "metrics": result["metrics"],
+        "top_n": top_n,
+    }
+    (artifact_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {**manifest, "artifact_dir": str(artifact_dir)}
 
 
 def _prepared_samples(samples: pd.DataFrame, features: list[str]) -> pd.DataFrame:

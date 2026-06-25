@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import json
+
 import pandas as pd
 
-from src.ml.tail_model import DEFAULT_FEATURE_COLUMNS, train_tail_model_walk_forward
+from src.ml.tail_model import DEFAULT_FEATURE_COLUMNS, train_tail_model_artifact, train_tail_model_walk_forward
 
 
 def test_train_tail_model_walk_forward_scores_validation_rows_chronologically() -> None:
@@ -41,6 +43,27 @@ def test_train_tail_model_walk_forward_blocks_when_not_enough_history() -> None:
 
     assert result["status"] == "blocked"
     assert result["reason"] == "not_enough_history"
+
+
+def test_train_tail_model_artifact_persists_manifest_and_model(tmp_path) -> None:
+    artifact = train_tail_model_artifact(
+        _model_samples(),
+        version="tail-test-001",
+        output_root=tmp_path,
+        train_days=4,
+        validation_days=2,
+        top_n=1,
+    )
+
+    assert artifact["version"] == "tail-test-001"
+    assert artifact["status"] == "ready"
+    assert artifact["artifact_dir"] == str(tmp_path / "tail-test-001")
+    assert (tmp_path / "tail-test-001" / "manifest.json").exists()
+    assert (tmp_path / "tail-test-001" / "model.joblib").exists()
+    manifest = json.loads((tmp_path / "tail-test-001" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == "tail-test-001"
+    assert manifest["feature_columns"] == DEFAULT_FEATURE_COLUMNS
+    assert manifest["metrics"]["selected_days"] > 0
 
 
 def _model_samples() -> pd.DataFrame:
