@@ -104,7 +104,7 @@ def test_tail_live_selection_page_shows_data_quality_and_timing_diagnostics() ->
 
 
 def test_tail_live_selection_page_shows_source_data_health_panel() -> None:
-    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    source = tail_live_sources()
 
     assert "选股数据健康度" in source
     assert "刷新健康度" in source
@@ -133,7 +133,7 @@ def test_tail_live_selection_page_shows_current_minute5_bucket_separately() -> N
 
 
 def test_tail_live_selection_data_health_panel_uses_compact_status_layout() -> None:
-    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    source = tail_live_sources()
     styles = Path("frontend/src/styles.css").read_text(encoding="utf-8")
 
     assert "health-status-grid" in source
@@ -185,6 +185,20 @@ def test_tail_live_selection_uses_dedicated_final_selection_table_component() ->
     assert "defineEmits" in component
 
 
+def test_tail_live_selection_uses_dedicated_data_health_panel_component() -> None:
+    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    component_path = Path("frontend/src/pages/tail-live/TailDataHealthPanel.vue")
+
+    assert component_path.exists()
+    component = component_path.read_text(encoding="utf-8")
+    assert "import TailDataHealthPanel" in source
+    assert "<TailDataHealthPanel" in source
+    assert ":items=\"dataHealthItems\"" in source
+    assert ":issues=\"dataHealthIssues\"" in source
+    assert "选股数据健康度" in component
+    assert "health-status-grid" in component
+
+
 def test_tail_live_selection_precheck_data_status_column_has_single_slot_template() -> None:
     source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
 
@@ -198,5 +212,7 @@ def tail_live_sources() -> str:
         for path in [
             Path("frontend/src/pages/TailLiveSelection.vue"),
             Path("frontend/src/pages/tail-live/TailSelectionTable.vue"),
+            Path("frontend/src/pages/tail-live/TailDataHealthPanel.vue"),
         ]
+        if path.exists()
     )

@@ -117,29 +117,12 @@
       </el-form>
     </div>
 
-    <div class="panel compact-panel">
-      <div class="page-header panel-title-row">
-        <h2 class="page-title">选股数据健康度</h2>
-        <div class="toolbar">
-          <el-tag :type="qualityTagType(dataHealth?.quality?.status)" effect="plain">
-            {{ dataHealth?.quality?.status ?? 'loading' }}
-          </el-tag>
-          <el-tag effect="plain">{{ dataHealthUpdateText }}</el-tag>
-        </div>
-      </div>
-      <div class="health-status-grid">
-        <div class="health-status-item" v-for="item in dataHealthItems" :key="item.label">
-          <div class="health-status-head">
-            <span class="health-status-label">{{ item.label }}</span>
-            <el-tag :type="qualityTagType(item.status)" effect="plain" size="small">{{ item.status }}</el-tag>
-          </div>
-          <div class="health-status-value">{{ item.value }}</div>
-        </div>
-      </div>
-      <div v-if="dataHealthIssues.length" class="diagnostic-message muted">
-        异常：{{ dataHealthIssues.join('，') }}
-      </div>
-    </div>
+    <TailDataHealthPanel
+      :status="dataHealth?.quality?.status"
+      :update-text="dataHealthUpdateText"
+      :items="dataHealthItems"
+      :issues="dataHealthIssues"
+    />
 
     <div class="panel">
       <div class="page-header panel-title-row">
@@ -491,6 +474,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api, type DataStatusResponse, type JobRecord, type JobStatus, type TailLiveSelectionPayload } from '../api/client'
+import TailDataHealthPanel from './tail-live/TailDataHealthPanel.vue'
 import TailSelectionTable from './tail-live/TailSelectionTable.vue'
 
 interface SelectionRow {
