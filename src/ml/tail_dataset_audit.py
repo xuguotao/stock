@@ -47,8 +47,11 @@ def audit_tail_ml_data(*, client: Any | None = None, as_of: date | None = None) 
         issues.append(f"daily_kline_invalid_ohlc_{daily['invalid_ohlc_rows']}_rows")
     if minute5["usable_days"] < MIN_MINUTE5_USABLE_DAYS:
         issues.append(f"minute5_history_limited_{minute5['usable_days']}_days")
-    if labels["joinable_days"] < MIN_JOINABLE_LABEL_DAYS:
+    label_status = _label_status(labels)
+    if label_status == "limited":
         issues.append(f"joinable_label_days_limited_{labels['joinable_days']}")
+    elif label_status == "pending_history":
+        issues.append(f"label_history_pending_{labels['history_span_days']}_days")
     if labels["outcome_rows"] < MIN_SIGNAL_OUTCOME_ROWS:
         issues.append(f"tail_signal_outcomes_too_sparse_{labels['outcome_rows']}_rows")
     if tradable_pool <= 0:
@@ -56,7 +59,7 @@ def audit_tail_ml_data(*, client: Any | None = None, as_of: date | None = None) 
 
     daily["status"] = "blocked" if daily["row_count"] <= 0 else "limited" if daily["invalid_ohlc_rows"] > 0 else "ready"
     minute5["status"] = "ready" if minute5["usable_days"] >= MIN_MINUTE5_USABLE_DAYS else "limited"
-    labels["status"] = "ready" if labels["joinable_days"] >= MIN_JOINABLE_LABEL_DAYS else "limited"
+    labels["status"] = label_status
     snapshots["status"] = "limited"
     strategy_signals["status"] = "ready" if strategy_signals["outcome_rows"] >= MIN_SIGNAL_OUTCOME_ROWS else "limited"
     tradable = {"status": "ready" if tradable_pool > 0 else "blocked", "symbol_count": tradable_pool}
@@ -225,6 +228,20 @@ def _tail_outcome_summary(client: Any) -> dict[str, Any]:
         )
         """,
     )
+    history_span_days = _single_int(
+        client,
+        """
+        -- label_history_span
+        select count()
+        from (
+            select toDate(datetime) d, uniqExact(symbol) symbols, count() rows
+            from minute5_kline
+            where toDate(datetime) <= today() - 1
+            group by d
+            having symbols >= 4500 and rows >= symbols * 6
+        )
+        """,
+    )
     return {
         "start": _date_string(_value(row, 0)),
         "end": _date_string(_value(row, 1)),
@@ -232,8 +249,17 @@ def _tail_outcome_summary(client: Any) -> dict[str, Any]:
         "outcome_days": _int(row, 3),
         "symbol_count": _int(row, 4),
         "joinable_days": joinable_days,
+        "history_span_days": history_span_days,
         "minimum_joinable_days": MIN_JOINABLE_LABEL_DAYS,
     }
+
+
+def _label_status(labels: dict[str, Any]) -> str:
+    if labels["joinable_days"] >= MIN_JOINABLE_LABEL_DAYS:
+        return "ready"
+    if labels["joinable_days"] >= labels.get("history_span_days", 0):
+        return "pending_history"
+    return "limited"
 
 
 def _first_row(client: Any, query: str) -> tuple[Any, ...]:

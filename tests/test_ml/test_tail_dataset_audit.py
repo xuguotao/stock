@@ -12,6 +12,8 @@ class FakeTailMlAuditClient:
     def execute(self, query, params=None):
         self.queries.append(query)
         normalized = " ".join(query.lower().split())
+        if "label_history_span" in normalized:
+            return [(109,)]
         if "joinable_label_days" in normalized:
             return [(89,)]
         if "from stocks" in normalized and "countif" in normalized:
@@ -63,6 +65,26 @@ def test_audit_tail_ml_data_marks_current_intraday_history_limited() -> None:
     assert "minute5_history_limited_108_days" in result["issues"]
     assert "joinable_label_days_limited_89" in result["issues"]
     assert "tail_signal_outcomes_too_sparse_33_rows" in result["issues"]
+
+
+def test_audit_tail_ml_data_marks_short_history_as_pending_not_quality_limited() -> None:
+    class ShortButCompleteHistoryClient(FakeTailMlAuditClient):
+        def execute(self, query, params=None):
+            normalized = " ".join(query.lower().split())
+            if "label_history_span" in normalized:
+                return [(89,)]
+            if "joinable_label_days" in normalized:
+                return [(89,)]
+            if "minute5_usable_days" in normalized:
+                return [(89,)]
+            return super().execute(query, params)
+
+    result = audit_tail_ml_data(client=ShortButCompleteHistoryClient(), as_of=date(2026, 6, 24))
+
+    assert result["labels"]["status"] == "pending_history"
+    assert result["labels"]["history_span_days"] == 89
+    assert "joinable_label_days_limited_89" not in result["issues"]
+    assert "label_history_pending_89_days" in result["issues"]
 
 
 def test_audit_tail_ml_data_blocks_when_daily_data_is_missing() -> None:
