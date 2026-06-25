@@ -31,6 +31,16 @@ def test_app_adds_tail_model_lab_navigation() -> None:
     assert "TailModelLab" in source
     assert "getTailMlModels" in client
     assert "TailMlModelsResponse" in client
+    assert "trainTailMlModel" in client
+    assert "TailMlTrainPayload" in client
+
+
+def test_tail_model_lab_exposes_training_action() -> None:
+    source = Path("frontend/src/pages/TailModelLab.vue").read_text(encoding="utf-8")
+
+    assert "训练模型" in source
+    assert "trainTailMlModel" in source
+    assert "training" in source
 
 
 def test_jobs_page_can_open_tail_replay_results() -> None:

@@ -23,7 +23,9 @@ from src.data.fund_tail_repository import ClickHouseFundTailRepository
 from src.data.tail_signal_repository import ClickHouseTailSignalRepository
 from src.core.constants import format_symbol
 from src.ml.tail_dataset_audit import audit_tail_ml_data
+from src.ml.tail_dataset import build_tail_ml_samples_from_clickhouse
 from src.ml.tail_inference import TailModelInference
+from src.ml.tail_model import train_tail_model_artifact
 from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
 from src.web.backend.data_sync import DEFAULT_REMOTE_STOCK_DB, sync_stock_database
@@ -90,6 +92,16 @@ class DailyMaintenanceRequest(BaseModel):
     strategy_universe: str = "default"
     bars_cache_dir: str = "data/cache/bars"
     output_dir: str = "reports/tail_session"
+
+
+class TailModelTrainRequest(BaseModel):
+    start: date
+    end: date
+    version: str | None = None
+    train_days: int = Field(default=60, ge=20)
+    validation_days: int = Field(default=10, ge=5)
+    top_n: int = Field(default=2, ge=1, le=10)
+    symbols: list[str] | None = None
 
 
 class DataHealthRepairRequest(BaseModel):
@@ -173,6 +185,8 @@ def create_app(
     clickhouse_dataset_builder=build_clickhouse_research_dataset,
     tail_signal_repository=None,
     tail_ml_audit_runner=audit_tail_ml_data,
+    tail_ml_sample_builder=build_tail_ml_samples_from_clickhouse,
+    tail_model_trainer=train_tail_model_artifact,
     tail_model_root: str | Path = "models/tail_session",
     stock_trend_runner=analyze_stock_trend,
     watchlist_monitor_runner=get_watchlist_report,
@@ -258,6 +272,8 @@ def create_app(
     app.state.clickhouse_dataset_builder = clickhouse_dataset_builder
     app.state.tail_signal_repository = tail_signal_repository or ClickHouseTailSignalRepository()
     app.state.tail_ml_audit_runner = tail_ml_audit_runner
+    app.state.tail_ml_sample_builder = tail_ml_sample_builder
+    app.state.tail_model_trainer = tail_model_trainer
     app.state.tail_model_root = Path(tail_model_root)
     app.state.stock_trend_runner = stock_trend_runner
     app.state.watchlist_monitor_runner = watchlist_monitor_runner
@@ -800,6 +816,33 @@ def create_app(
     def get_tail_ml_models() -> dict[str, Any]:
         return _list_tail_model_manifests(app.state.tail_model_root)
 
+    @app.post("/api/ml/tail/train")
+    def create_tail_ml_train(
+        payload: TailModelTrainRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, Any]:
+        job = store.create_job("tail_ml_train", payload.model_dump(mode="json"))
+        if app.state.run_jobs_inline:
+            _run_tail_ml_train_job(
+                store,
+                app.state.tail_ml_sample_builder,
+                app.state.tail_model_trainer,
+                app.state.tail_model_root,
+                job.id,
+                payload,
+            )
+        else:
+            background_tasks.add_task(
+                _run_tail_ml_train_job,
+                store,
+                app.state.tail_ml_sample_builder,
+                app.state.tail_model_trainer,
+                app.state.tail_model_root,
+                job.id,
+                payload,
+            )
+        return {"job_id": job.id}
+
     @app.post("/api/tail-session/review-outcomes")
     def review_tail_signal_outcomes(payload: TailSignalOutcomeReviewRequest) -> dict[str, Any]:
         if payload.mode == "pending":
@@ -852,6 +895,44 @@ def _load_promoted_tail_model_scorer(model_root: Path) -> TailModelInference | N
 
 
 app = create_app()
+
+
+def _run_tail_ml_train_job(
+    store: JobStore,
+    sample_builder,
+    model_trainer,
+    model_root: Path,
+    job_id: str,
+    payload: TailModelTrainRequest,
+) -> None:
+    store.update_job(job_id, status="running", progress=_progress(5, "starting", "尾盘模型训练启动"))
+    try:
+        store.update_job(job_id, status="running", progress=_progress(20, "building_samples", "构建尾盘训练样本"))
+        dataset = sample_builder(start=payload.start, end=payload.end, symbols=payload.symbols)
+        if dataset.samples.empty:
+            raise ValueError("tail ML training samples are empty")
+        if int(dataset.summary.get("null_label_rows") or 0) > 0:
+            raise ValueError(f"tail ML samples contain null labels: {dataset.summary['null_label_rows']}")
+
+        version = payload.version or f"tail-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        store.update_job(job_id, status="running", progress=_progress(65, "training_model", "训练尾盘模型"))
+        manifest = model_trainer(
+            dataset.samples,
+            version=version,
+            output_root=model_root,
+            train_days=payload.train_days,
+            validation_days=payload.validation_days,
+            top_n=payload.top_n,
+        )
+        result = {
+            "version": version,
+            "dataset_summary": dict(dataset.summary),
+            "manifest": manifest,
+        }
+    except Exception as exc:
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "尾盘模型训练失败"))
+        return
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "尾盘模型训练完成"))
 
 
 def _run_tail_backtest_job(store: JobStore, job_id: str, payload: TailBacktestRequest) -> None:

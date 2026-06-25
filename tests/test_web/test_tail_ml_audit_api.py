@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from src.web.backend.app import create_app
@@ -89,3 +91,67 @@ def test_tail_ml_models_api_lists_model_manifests(tmp_path) -> None:
     assert payload["model_root"] == str(model_root)
     assert [item["version"] for item in payload["items"]] == ["tail-002", "tail-001"]
     assert payload["items"][0]["metrics"]["selected_days"] == 35
+
+
+def test_tail_ml_train_api_runs_inline_training_job(tmp_path) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_sample_builder(**kwargs):
+        calls["builder"] = kwargs
+        return SimpleNamespace(
+            samples=pd.DataFrame(
+                [
+                    {
+                        "trade_date": "2026-06-01",
+                        "symbol": "000001.SZ",
+                        "tail_return_from_1430": 0.01,
+                        "next_high_return": 0.02,
+                    }
+                ]
+            ),
+            summary={"sample_rows": 1, "symbols": 1, "trade_dates": 1, "null_label_rows": 0},
+        )
+
+    def fake_trainer(samples, **kwargs):
+        calls["trainer"] = {"samples": samples, **kwargs}
+        return {
+            "version": kwargs["version"],
+            "status": "ready",
+            "artifact_dir": str(tmp_path / "models" / kwargs["version"]),
+            "sample_count": int(len(samples)),
+            "fold_count": 1,
+            "metrics": {"selected_days": 1},
+            "feature_columns": ["tail_return_from_1430"],
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        run_jobs_inline=True,
+        tail_model_root=tmp_path / "models",
+        tail_ml_sample_builder=fake_sample_builder,
+        tail_model_trainer=fake_trainer,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ml/tail/train",
+        json={
+            "start": "2026-06-01",
+            "end": "2026-06-20",
+            "version": "tail-test-train",
+            "top_n": 2,
+        },
+    )
+
+    payload = response.json()
+    job = client.get(f"/api/jobs/{payload['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["kind"] == "tail_ml_train"
+    assert job["status"] == "success"
+    assert calls["builder"]["start"].isoformat() == "2026-06-01"
+    assert calls["builder"]["end"].isoformat() == "2026-06-20"
+    assert calls["trainer"]["version"] == "tail-test-train"
+    assert calls["trainer"]["output_root"] == tmp_path / "models"
+    assert job["result"]["dataset_summary"]["sample_rows"] == 1
+    assert job["result"]["manifest"]["version"] == "tail-test-train"

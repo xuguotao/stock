@@ -4,6 +4,17 @@
       <h1 class="page-title">尾盘模型实验</h1>
       <div class="page-actions">
         <el-tag effect="plain">{{ models.length }}</el-tag>
+        <el-date-picker
+          v-model="trainRange"
+          type="daterange"
+          start-placeholder="训练开始"
+          end-placeholder="训练结束"
+          value-format="YYYY-MM-DD"
+          style="width: 260px"
+        />
+        <el-input v-model="trainVersion" clearable placeholder="版本可选" style="width: 180px" />
+        <el-input-number v-model="trainTopN" :min="1" :max="10" controls-position="right" />
+        <el-button type="primary" :loading="training" @click="trainModel">训练模型</el-button>
         <el-button :loading="loading" @click="loadModels">刷新</el-button>
       </div>
     </div>
@@ -57,8 +68,12 @@ import { ElMessage } from 'element-plus'
 import { api, type TailMlModelManifest } from '../api/client'
 
 const loading = ref(false)
+const training = ref(false)
 const models = ref<TailMlModelManifest[]>([])
 const modelRoot = ref('')
+const trainRange = ref<[string, string]>(defaultTrainRange())
+const trainVersion = ref('')
+const trainTopN = ref(2)
 
 async function loadModels() {
   loading.value = true
@@ -70,6 +85,28 @@ async function loadModels() {
     ElMessage.error(`加载尾盘模型失败：${String(error)}`)
   } finally {
     loading.value = false
+  }
+}
+
+async function trainModel() {
+  if (!trainRange.value?.[0] || !trainRange.value?.[1]) {
+    ElMessage.warning('请选择训练日期范围')
+    return
+  }
+  training.value = true
+  try {
+    const payload = await api.trainTailMlModel({
+      start: trainRange.value[0],
+      end: trainRange.value[1],
+      version: trainVersion.value.trim() || undefined,
+      top_n: trainTopN.value,
+    })
+    ElMessage.success(`尾盘模型训练任务已提交：${payload.job_id}`)
+    await loadModels()
+  } catch (error) {
+    ElMessage.error(`提交尾盘模型训练失败：${String(error)}`)
+  } finally {
+    training.value = false
   }
 }
 
@@ -96,6 +133,20 @@ function promotionText(row: TailMlModelManifest) {
   const decision = row.promotion_decision
   if (!decision) return '-'
   return decision.eligible ? '通过，可提升' : `未通过：${decision.reasons.join('，') || '-'}`
+}
+
+function defaultTrainRange(): [string, string] {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - 180)
+  return [formatDate(start), formatDate(end)]
+}
+
+function formatDate(value: Date) {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 onMounted(() => {

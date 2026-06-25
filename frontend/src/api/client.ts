@@ -399,6 +399,16 @@ export interface TailMlModelsResponse {
   items: TailMlModelManifest[]
 }
 
+export interface TailMlTrainPayload {
+  start: string
+  end: string
+  version?: string
+  train_days?: number
+  validation_days?: number
+  top_n?: number
+  symbols?: string[]
+}
+
 export interface StockDbSyncPayload {
   remote?: string
   backup?: boolean
@@ -894,6 +904,12 @@ export const api = {
   },
   getTailMlModels() {
     return request<TailMlModelsResponse>('/api/ml/tail/models')
+  },
+  trainTailMlModel(payload: TailMlTrainPayload) {
+    return request<BacktestSubmitResponse>('/api/ml/tail/train', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
   },
   getStockTrend(symbol: string, tradeDate?: string, dailyWindow = 90, granularity = '5m') {
     const params = new URLSearchParams({ daily_window: String(dailyWindow) })
