@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import date
+import fcntl
+from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
 
@@ -11,6 +13,7 @@ import pandas as pd
 from src.data.clickhouse_source import ClickHouseStockDataSource
 
 _DAILY_REPAIR_LOCK = Lock()
+_DAILY_REPAIR_LOCK_PATH = Path(__file__).resolve().parents[2] / "data/runtime/daily_kline_repair.lock"
 
 
 def sync_clickhouse_daily_from_minute5(
@@ -33,7 +36,11 @@ def sync_clickhouse_daily_from_minute5(
     if not _DAILY_REPAIR_LOCK.acquire(blocking=False):
         return _daily_lock_skipped_result(trade_date=trade_date, before=before)
     acquired_clickhouse_lock = False
+    process_lock = None
     try:
+        process_lock = _acquire_daily_repair_process_lock(_DAILY_REPAIR_LOCK_PATH)
+        if process_lock is None:
+            return _daily_lock_skipped_result(trade_date=trade_date, before=before)
         acquired_clickhouse_lock = _acquire_daily_repair_marker(clickhouse, trade_date)
         if not acquired_clickhouse_lock:
             return _daily_lock_skipped_result(trade_date=trade_date, before=before)
@@ -93,6 +100,8 @@ def sync_clickhouse_daily_from_minute5(
     finally:
         if acquired_clickhouse_lock:
             _release_daily_repair_marker(clickhouse, trade_date)
+        if process_lock is not None:
+            _release_daily_repair_process_lock(process_lock)
         _DAILY_REPAIR_LOCK.release()
 
 
@@ -113,6 +122,24 @@ def _daily_lock_skipped_result(*, trade_date: date, before: int) -> dict[str, An
         "skipped": True,
         "skip_reason": "daily_repair_lock_held",
     }
+
+
+def _acquire_daily_repair_process_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = path.open("w")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        return None
+    return lock_file
+
+
+def _release_daily_repair_process_lock(lock_file) -> None:
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock_file.close()
 
 
 def _acquire_daily_repair_marker(client: Any, trade_date: date) -> bool:

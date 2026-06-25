@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
+import fcntl
 
 import pandas as pd
 
+import src.data.clickhouse_daily_sync as daily_sync
 from src.data.clickhouse_daily_sync import (
     sync_clickhouse_daily_from_minute5,
     sync_clickhouse_index_daily,
@@ -68,6 +70,29 @@ def test_sync_clickhouse_daily_from_minute5_skips_when_trade_date_lock_is_held()
     client.lock_inserted = False
 
     result = sync_clickhouse_daily_from_minute5(client=client, trade_date=date(2026, 6, 18))
+
+    executed = [" ".join(query.lower().split()) for query, _ in client.calls]
+    assert result == {
+        "trade_date": "2026-06-18",
+        "before_rows": 0,
+        "after_rows": 0,
+        "inserted_rows": 0,
+        "skipped": True,
+        "skip_reason": "daily_repair_lock_held",
+    }
+    assert not any("insert into daily_kline (" in query for query in executed)
+
+
+def test_sync_clickhouse_daily_from_minute5_skips_when_process_lock_is_held(tmp_path, monkeypatch) -> None:
+    lock_path = tmp_path / "daily_repair.lock"
+    monkeypatch.setattr(daily_sync, "_DAILY_REPAIR_LOCK_PATH", lock_path, raising=False)
+    client = FakeClickHouseClient()
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        result = sync_clickhouse_daily_from_minute5(client=client, trade_date=date(2026, 6, 18))
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     executed = [" ".join(query.lower().split()) for query, _ in client.calls]
     assert result == {

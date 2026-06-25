@@ -218,3 +218,13 @@ def test_data_center_page_shows_tail_ml_training_data_audit() -> None:
     assert "joinable_label_days" in source
     assert "TailMlAuditResponse" in client
     assert "/api/ml/tail/audit" in client
+
+
+def test_data_center_page_does_not_let_tail_ml_audit_failure_blank_core_data() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+    load_data_body = source.split("async function loadData()", 1)[1].split("async function loadRepairPlan()", 1)[0]
+
+    assert "Promise.allSettled" in load_data_body
+    assert "tailMlAuditResult" in load_data_body
+    assert "reliabilityReport.value = reliabilityResponse" in load_data_body
+    assert "tailMlAudit.value = null" in load_data_body

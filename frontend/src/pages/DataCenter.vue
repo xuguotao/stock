@@ -940,20 +940,26 @@ const dataOpsSchedulerText = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const [reliabilityResponse, monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse, tailMlAuditResponse] = await Promise.all([
+    const [reliabilityResult, monitorResult, quoteSnapshotMonitorResult, dataOpsSchedulerResult, tailMlAuditResult] = await Promise.allSettled([
       api.getDataReliability(),
       api.getMinute5Monitor(),
       api.getQuoteSnapshotMonitor(),
       api.getDataOpsScheduler(),
       api.getTailMlAudit()
     ])
+    if (reliabilityResult.status !== 'fulfilled') throw reliabilityResult.reason
+    const reliabilityResponse = reliabilityResult.value
     reliabilityReport.value = reliabilityResponse
     dataStatus.value = reliabilityResponse.data_status
     repairPlan.value = reliabilityResponse.repair_plan
-    minute5Monitor.value = monitorResponse
-    quoteSnapshotMonitor.value = quoteSnapshotMonitorResponse
-    dataOpsScheduler.value = dataOpsSchedulerResponse
-    tailMlAudit.value = tailMlAuditResponse
+    if (monitorResult.status === 'fulfilled') minute5Monitor.value = monitorResult.value
+    if (quoteSnapshotMonitorResult.status === 'fulfilled') quoteSnapshotMonitor.value = quoteSnapshotMonitorResult.value
+    if (dataOpsSchedulerResult.status === 'fulfilled') dataOpsScheduler.value = dataOpsSchedulerResult.value
+    if (tailMlAuditResult.status === 'fulfilled') {
+      tailMlAudit.value = tailMlAuditResult.value
+    } else {
+      tailMlAudit.value = null
+    }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载数据中心失败')
   } finally {

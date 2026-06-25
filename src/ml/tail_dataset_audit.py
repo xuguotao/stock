@@ -206,12 +206,23 @@ def _tail_outcome_summary(client: Any) -> dict[str, Any]:
         -- joinable_label_days
         select count()
         from (
-            select d1.date signal_date, count() c
-            from daily_kline d1
-            inner join daily_kline d2 on d1.symbol = d2.symbol and d2.date > d1.date
-            where d1.date >= '2026-01-08' and d1.date <= today() - 1
-            group by d1.date
-            having c > 100000
+            select signal_date, countIf(next_date is not null) c
+            from (
+                select
+                    symbol,
+                    date as signal_date,
+                    leadInFrame(date) over (
+                        partition by symbol
+                        order by date
+                        rows between current row and 1 following
+                    ) as next_date
+                from daily_kline
+                where date >= (select toDate(min(datetime)) from minute5_kline)
+                  and date <= today() - 1
+                  and open > 0 and high > 0 and low > 0 and close > 0 and volume > 0
+            )
+            group by signal_date
+            having c >= 4500
         )
         """,
     )

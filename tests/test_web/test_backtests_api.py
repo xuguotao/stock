@@ -136,6 +136,32 @@ def test_backtest_api_defaults_to_clickhouse_source(monkeypatch, tmp_path) -> No
     assert job["result"]["symbol_count"] == 3
 
 
+def test_clickhouse_backtest_loader_filters_invalid_ohlcv_rows(monkeypatch) -> None:
+    class FakeClickHouseSource:
+        def _client_instance(self):
+            return FakeClickHouseClient()
+
+    class FakeClickHouseClient:
+        def execute(self, query, params=None):
+            if "from daily_kline" in query and "group by symbol" in query:
+                return [("000001", 30, date(2025, 2, 28), 10000000, 1000000)]
+            if "from daily_kline" in query:
+                return [
+                    ("000001", date(2025, 1, 2), 10.0, 10.5, 9.9, 10.2, 1000.0, 10200.0),
+                    ("000001", date(2025, 1, 3), 0.0, 10.5, 9.9, 10.2, 1000.0, 10200.0),
+                    ("000001", date(2025, 1, 4), 10.0, 10.5, 9.9, 0.0, 1000.0, 10200.0),
+                    ("000001", date(2025, 1, 5), 10.0, 10.5, 9.9, 10.2, 0.0, 10200.0),
+                ]
+            return []
+
+    monkeypatch.setattr(backtests, "ClickHouseStockDataSource", FakeClickHouseSource)
+    request = backtests.TailBacktestRequest(start=date(2025, 1, 1), end=date(2025, 1, 31), symbols=["000001.SZ"])
+
+    bars = backtests._load_clickhouse_bars(request)
+
+    assert list(bars.index.get_level_values("date")) == [date(2025, 1, 2)]
+
+
 def test_backtest_api_rejects_missing_dataset_when_source_is_dataset(tmp_path) -> None:
     app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
     client = TestClient(app)

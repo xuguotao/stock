@@ -51,6 +51,7 @@ data/*.db-*
 
 # Local paper-trading state and generated reports
 data/paper_trading/
+data/runtime/
 data/web/
 reports/
 

@@ -32,3 +32,19 @@ def test_tail_ml_audit_api_returns_runner_payload(tmp_path) -> None:
     assert payload["status"] == "limited"
     assert payload["summary"]["minute5_usable_days"] == 108
     assert payload["issues"] == ["minute5_history_limited_108_days"]
+
+
+def test_tail_ml_audit_api_returns_degraded_payload_when_runner_fails(tmp_path) -> None:
+    def failing_audit_runner():
+        raise RuntimeError("clickhouse timeout")
+
+    app = create_app(db_path=tmp_path / "jobs.sqlite3", tail_ml_audit_runner=failing_audit_runner)
+    client = TestClient(app)
+
+    response = client.get("/api/ml/tail/audit")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["issues"] == ["tail_ml_audit_failed"]
+    assert "clickhouse timeout" in payload["error"]

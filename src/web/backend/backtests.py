@@ -133,6 +133,7 @@ def _load_clickhouse_bars(request: TailBacktestRequest) -> pd.DataFrame:
         select symbol, date, open, high, low, close, volume, amount
         from daily_kline
         where symbol in %(symbols)s and date >= %(start)s and date <= %(end)s
+            and open > 0 and high > 0 and low > 0 and close > 0 and volume > 0
         order by date, symbol
         """,
         {
@@ -151,6 +152,13 @@ def _load_clickhouse_bars(request: TailBacktestRequest) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"]).dt.date
     for column in ["open", "high", "low", "close", "volume", "amount"]:
         df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+    df = df[
+        (df["open"] > 0)
+        & (df["high"] > 0)
+        & (df["low"] > 0)
+        & (df["close"] > 0)
+        & (df["volume"] > 0)
+    ].copy()
     df["adjusted_close"] = df["close"]
     return df[
         ["date", "open", "high", "low", "close", "volume", "amount", "adjusted_close", "symbol"]

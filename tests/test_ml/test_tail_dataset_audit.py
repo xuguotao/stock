@@ -6,8 +6,14 @@ from src.ml.tail_dataset_audit import audit_tail_ml_data
 
 
 class FakeTailMlAuditClient:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
     def execute(self, query, params=None):
+        self.queries.append(query)
         normalized = " ".join(query.lower().split())
+        if "joinable_label_days" in normalized:
+            return [(89,)]
         if "from stocks" in normalized and "countif" in normalized:
             return [(5207, 230, 4977)]
         if "from daily_kline" in normalized and "countif(open <= 0" in normalized:
@@ -16,8 +22,6 @@ class FakeTailMlAuditClient:
             return [(datetime(2026, 1, 8, 9, 35), datetime(2026, 6, 24, 15, 0), 4991, 25_747_349)]
         if "minute5_usable_days" in normalized:
             return [(108,)]
-        if "joinable_label_days" in normalized:
-            return [(89,)]
         if "from stock_quote_snapshots" in normalized and "min(snapshot_at)" in normalized:
             return [(datetime(2026, 6, 17, 10, 41, 21), datetime(2026, 6, 24, 14, 59, 50), 4978, 31_513_648)]
         if "from tail_selection_signals" in normalized:
@@ -71,3 +75,15 @@ def test_audit_tail_ml_data_blocks_when_daily_data_is_missing() -> None:
     assert result["status"] == "blocked"
     assert result["daily"]["status"] == "blocked"
     assert "daily_kline_missing" in result["issues"]
+
+
+def test_audit_tail_ml_data_counts_joinable_days_without_future_self_join() -> None:
+    client = FakeTailMlAuditClient()
+
+    audit_tail_ml_data(client=client, as_of=date(2026, 6, 24))
+
+    joinable_queries = [query for query in client.queries if "joinable_label_days" in query]
+    assert len(joinable_queries) == 1
+    normalized = " ".join(joinable_queries[0].lower().split())
+    assert "inner join daily_kline d2" not in normalized
+    assert "next_date" in normalized

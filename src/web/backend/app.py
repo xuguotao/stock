@@ -779,7 +779,16 @@ def create_app(
 
     @app.get("/api/ml/tail/audit")
     def get_tail_ml_audit() -> dict[str, Any]:
-        return app.state.tail_ml_audit_runner()
+        try:
+            return app.state.tail_ml_audit_runner()
+        except Exception as exc:  # noqa: BLE001 - degrade optional ML audit without blanking data center.
+            return {
+                "status": "blocked",
+                "as_of": date.today().isoformat(),
+                "summary": {},
+                "issues": ["tail_ml_audit_failed"],
+                "error": str(exc),
+            }
 
     @app.post("/api/tail-session/review-outcomes")
     def review_tail_signal_outcomes(payload: TailSignalOutcomeReviewRequest) -> dict[str, Any]:
