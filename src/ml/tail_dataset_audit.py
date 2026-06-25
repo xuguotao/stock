@@ -6,6 +6,7 @@ from datetime import date
 from typing import Any
 
 from src.data.clickhouse_source import ClickHouseStockDataSource
+from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
 
 
 MIN_MINUTE5_USABLE_DAYS = 180
@@ -23,22 +24,20 @@ def audit_tail_ml_data(*, client: Any | None = None, as_of: date | None = None) 
     snapshots = _snapshot_summary(clickhouse)
     strategy_signals = _tail_signal_summary(clickhouse)
     labels = _tail_outcome_summary(clickhouse)
-    tradable_pool = _single_int(
-        clickhouse,
-        """
-        -- strategy_tradable_pool
-        select count()
-        from (
-            select d.symbol, count() bars, max(d.date) latest, avg(d.amount) avg_amount
-            from daily_kline d
-            any left join stocks s on d.symbol = s.symbol
-            where d.date >= today() - 365
-              and d.volume > 0 and d.amount > 0
-              and positionUTF8(coalesce(s.name, ''), 'ST') = 0
-            group by d.symbol
-            having bars >= 120
+    tradable_pool = len(
+        resolve_strategy_universe(
+            clickhouse,
+            StrategyUniverseOptions(
+                trade_date=as_of_date,
+                min_daily_bars=120,
+                require_latest_daily=False,
+                require_minute5=False,
+                include_st=False,
+                min_amount=0,
+                markets=("SH", "SZ"),
+            ),
+            symbols_only=True,
         )
-        """,
     )
 
     issues: list[str] = []

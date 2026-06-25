@@ -12,6 +12,7 @@ from pydantic import AliasChoices, BaseModel, Field, model_validator
 from src.core.constants import format_symbol
 from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.research_dataset import load_research_dataset
+from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
 from src.strategy.factors.tail_session import TailSessionFactor
 from src.strategy.scoring import FactorScoreEngine, Selection
@@ -168,27 +169,20 @@ def _load_clickhouse_bars(request: TailBacktestRequest) -> pd.DataFrame:
 def _clickhouse_symbols(client: Any, request: TailBacktestRequest) -> list[str]:
     if request.symbols:
         return [format_symbol(symbol) for symbol in request.symbols]
-    rows = client.execute(
-        """
-        select
-            d.symbol as symbol,
-            count() as bars,
-            max(d.date) as end_date,
-            avg(d.amount) as avg_amount,
-            avg(d.volume) as avg_volume
-        from daily_kline d
-        any left join stocks s on d.symbol = s.symbol
-        where d.date >= %(start)s and d.date <= %(end)s
-            and d.volume > 0
-            and d.amount > 0
-            and positionUTF8(coalesce(s.name, ''), 'ST') = 0
-        group by symbol
-        having bars >= 30
-        order by avg_amount desc, avg_volume desc, d.symbol asc
-        """,
-        {"start": request.start, "end": request.end},
+    return resolve_strategy_universe(
+        client,
+        StrategyUniverseOptions(
+            trade_date=request.end,
+            lookback_start=request.start,
+            min_daily_bars=30,
+            require_latest_daily=False,
+            require_minute5=False,
+            include_st=False,
+            min_amount=0,
+            markets=("SH", "SZ"),
+        ),
+        symbols_only=True,
     )
-    return [format_symbol(str(symbol)) for symbol, *_rest in rows]
 
 
 def _empty_bars_message(request: TailBacktestRequest) -> str:

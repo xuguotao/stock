@@ -79,10 +79,13 @@ class FakeClickHouseClient:
             return [(3,)]
         if "select uniqexact(k.symbol)" in normalized and "from minute5_kline" in normalized:
             return [(1,)]
-        if "from daily_kline" in normalized and "max(d.date)" in normalized and "d.date <= todatetime" in normalized:
+        if "from daily_kline" in normalized and "max(date)" in normalized and "date <= todate" in normalized:
             return [(date(2026, 6, 15),)]
-        if "select count() from stocks s inner join daily_kline d" in normalized and "d.volume >= 1" in normalized:
-            return [(2,)]
+        if "from daily_kline d" in normalized and "group by d.symbol" in normalized:
+            return [
+                ("000001", "平安银行", "SZ", 1, date(2026, 6, 15), 10000000, 1000000),
+                ("600000", "浦发银行", "SH", 1, date(2026, 6, 15), 9000000, 900000),
+            ]
         if "from daily_kline" in normalized and "group by symbol, date" in normalized and "having count() > 1" in normalized:
             return [(0, 0)]
         if "having count() > 1" in normalized and "from minute5_kline" in normalized:
@@ -113,8 +116,11 @@ class FakeClickHouseClient:
 class MissingSymbolClickHouseClient(FakeClickHouseClient):
     def execute(self, query, params=None):
         normalized = " ".join(query.lower().split())
-        if "select count() from stocks s inner join daily_kline d" in normalized and "d.volume >= 1" in normalized:
-            return [(2,)]
+        if "from daily_kline d" in normalized and "group by d.symbol" in normalized:
+            return [
+                ("000001", "平安银行", "SZ", 1, date(2026, 6, 15), 10000000, 1000000),
+                ("600000", "浦发银行", "SH", 1, date(2026, 6, 15), 9000000, 900000),
+            ]
         if "left join minute5_kline" in normalized and "select s.symbol, s.name" in normalized:
             return [("000002", "万科A"), ("600000", "浦发银行")]
         return super().execute(query, params)
@@ -125,8 +131,8 @@ class SuspendedSymbolClickHouseClient(FakeClickHouseClient):
         normalized = " ".join(query.lower().split())
         if "select uniqexact(k.symbol)" in normalized and "from minute5_kline" in normalized:
             return [(1,)]
-        if "select count() from stocks s inner join daily_kline d" in normalized and "d.volume >= 1" in normalized:
-            return [(1,)]
+        if "from daily_kline d" in normalized and "group by d.symbol" in normalized:
+            return [("000001", "平安银行", "SZ", 1, date(2026, 6, 15), 10000000, 1000000)]
         if "left join minute5_kline" in normalized and "inner join daily_kline d" in normalized:
             return []
         return super().execute(query, params)
@@ -143,10 +149,10 @@ class IntradayAheadOfDailyClickHouseClient(FakeClickHouseClient):
             return [(1,)]
         if "select uniqexact(k.symbol)" in normalized and "from minute5_kline" in normalized:
             return [(1,)]
-        if "from daily_kline" in normalized and "max(d.date)" in normalized and "d.date <= todatetime" in normalized:
+        if "from daily_kline" in normalized and "max(date)" in normalized and "date <= todate" in normalized:
             return [(date(2026, 6, 22),)]
-        if "select count() from stocks s inner join daily_kline d" in normalized and "d.volume >= 1" in normalized:
-            return [(1,)]
+        if "from daily_kline d" in normalized and "group by d.symbol" in normalized:
+            return [("000001", "平安银行", "SZ", 1, date(2026, 6, 22), 10000000, 1000000)]
         if "left join daily_kline" in normalized or "left join minute5_kline" in normalized:
             return []
         return super().execute(query, params)

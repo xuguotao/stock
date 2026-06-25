@@ -84,11 +84,11 @@ def test_backtest_api_defaults_to_clickhouse_source(monkeypatch, tmp_path) -> No
                     ("600519", "贵州茅台"),
                     ("300750", "宁德时代"),
                 ]
-            if "from daily_kline" in query and "group by symbol" in query:
+            if "from daily_kline" in query and "group by d.symbol" in query:
                 return [
-                    ("000001", 45, date(2025, 2, 28), 10000000, 1000000),
-                    ("600519", 45, date(2025, 2, 28), 10000000, 1000000),
-                    ("300750", 45, date(2025, 2, 28), 10000000, 1000000),
+                    ("000001", "平安银行", "SZ", 45, date(2025, 2, 28), 10000000, 1000000),
+                    ("600519", "贵州茅台", "SH", 45, date(2025, 2, 28), 10000000, 1000000),
+                    ("300750", "宁德时代", "SZ", 45, date(2025, 2, 28), 10000000, 1000000),
                 ]
             if "from daily_kline" in query:
                 dates = pd.bdate_range(params["start"], params["end"])
@@ -143,8 +143,8 @@ def test_clickhouse_backtest_loader_filters_invalid_ohlcv_rows(monkeypatch) -> N
 
     class FakeClickHouseClient:
         def execute(self, query, params=None):
-            if "from daily_kline" in query and "group by symbol" in query:
-                return [("000001", 30, date(2025, 2, 28), 10000000, 1000000)]
+            if "from daily_kline" in query and "group by d.symbol" in query:
+                return [("000001", "平安银行", "SZ", 30, date(2025, 2, 28), 10000000, 1000000)]
             if "from daily_kline" in query:
                 return [
                     ("000001", date(2025, 1, 2), 10.0, 10.5, 9.9, 10.2, 1000.0, 10200.0),

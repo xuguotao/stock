@@ -30,8 +30,11 @@ class FakeTailMlAuditClient:
             return [(33,)]
         if "from tail_signal_outcomes" in normalized:
             return [(date(2026, 6, 15), date(2026, 6, 23), 33, 6, 33)]
-        if "strategy_tradable_pool" in normalized:
-            return [(4936,)]
+        if "from daily_kline d" in normalized and "group by d.symbol" in normalized:
+            return [
+                (str(index).zfill(6), f"样本{index}", "SZ" if index % 2 else "SH", 121, date(2026, 6, 24), 1_000_000.0, 100_000.0)
+                for index in range(1, 4937)
+            ]
         return [(0,)]
 
 

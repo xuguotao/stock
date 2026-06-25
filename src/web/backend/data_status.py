@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from src.core.constants import format_symbol
-from src.data.clickhouse_table_maintenance import daily_duplicate_stats, minute5_duplicate_stats
 from src.data.clickhouse_source import ClickHouseStockDataSource
+from src.data.clickhouse_table_maintenance import daily_duplicate_stats, minute5_duplicate_stats
+from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
 
 
 TABLE_SPECS = {
@@ -1563,34 +1564,32 @@ def _strategy_tradable_symbol_count(*, client: Any, latest: Any, fallback: int) 
     try:
         latest_rows = client.execute(
             """
-            select max(d.date)
-            from daily_kline d
-            inner join stocks s on d.symbol = s.symbol
-            where d.date <= toDate(%(latest)s)
-                and upper(s.name) not like '%%ST%%'
-                and d.volume >= 1
-                and d.amount >= 1
+            select max(date)
+            from daily_kline
+            where date <= toDate(%(latest)s)
+                and volume >= 1
+                and amount >= 1
             """,
             {"latest": latest},
         )
         latest_daily = latest_rows[0][0] if latest_rows else None
         if not latest_daily:
             return fallback
-        rows = client.execute(
-            """
-            select count()
-            from stocks s
-            inner join daily_kline d
-                on s.symbol = d.symbol and d.date = %(latest_daily)s
-            where upper(s.name) not like '%%ST%%'
-                and d.volume >= 1
-                and d.amount >= 1
-            """,
-            {"latest_daily": latest_daily},
+        rows = resolve_strategy_universe(
+            client,
+            StrategyUniverseOptions(
+                trade_date=latest_daily,
+                min_daily_bars=1,
+                require_latest_daily=True,
+                require_minute5=False,
+                include_st=False,
+                min_amount=0,
+                markets=("SH", "SZ"),
+            ),
         )
     except Exception:  # noqa: BLE001 - fallback keeps health checks available.
         return fallback
-    active = int(rows[0][0] or 0) if rows else 0
+    active = len(rows)
     return active if active > 0 else fallback
 
 
