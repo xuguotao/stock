@@ -42,13 +42,23 @@ def build_tail_ml_samples(
             on=["trade_date", "symbol", "decision_time"],
             how="left",
         )
+    label_columns = [
+        "outcome_date",
+        "next_open_return",
+        "next_high_return",
+        "next_close_return",
+        "next_low_return",
+        "hit_next_high_1pct",
+        "drawdown_breach_2pct",
+    ]
+    null_label_rows = _null_label_rows(samples, label_columns)
     summary = {
         "feature_rows": int(len(features)),
         "label_rows": int(len(labels)),
         "sample_rows": int(len(samples)),
         "symbols": int(samples["symbol"].nunique()) if not samples.empty else 0,
         "trade_dates": int(samples["trade_date"].nunique()) if not samples.empty else 0,
-        "null_label_rows": int(samples["outcome_date"].isna().sum()) if not samples.empty and "outcome_date" in samples else 0,
+        "null_label_rows": null_label_rows,
     }
     return TailMlDatasetResult(samples=samples, summary=summary)
 
@@ -143,3 +153,12 @@ def _bars_dataframe(rows: list[tuple[Any, ...]], *, date_col: str) -> pd.DataFra
 
 def _code(symbol: str) -> str:
     return str(symbol).split(".")[0].zfill(6)
+
+
+def _null_label_rows(samples: pd.DataFrame, label_columns: list[str]) -> int:
+    if samples.empty:
+        return 0
+    existing = [column for column in label_columns if column in samples.columns]
+    if not existing:
+        return 0
+    return int(samples[existing].isna().any(axis=1).sum())

@@ -142,6 +142,25 @@ def test_build_tail_ml_samples_merges_features_labels_and_quality_summary() -> N
     assert {"daily_ret_5", "tail_return_from_1430", "next_high_return", "hit_next_high_1pct"}.issubset(result.samples.columns)
 
 
+def test_build_tail_ml_samples_marks_dirty_outcome_prices_as_null_labels() -> None:
+    daily = _daily_fixture()
+    dirty_date = date(2026, 2, 10)
+    daily.loc[daily["date"] == dirty_date, ["open", "high", "low", "close"]] = 0.0
+
+    result = build_tail_ml_samples(
+        daily_bars=daily,
+        minute5_bars=_minute5_fixture(),
+        decision_times=[time(14, 40)],
+    )
+
+    assert result.summary["null_label_rows"] == 1
+    row = result.samples.iloc[0]
+    assert pd.isna(row["next_open_return"])
+    assert pd.isna(row["next_high_return"])
+    assert pd.isna(row["next_close_return"])
+    assert pd.isna(row["next_low_return"])
+
+
 def test_build_tail_ml_samples_from_clickhouse_queries_daily_and_minute5() -> None:
     class FakeClickHouseClient:
         def __init__(self) -> None:
