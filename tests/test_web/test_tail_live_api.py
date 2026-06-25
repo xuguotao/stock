@@ -320,6 +320,10 @@ def test_tail_live_selection_model_scoring_enriches_result_rows() -> None:
     class FakeScorer:
         def score(self, rows):
             assert list(rows["symbol"]) == ["000001.SZ"]
+            assert rows.iloc[0]["tail_return_from_1430"] == 0.01
+            assert rows.iloc[0]["tail_high_return_from_1430"] == 0.015
+            assert rows.iloc[0]["tail_pullback_from_high"] == -0.002
+            assert rows.iloc[0]["tail_volume_ratio"] == 2.1
             return [
                 {
                     "symbol": "000001.SZ",
@@ -333,7 +337,15 @@ def test_tail_live_selection_model_scoring_enriches_result_rows() -> None:
 
     result = {
         "diagnostics": {"strategy_mode": "model"},
-        "ranked_signals": [{"symbol": "000001.SZ", "tail_return": 0.01}],
+        "ranked_signals": [
+            {
+                "symbol": "000001.SZ",
+                "tail_return": 0.01,
+                "tail_high_return": 0.015,
+                "pullback_from_high": -0.002,
+                "volume_ratio": 2.1,
+            }
+        ],
         "selections": [],
     }
 

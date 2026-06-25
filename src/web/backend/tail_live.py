@@ -324,7 +324,7 @@ def _apply_model_scores(
         diagnostics["model_status"] = "no_scoreable_rows"
         return
 
-    feature_rows = [rows[0] for rows in rows_by_symbol.values()]
+    feature_rows = [_model_feature_row(rows[0]) for rows in rows_by_symbol.values()]
     scores = model_scorer.score(pd.DataFrame(feature_rows))
     scored_by_symbol = {
         str(row.get("symbol")): row
@@ -392,6 +392,20 @@ def _apply_model_selection(result: dict[str, Any], *, strategy_mode: str) -> Non
     diagnostics = result.setdefault("diagnostics", {})
     diagnostics["model_selection_applied"] = True
     diagnostics["model_selection_mode"] = strategy_mode
+
+
+def _model_feature_row(row: dict[str, Any]) -> dict[str, Any]:
+    feature_row = dict(row)
+    aliases = {
+        "tail_return_from_1430": "tail_return",
+        "tail_high_return_from_1430": "tail_high_return",
+        "tail_pullback_from_high": "pullback_from_high",
+        "tail_volume_ratio": "volume_ratio",
+    }
+    for target, source in aliases.items():
+        if target not in feature_row and source in feature_row:
+            feature_row[target] = feature_row[source]
+    return feature_row
 
 
 def _model_ranked_display_key(
