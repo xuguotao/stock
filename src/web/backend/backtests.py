@@ -174,7 +174,7 @@ def _clickhouse_symbols(client: Any, request: TailBacktestRequest) -> list[str]:
         StrategyUniverseOptions(
             trade_date=request.end,
             lookback_start=request.start,
-            min_daily_bars=30,
+            min_daily_bars=120,
             require_latest_daily=False,
             require_minute5=False,
             include_st=False,

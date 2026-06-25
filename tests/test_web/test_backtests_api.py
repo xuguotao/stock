@@ -71,6 +71,8 @@ def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
 
 
 def test_backtest_api_defaults_to_clickhouse_source(monkeypatch, tmp_path) -> None:
+    universe_params: list[dict] = []
+
     class FakeClickHouseSource:
         def _client_instance(self):
             return FakeClickHouseClient()
@@ -85,10 +87,11 @@ def test_backtest_api_defaults_to_clickhouse_source(monkeypatch, tmp_path) -> No
                     ("300750", "宁德时代"),
                 ]
             if "from daily_kline" in query and "group by d.symbol" in query:
+                universe_params.append(params)
                 return [
-                    ("000001", "平安银行", "SZ", 45, date(2025, 2, 28), 10000000, 1000000),
-                    ("600519", "贵州茅台", "SH", 45, date(2025, 2, 28), 10000000, 1000000),
-                    ("300750", "宁德时代", "SZ", 45, date(2025, 2, 28), 10000000, 1000000),
+                    ("000001", "平安银行", "SZ", 130, date(2025, 2, 28), 10000000, 1000000),
+                    ("600519", "贵州茅台", "SH", 130, date(2025, 2, 28), 10000000, 1000000),
+                    ("300750", "宁德时代", "SZ", 130, date(2025, 2, 28), 10000000, 1000000),
                 ]
             if "from daily_kline" in query:
                 dates = pd.bdate_range(params["start"], params["end"])
@@ -134,6 +137,7 @@ def test_backtest_api_defaults_to_clickhouse_source(monkeypatch, tmp_path) -> No
     assert job["result"]["experiment"]["mode"] == "clickhouse"
     assert job["result"]["experiment"]["universe_source"] == "clickhouse_strategy_tradable"
     assert job["result"]["symbol_count"] == 3
+    assert universe_params[0]["min_daily_bars"] == 120
 
 
 def test_clickhouse_backtest_loader_filters_invalid_ohlcv_rows(monkeypatch) -> None:
