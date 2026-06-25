@@ -559,8 +559,12 @@ def test_fund_tail_advice_uses_fast_proxy_refresher_when_available(tmp_path) -> 
 
     assert response.status_code == 200
     assert job["status"] == "success"
-    assert downloader_calls == []
+    assert downloader_calls == [
+        (data_dir, "20250101", "20260618"),
+    ]
+    assert repository.import_calls
     assert refresher_calls == [(repository, ["001632"], date(2026, 6, 18))]
+    assert job["result"]["import_result"] == {"nav_rows": 1, "proxy_rows": 1, "benchmark_rows": 1}
     assert job["result"]["proxy_refresh"]["source"] == "tencent"
 
 

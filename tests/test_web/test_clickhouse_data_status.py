@@ -234,10 +234,11 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
     assert datasets["daily_kline"]["coverage_ratio"] == 1.0
     assert datasets["minute5_kline"]["status"] == "warning"
     assert datasets["stock_quote_snapshots_5m"]["consumer"] == "尾盘选股 5m 兜底、个股趋势、盘中验证"
-    assert datasets["fund_tail_nav"]["status"] == "ok"
+    assert datasets["fund_tail_nav"]["status"] == "warning"
     assert datasets["fund_tail_nav"]["rows"] == 100
     assert datasets["fund_tail_nav"]["symbols"] == 16
     assert datasets["fund_tail_nav"]["latest"] == "2026-06-17"
+    assert "fund_tail_nav_stale_vs_proxy:2026-06-17<2026-06-22" in datasets["fund_tail_nav"]["issues"]
     assert datasets["fund_tail_proxy"]["status"] == "ok"
     assert datasets["fund_tail_benchmark"]["status"] == "ok"
     assert datasets["data_source_health"]["category"] == "运维数据"

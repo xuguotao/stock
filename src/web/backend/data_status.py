@@ -273,6 +273,10 @@ def _dataset_health_rows(
     expected_all = int(stock_summary.get("stock_count") or 0)
     quote_quality = quality.get("quote_snapshots") or {}
     scheduled = quality.get("scheduled_checks") or {}
+    fund_tail_nav_issues = _fund_tail_nav_freshness_issues(tables)
+    fund_tail_nav_status = _table_presence_status(tables.get("fund_tail_nav"))
+    if fund_tail_nav_status == "ok" and fund_tail_nav_issues:
+        fund_tail_nav_status = "warning"
     definitions = [
         {
             "key": "stocks",
@@ -399,10 +403,10 @@ def _dataset_health_rows(
             "category": "基金尾盘",
             "table": "fund_tail_nav",
             "source": "基金净值 CSV / ClickHouse",
-            "update_mechanism": "基金尾盘数据导入任务写入，跟随基金建议刷新。",
+            "update_mechanism": "基金尾盘建议生成时先刷新净值 CSV 并导入 ClickHouse，再刷新当日代理行情。",
             "consumer": "基金尾盘建议、基金复盘",
-            "status": _table_presence_status(tables.get("fund_tail_nav")),
-            "issues": [],
+            "status": fund_tail_nav_status,
+            "issues": fund_tail_nav_issues,
         },
         {
             "key": "fund_tail_proxy",
@@ -506,6 +510,27 @@ def _table_presence_status(table: dict[str, Any] | None) -> str:
     if not table or table.get("error"):
         return "missing"
     return "ok" if int(table.get("row_count") or 0) > 0 else "missing"
+
+
+def _fund_tail_nav_freshness_issues(tables: dict[str, dict[str, Any]]) -> list[str]:
+    nav_latest = _table_latest_date(tables.get("fund_tail_nav"))
+    proxy_latest = _table_latest_date(tables.get("fund_tail_proxy"))
+    if not nav_latest or not proxy_latest or nav_latest >= proxy_latest:
+        return []
+    nav_date = datetime.fromisoformat(nav_latest).date()
+    proxy_date = datetime.fromisoformat(proxy_latest).date()
+    if (proxy_date - nav_date).days <= 1:
+        return []
+    return [f"fund_tail_nav_stale_vs_proxy:{nav_latest}<{proxy_latest}"]
+
+
+def _table_latest_date(table: dict[str, Any] | None) -> str | None:
+    if not table:
+        return None
+    latest = (table.get("date_range") or {}).get("end")
+    if latest is None:
+        return None
+    return str(latest).split(" ")[0]
 
 
 def _dataset_issues(prefix: str, quality: dict[str, Any]) -> list[str]:

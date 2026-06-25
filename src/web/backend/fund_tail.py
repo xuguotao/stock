@@ -255,28 +255,28 @@ def run_local_fund_tail_advice(
     selected_funds = _selected_funds(request.fund_codes, repository=repository, fund_names=all_fund_names)
     proxy_refresh = None
     if request.refresh_data:
-        if proxy_refresher is not None and repository is not None:
-            _report_progress(progress, 20, "refreshing_proxy", "刷新基金代理行情")
-            proxy_refresh = proxy_refresher(
-                repository=repository,
-                fund_codes=list(selected_funds),
-                trade_date=request.trade_date,
-            )
-        else:
-            _report_progress(progress, 20, "refreshing_data", "刷新基金净值和代理指数数据")
-            downloader(
-                paths.data_dir,
-                request.download_start_date.strftime("%Y%m%d"),
-                request.trade_date.strftime("%Y%m%d"),
-            )
+        _report_progress(progress, 20, "refreshing_data", "刷新基金净值和代理指数数据")
+        downloader(
+            paths.data_dir,
+            request.download_start_date.strftime("%Y%m%d"),
+            request.trade_date.strftime("%Y%m%d"),
+        )
 
     import_result = None
-    if repository is not None and proxy_refresh is None:
+    if repository is not None:
         _report_progress(progress, 40, "importing_clickhouse", "导入基金尾盘数据到 ClickHouse")
         import_result = repository.import_csv_directory(
             paths.data_dir,
             fund_names=all_fund_names,
             proxy_specs=PROXY_INDEXES,
+        )
+
+    if request.refresh_data and proxy_refresher is not None and repository is not None:
+        _report_progress(progress, 50, "refreshing_proxy", "刷新基金代理行情")
+        proxy_refresh = proxy_refresher(
+            repository=repository,
+            fund_codes=list(selected_funds),
+            trade_date=request.trade_date,
         )
 
     _report_progress(progress, 55, "analyzing_signals", "计算基金尾盘信号")
