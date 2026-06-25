@@ -394,6 +394,7 @@
                   <el-descriptions-item label="历史胜率">{{ formatPercent(row.credibility?.historical_hit_rate) }}</el-descriptions-item>
                   <el-descriptions-item label="原始排名">{{ row.raw_rank ?? '-' }}</el-descriptions-item>
                   <el-descriptions-item label="历史平均收益">{{ formatPercent(row.credibility?.historical_avg_return) }}</el-descriptions-item>
+                  <el-descriptions-item label="历史冲高/回撤">{{ formatPercent(row.credibility?.history?.max_win_rate) }} / {{ formatPercent(row.credibility?.history?.avg_min_return) }}</el-descriptions-item>
                   <el-descriptions-item v-if="row.model" label="模型收益/风险">{{ formatPercent(row.model.expected_high_return) }} / {{ formatPercent(row.model.risk_probability) }}</el-descriptions-item>
                   <el-descriptions-item v-if="row.model" label="模型因子">{{ modelFeatureText(row.model.feature_snapshot) }}</el-descriptions-item>
                   <el-descriptions-item label="候选排名">{{ row.final_candidate_rank ?? '-' }}</el-descriptions-item>
@@ -667,6 +668,9 @@ interface Credibility {
     note: string
     close_win_rate?: number
     avg_close_return?: number
+    max_win_rate?: number
+    avg_max_return?: number
+    avg_min_return?: number
   }
 }
 
@@ -1254,6 +1258,7 @@ function filterReasonText(value: unknown) {
   if (value === 'v2_not_trade_candidate') return 'V2未达交易候选'
   if (value === 'limit_up_not_buyable') return '涨停/近涨停，无法买入'
   if (value === 'tail_pullback_risk') return '尾盘冲高回落'
+  if (value === 'outside_historical_calibration_top_n') return '历史校准排名超出 Top N'
   if (value === 'outside_top_n') return '排名超出 Top N'
   if (value === 'not_selected') return '未入选'
   return '-'

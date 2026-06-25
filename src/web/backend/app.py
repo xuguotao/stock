@@ -1206,6 +1206,7 @@ def _run_tail_live_selection_job(
             diagnostics["effective_data_refresh_mode"] = refresh_mode
         stage_started = perf_counter()
         _apply_tail_historical_calibration(signal_repository, result)
+        _apply_tail_historical_selection(result)
         stage_timings["historical_calibration"] = _elapsed(stage_started)
         result["stage_timings"] = {**stage_timings, **(result.get("stage_timings") or {})}
         stage_started = perf_counter()
@@ -1382,6 +1383,92 @@ def _apply_tail_historical_calibration(signal_repository, result: dict[str, Any]
                     }
             credibility["history"] = cache[key]
             _update_tail_calibrated_credibility(credibility, cache[key])
+
+
+def _apply_tail_historical_selection(result: dict[str, Any]) -> None:
+    ranked = result.get("ranked_signals")
+    if result.get("mode") != "selection" or not isinstance(ranked, list):
+        return
+    selected_count = int(result.get("selected_count") or len(result.get("selections") or []) or 0)
+    if selected_count <= 0:
+        return
+    candidates = [
+        row for row in ranked
+        if isinstance(row, dict)
+        and row.get("final_candidate_rank") is not None
+        and _row_buyable(row)
+        and _has_ready_historical_calibration(row)
+    ]
+    if len(candidates) <= selected_count:
+        result.setdefault("diagnostics", {})["historical_calibration_selection_applied"] = False
+        return
+
+    selected_symbols = {
+        str(row.get("symbol"))
+        for row in sorted(candidates, key=_historical_selection_score, reverse=True)[:selected_count]
+    }
+    for row in ranked:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("symbol")) in selected_symbols:
+            row["status"] = "selected"
+            row["filter_reason"] = None
+        elif row.get("status") == "selected":
+            row["status"] = "filtered"
+            row["filter_reason"] = "outside_historical_calibration_top_n"
+    ranked.sort(key=lambda row: _historical_ranked_display_key(row, selected_symbols=selected_symbols))
+    for index, row in enumerate(ranked, start=1):
+        if isinstance(row, dict):
+            row["rank"] = index
+    result["selections"] = [row for row in ranked if isinstance(row, dict) and str(row.get("symbol")) in selected_symbols]
+    result["selected_count"] = len(result["selections"])
+    diagnostics = result.setdefault("diagnostics", {})
+    diagnostics["historical_calibration_selection_applied"] = True
+    diagnostics["historical_calibration_selected_symbols"] = sorted(selected_symbols)
+
+
+def _has_ready_historical_calibration(row: dict[str, Any]) -> bool:
+    credibility = row.get("credibility") or {}
+    history = credibility.get("history") or {}
+    return (
+        isinstance(credibility, dict)
+        and history.get("status") == "ready"
+        and int(history.get("sample_count") or 0) >= 10
+        and _number_or_none(credibility.get("calibrated_probability")) is not None
+    )
+
+
+def _row_buyable(row: dict[str, Any]) -> bool:
+    tradability = row.get("tradability")
+    return not isinstance(tradability, dict) or bool(tradability.get("buyable", True))
+
+
+def _historical_selection_score(row: dict[str, Any]) -> tuple[float, float, float, float]:
+    credibility = row.get("credibility") or {}
+    history = credibility.get("history") or {}
+    calibrated = _number_or_none(credibility.get("calibrated_probability")) or 0.0
+    avg_return = _number_or_none(history.get("avg_close_return") or credibility.get("historical_avg_return")) or 0.0
+    max_win = _number_or_none(history.get("max_win_rate")) or 0.0
+    rule_score = (_number_or_none(credibility.get("rule_score") or credibility.get("score")) or 0.0) / 100
+    return (
+        calibrated * 0.55 + max(0.0, avg_return) * 3.0 + max_win * 0.15 + rule_score * 0.15,
+        avg_return,
+        rule_score,
+        -float(row.get("raw_rank") or row.get("rank") or 999999),
+    )
+
+
+def _historical_ranked_display_key(row: Any, *, selected_symbols: set[str]) -> tuple[Any, ...]:
+    if not isinstance(row, dict):
+        return (3, 0)
+    symbol = str(row.get("symbol"))
+    candidate = row.get("final_candidate_rank") is not None and _has_ready_historical_calibration(row)
+    score = _historical_selection_score(row)[0] if candidate else 0.0
+    return (
+        0 if symbol in selected_symbols else 1 if candidate else 2,
+        -score,
+        row.get("raw_rank") or row.get("rank") or 999999,
+    )
 
 
 def _number_or_none(value: Any) -> float | None:

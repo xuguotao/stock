@@ -51,6 +51,7 @@ def test_tail_live_selection_page_explains_new_filter_reasons() -> None:
 
     assert "涨停/近涨停，无法买入" in source
     assert "尾盘冲高回落" in source
+    assert "历史校准排名超出 Top N" in source
     assert "pullback_from_high" in source
 
 
