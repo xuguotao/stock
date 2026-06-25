@@ -140,6 +140,8 @@ def _daily_features(prior_daily: pd.DataFrame) -> dict[str, float]:
     volume = prior_daily["volume"].astype(float)
     amount = prior_daily["amount"].astype(float)
     prior_close = float(close.iloc[-1])
+    avg_amount_20 = float(amount.tail(20).mean())
+    amount_std_20 = float(amount.tail(20).std() or 0.0)
     return {
         "prior_close": prior_close,
         "daily_ret_5": _return(prior_close, float(close.iloc[-6])),
@@ -149,7 +151,9 @@ def _daily_features(prior_daily: pd.DataFrame) -> dict[str, float]:
         "ma5_distance": _return(prior_close, float(close.tail(5).mean())),
         "ma20_distance": _return(prior_close, float(close.tail(20).mean())) if len(close) >= 20 else 0.0,
         "avg_volume_20": float(volume.tail(20).mean()),
-        "avg_amount_20": float(amount.tail(20).mean()),
+        "avg_amount_20": avg_amount_20,
+        "amount_ratio_5_20": _return(float(amount.tail(5).mean()), avg_amount_20),
+        "amount_zscore_20": (float(amount.iloc[-1]) - avg_amount_20) / amount_std_20 if amount_std_20 > 0 else 0.0,
         "avg_5m_volume_20": float(volume.tail(20).mean() / 48.0),
     }
 
@@ -162,6 +166,9 @@ def _daily_feature_table(daily: pd.DataFrame) -> pd.DataFrame:
         volume = frame["volume"].astype(float)
         amount = frame["amount"].astype(float)
         prior_close = close.shift(1)
+        prior_amount = amount.shift(1)
+        avg_amount_20 = prior_amount.rolling(20, min_periods=1).mean()
+        amount_std_20 = prior_amount.rolling(20, min_periods=2).std()
         returns = close.pct_change()
         feature_frame = pd.DataFrame(
             {
@@ -176,7 +183,9 @@ def _daily_feature_table(daily: pd.DataFrame) -> pd.DataFrame:
                 "ma5_distance": prior_close / close.shift(1).rolling(5, min_periods=5).mean() - 1.0,
                 "ma20_distance": prior_close / close.shift(1).rolling(20, min_periods=20).mean() - 1.0,
                 "avg_volume_20": volume.shift(1).rolling(20, min_periods=1).mean(),
-                "avg_amount_20": amount.shift(1).rolling(20, min_periods=1).mean(),
+                "avg_amount_20": avg_amount_20,
+                "amount_ratio_5_20": prior_amount.rolling(5, min_periods=1).mean() / avg_amount_20 - 1.0,
+                "amount_zscore_20": (prior_amount - avg_amount_20) / amount_std_20,
                 "avg_5m_volume_20": volume.shift(1).rolling(20, min_periods=1).mean() / 48.0,
             }
         )
@@ -198,6 +207,8 @@ def _daily_feature_table(daily: pd.DataFrame) -> pd.DataFrame:
         "ma20_distance",
         "avg_volume_20",
         "avg_amount_20",
+        "amount_ratio_5_20",
+        "amount_zscore_20",
         "avg_5m_volume_20",
     ]
     result[numeric_columns] = result[numeric_columns].fillna(0.0)

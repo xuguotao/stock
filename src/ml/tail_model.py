@@ -19,6 +19,8 @@ DEFAULT_FEATURE_COLUMNS = [
     "ma5_distance",
     "ma20_distance",
     "avg_amount_20",
+    "amount_ratio_5_20",
+    "amount_zscore_20",
     "tail_return_from_1430",
     "tail_high_return_from_1430",
     "tail_pullback_from_high",

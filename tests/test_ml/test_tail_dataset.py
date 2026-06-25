@@ -102,6 +102,10 @@ def test_build_tail_feature_frame_uses_only_prior_daily_and_current_tail_bars() 
     # Prior close for 2026-02-09 is 12.6; the next day 2026-02-10 must not leak into features.
     assert second["prior_close"] == pytest.approx(12.6)
     assert second["daily_ret_5"] == pytest.approx(12.6 / 12.1 - 1)
+    daily_fixture = _daily_fixture().sort_values("date")
+    prior_amounts = daily_fixture[daily_fixture["date"] < date(2026, 2, 9)]["amount"].astype(float)
+    assert second["amount_ratio_5_20"] == pytest.approx(prior_amounts.tail(5).mean() / prior_amounts.tail(20).mean() - 1)
+    assert second["amount_zscore_20"] == pytest.approx((prior_amounts.iloc[-1] - prior_amounts.tail(20).mean()) / prior_amounts.tail(20).std())
 
 
 def test_build_tail_feature_frame_adds_prior_market_context_without_future_leakage() -> None:
@@ -169,6 +173,8 @@ def test_build_daily_model_feature_context_returns_live_inference_features() -> 
     assert row["market_ret_5"] == pytest.approx(row["daily_ret_5"])
     assert row["market_breadth_20"] == pytest.approx(1.0)
     assert row["relative_ret_5"] == pytest.approx(0.0)
+    assert "amount_ratio_5_20" in row
+    assert "amount_zscore_20" in row
 
 
 def test_build_daily_model_feature_context_adds_industry_relative_features() -> None:

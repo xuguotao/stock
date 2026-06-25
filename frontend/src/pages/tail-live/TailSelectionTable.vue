@@ -204,6 +204,8 @@ const modelFeatureLabels: Record<string, string> = {
   ma5_distance: 'MA5距离',
   ma20_distance: 'MA20距离',
   avg_amount_20: '20日成交额',
+  amount_ratio_5_20: '5/20成交额',
+  amount_zscore_20: '成交额热度',
   tail_return_from_1430: '尾盘涨幅',
   tail_high_return_from_1430: '尾盘高点',
   tail_pullback_from_high: '高点回撤',

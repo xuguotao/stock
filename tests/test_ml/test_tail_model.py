@@ -21,6 +21,8 @@ def test_train_tail_model_walk_forward_scores_validation_rows_chronologically() 
 
     assert result["status"] == "ready"
     assert result["feature_columns"] == DEFAULT_FEATURE_COLUMNS
+    assert "amount_ratio_5_20" in result["feature_columns"]
+    assert "amount_zscore_20" in result["feature_columns"]
     assert result["fold_count"] >= 1
     assert result["sample_count"] == len(samples)
     assert result["metrics"]["selected_days"] > 0
