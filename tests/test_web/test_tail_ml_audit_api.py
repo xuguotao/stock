@@ -171,6 +171,74 @@ def test_tail_ml_train_api_runs_inline_training_job(tmp_path) -> None:
     assert job["result"]["manifest"]["promotion_decision"]["status"] == "rejected"
 
 
+def test_tail_ml_train_api_drops_unlabeled_latest_samples(tmp_path) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_sample_builder(**kwargs):
+        return SimpleNamespace(
+            samples=pd.DataFrame(
+                [
+                    {
+                        "trade_date": "2026-06-01",
+                        "symbol": "000001.SZ",
+                        "tail_return_from_1430": 0.01,
+                        "tail_volume_ratio": 2.0,
+                        "last3_close_slope": 0.01,
+                        "tail_pullback_from_high": -0.001,
+                        "next_high_return": 0.02,
+                        "next_open_return": 0.01,
+                        "next_low_return": -0.01,
+                        "hit_next_high_1pct": True,
+                        "drawdown_breach_2pct": False,
+                    },
+                    {
+                        "trade_date": "2026-06-25",
+                        "symbol": "000002.SZ",
+                        "tail_return_from_1430": 0.02,
+                        "tail_volume_ratio": 2.4,
+                        "last3_close_slope": 0.02,
+                        "tail_pullback_from_high": -0.001,
+                        "next_high_return": None,
+                        "next_open_return": None,
+                        "next_low_return": None,
+                        "hit_next_high_1pct": None,
+                        "drawdown_breach_2pct": None,
+                    },
+                ]
+            ),
+            summary={"sample_rows": 2, "symbols": 2, "trade_dates": 2, "null_label_rows": 1},
+        )
+
+    def fake_trainer(samples, **kwargs):
+        calls["trained_rows"] = len(samples)
+        return {
+            "version": kwargs["version"],
+            "status": "ready",
+            "artifact_dir": str(tmp_path / "models" / kwargs["version"]),
+            "sample_count": int(len(samples)),
+            "fold_count": 1,
+            "metrics": {"selected_days": 1, "hit_next_high_1pct_rate": 1.0, "avg_next_high_return": 0.02, "avg_next_low_drawdown": -0.01},
+            "feature_columns": ["tail_return_from_1430"],
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        run_jobs_inline=True,
+        tail_model_root=tmp_path / "models",
+        tail_ml_sample_builder=fake_sample_builder,
+        tail_model_trainer=fake_trainer,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/ml/tail/train", json={"start": "2026-06-01", "end": "2026-06-25", "version": "tail-drop-null"})
+    job = client.get(f"/api/jobs/{response.json()['job_id']}").json()
+
+    assert response.status_code == 200
+    assert job["status"] == "success"
+    assert calls["trained_rows"] == 1
+    assert job["result"]["dataset_summary"]["dropped_null_label_rows"] == 1
+
+
 def test_tail_ml_promote_api_marks_only_requested_model_promoted(tmp_path) -> None:
     model_root = tmp_path / "models"
     first = model_root / "tail-a"

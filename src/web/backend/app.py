@@ -938,22 +938,24 @@ def _run_tail_ml_train_job(
     try:
         store.update_job(job_id, status="running", progress=_progress(20, "building_samples", "构建尾盘训练样本"))
         dataset = sample_builder(start=payload.start, end=payload.end, symbols=payload.symbols)
-        if dataset.samples.empty:
+        training_samples, dropped_null_labels = _tail_training_samples_with_complete_labels(dataset.samples)
+        dataset_summary = dict(dataset.summary)
+        dataset_summary["dropped_null_label_rows"] = dropped_null_labels
+        dataset_summary["training_sample_rows"] = int(len(training_samples))
+        if training_samples.empty:
             raise ValueError("tail ML training samples are empty")
-        if int(dataset.summary.get("null_label_rows") or 0) > 0:
-            raise ValueError(f"tail ML samples contain null labels: {dataset.summary['null_label_rows']}")
 
         version = payload.version or f"tail-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         store.update_job(job_id, status="running", progress=_progress(65, "training_model", "训练尾盘模型"))
         manifest = model_trainer(
-            dataset.samples,
+            training_samples,
             version=version,
             output_root=model_root,
             train_days=payload.train_days,
             validation_days=payload.validation_days,
             top_n=payload.top_n,
         )
-        baseline_report = evaluate_tail_rule_baseline(dataset.samples, top_ns=(payload.top_n,))
+        baseline_report = evaluate_tail_rule_baseline(training_samples, top_ns=(payload.top_n,))
         baseline_metrics = _tail_baseline_metrics_for_top_n(baseline_report, top_n=payload.top_n)
         promotion_decision = evaluate_promotion_gate(
             model_metrics=dict(manifest.get("metrics") or {}),
@@ -968,13 +970,32 @@ def _run_tail_ml_train_job(
         _write_tail_model_manifest_if_present(manifest)
         result = {
             "version": version,
-            "dataset_summary": dict(dataset.summary),
+            "dataset_summary": dataset_summary,
             "manifest": manifest,
         }
     except Exception as exc:
         store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "尾盘模型训练失败"))
         return
     store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "尾盘模型训练完成"))
+
+
+TAIL_TRAIN_LABEL_COLUMNS = [
+    "next_open_return",
+    "next_high_return",
+    "next_low_return",
+    "hit_next_high_1pct",
+    "drawdown_breach_2pct",
+]
+
+
+def _tail_training_samples_with_complete_labels(samples) -> tuple[Any, int]:
+    if samples.empty:
+        return samples, 0
+    label_columns = [column for column in TAIL_TRAIN_LABEL_COLUMNS if column in samples]
+    if not label_columns:
+        return samples, 0
+    mask = samples[label_columns].notna().all(axis=1)
+    return samples.loc[mask].copy(), int((~mask).sum())
 
 
 def _tail_baseline_metrics_for_top_n(baseline_report: dict[str, Any], *, top_n: int) -> dict[str, Any]:
