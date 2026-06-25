@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from config.settings import reset_settings
 from src.data.aggregator import DataAggregator
+from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
 from src.strategy.reports import (
     select_tail_session_signals,
     tail_session_selection_rows,
@@ -70,16 +71,11 @@ def run_tail_live_selection(
     aggregator = DataAggregator()
     liquidity_start = request.liquidity_start or request.trade_date - timedelta(days=548)
     liquidity_end = request.liquidity_end or request.trade_date
-    symbols = resolve_scan_symbols(
+    symbols = _resolve_tail_scan_symbols(
         aggregator=aggregator,
-        raw_symbols=request.symbols,
-        limit=request.limit,
-        universe=request.universe,
-        bars_cache_dir=request.bars_cache_dir,
+        request=request,
         liquidity_start=liquidity_start,
         liquidity_end=liquidity_end,
-        liquidity_min_bars=request.liquidity_min_bars,
-        liquidity_min_end_date=request.liquidity_min_end_date,
     )
     intraday_coverage = _intraday_coverage(aggregator, symbols, request.trade_date)
     scan_as_of_time = _scan_as_of_time(request, scheduler)
@@ -343,6 +339,61 @@ def _safe_realtime_quotes(aggregator: Any, symbols: list[str]) -> tuple[Any | No
         "covered_symbols": covered,
         "coverage_ratio": ratio,
     }
+
+
+def _resolve_tail_scan_symbols(
+    *,
+    aggregator: Any,
+    request: TailLiveSelectionRequest,
+    liquidity_start: date,
+    liquidity_end: date,
+) -> list[str]:
+    if not request.symbols and request.universe == "default":
+        client = _clickhouse_client_from_aggregator(aggregator)
+        if client is not None:
+            try:
+                symbols = resolve_strategy_universe(
+                    client,
+                    StrategyUniverseOptions(
+                        trade_date=liquidity_end,
+                        lookback_start=liquidity_start,
+                        min_daily_bars=request.liquidity_min_bars,
+                        require_latest_daily=False,
+                        require_minute5=False,
+                        include_st=False,
+                        min_amount=0,
+                        markets=("SH", "SZ"),
+                    ),
+                    symbols_only=True,
+                )
+                if request.limit > 0:
+                    symbols = symbols[:request.limit]
+                if symbols:
+                    return symbols
+            except Exception:
+                pass
+    return resolve_scan_symbols(
+        aggregator=aggregator,
+        raw_symbols=request.symbols,
+        limit=request.limit,
+        universe=request.universe,
+        bars_cache_dir=request.bars_cache_dir,
+        liquidity_start=liquidity_start,
+        liquidity_end=liquidity_end,
+        liquidity_min_bars=request.liquidity_min_bars,
+        liquidity_min_end_date=request.liquidity_min_end_date,
+    )
+
+
+def _clickhouse_client_from_aggregator(aggregator: Any) -> Any | None:
+    for source in getattr(aggregator, "sources", []) or []:
+        if getattr(source, "name", "") != "clickhouse":
+            continue
+        client_getter = getattr(source, "_client_instance", None)
+        if client_getter is None:
+            continue
+        return client_getter()
+    return None
 
 
 def _tradability_by_symbol(quotes: Any | None) -> dict[str, dict[str, Any]]:

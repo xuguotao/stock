@@ -442,6 +442,63 @@ def test_tail_live_selection_explains_empty_universe(monkeypatch, tmp_path) -> N
     assert "没有解析到可扫描股票" in result["diagnostics"]["empty_message"]
 
 
+def test_tail_live_default_universe_uses_strategy_tradable_pool(monkeypatch, tmp_path) -> None:
+    class FakeScheduler:
+        def is_tail_session(self) -> bool:
+            return True
+
+        def is_trading_day(self, trade_date) -> bool:
+            return True
+
+    class FakeClickHouseClient:
+        def execute(self, query, params=None):
+            normalized = " ".join(query.lower().split())
+            if "from daily_kline d" in normalized and "group by d.symbol" in normalized:
+                from datetime import date
+
+                return [
+                    ("000001", "平安银行", "SZ", 61, date(2026, 6, 11), 10000000, 1000000),
+                    ("600001", "ST样本", "SH", 70, date(2026, 6, 11), 9000000, 900000),
+                    ("300001", "低样本", "SZ", 12, date(2026, 6, 11), 8000000, 800000),
+                ]
+            return []
+
+    class FakeClickHouseSource:
+        name = "clickhouse"
+
+        def _client_instance(self):
+            return FakeClickHouseClient()
+
+    class FakeAggregator:
+        sources = [FakeClickHouseSource()]
+
+        def get_stock_list(self):
+            raise AssertionError("default tail universe should use StrategyUniverse before stock list fallback")
+
+        def get_csi300_symbols(self):
+            return ["600001.SH", "300001.SZ"]
+
+        def get_intraday_bars(self, symbol, trade_date, frequency):
+            return pd.DataFrame()
+
+    monkeypatch.setattr("src.web.backend.tail_live.TradingScheduler", lambda: FakeScheduler())
+    monkeypatch.setattr("src.web.backend.tail_live.DataAggregator", lambda: FakeAggregator())
+
+    result = run_tail_live_selection(
+        TailLiveSelectionRequest(
+            trade_date="2026-06-12",
+            universe="default",
+            limit=0,
+            liquidity_min_bars=60,
+            output_dir=str(tmp_path),
+        )
+    )
+
+    assert result["scanned_count"] == 1
+    assert result["diagnostics"]["scan_universe_preview"] == ["000001.SZ"]
+    assert result["diagnostics"]["resolved_scan_count"] == 1
+
+
 def test_tail_live_selection_explains_no_intraday_candidates(monkeypatch, tmp_path) -> None:
     class FakeScheduler:
         def is_tail_session(self) -> bool:
