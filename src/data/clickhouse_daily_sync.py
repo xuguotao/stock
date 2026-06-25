@@ -20,10 +20,10 @@ def sync_clickhouse_daily_from_minute5(
     *,
     trade_date: date,
     client: Any | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
 ) -> dict[str, Any]:
     """Derive missing daily bars from deduplicated 5-minute bars."""
     clickhouse = client or ClickHouseStockDataSource(
@@ -181,10 +181,10 @@ def sync_clickhouse_index_daily(
     end: date,
     client: Any | None = None,
     fetcher: Callable[[str], pd.DataFrame] | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
 ) -> dict[str, Any]:
     """Fill missing index daily bars for index codes already present in ClickHouse."""
     clickhouse = client or ClickHouseStockDataSource(

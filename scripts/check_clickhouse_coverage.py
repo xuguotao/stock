@@ -28,14 +28,9 @@ def compare_coverage(
 ) -> list[dict[str, Any]]:
     """Compare row/date/symbol coverage between SQLite and ClickHouse."""
     if clickhouse_client is None:
-        from clickhouse_driver import Client
+        from src.data.clickhouse_source import ClickHouseStockDataSource
 
-        clickhouse_client = Client(
-            "10.211.49.42",
-            user="default",
-            password="stock123",
-            database="stock",
-        )
+        clickhouse_client = ClickHouseStockDataSource()._client_instance()
 
     rows = []
     sqlite_path = Path(sqlite_db)

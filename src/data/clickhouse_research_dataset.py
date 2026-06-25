@@ -25,7 +25,8 @@ def build_clickhouse_research_dataset(
     client: Any | None = None,
 ) -> dict[str, Any]:
     """Build a standard parquet research dataset from ClickHouse ``daily_kline``."""
-    clickhouse = client or ClickHouseStockDataSource()._client_instance()
+    source = ClickHouseStockDataSource()
+    clickhouse = client or source._client_instance()
     output = Path(output_path)
     manifest = Path(manifest_path) if manifest_path else output.with_name(f"{output.stem}_manifest.json")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -52,8 +53,8 @@ def build_clickhouse_research_dataset(
         "source": "clickhouse",
         "clickhouse": {
             "table": "daily_kline",
-            "host": "10.211.49.42",
-            "database": "stock",
+            "host": source.host,
+            "database": source.database,
         },
         "built_at": datetime.now().isoformat(timespec="seconds"),
     }

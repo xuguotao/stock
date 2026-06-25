@@ -17,14 +17,16 @@ from src.data.clickhouse_table_maintenance import (
     deduplicate_minute5_kline,
     minute5_duplicate_stats,
 )
+from config.settings import get_settings
 
 
 def main() -> None:
+    clickhouse = get_settings().clickhouse
     parser = argparse.ArgumentParser(description="Maintain ClickHouse stock tables")
-    parser.add_argument("--host", default="10.211.49.42", help="ClickHouse host")
-    parser.add_argument("--user", default="default", help="ClickHouse user")
-    parser.add_argument("--password", default="stock123", help="ClickHouse password")
-    parser.add_argument("--database", default="stock", help="ClickHouse database")
+    parser.add_argument("--host", default=clickhouse.host, help="ClickHouse host")
+    parser.add_argument("--user", default=clickhouse.user, help="ClickHouse user")
+    parser.add_argument("--password", default=clickhouse.password, help="ClickHouse password")
+    parser.add_argument("--database", default=clickhouse.database, help="ClickHouse database")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("minute5-duplicates", help="Inspect minute5 duplicate keys")

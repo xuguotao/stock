@@ -166,12 +166,29 @@ class DataSourceConfig(BaseModel):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
 
+class ClickHouseSettings(BaseModel):
+    host: str = "localhost"
+    user: str = "default"
+    password: str = ""
+    database: str = "stock"
+
+    @classmethod
+    def from_env(cls) -> "ClickHouseSettings":
+        return cls(
+            host=os.getenv("STOCK_CLICKHOUSE_HOST", "localhost"),
+            user=os.getenv("STOCK_CLICKHOUSE_USER", "default"),
+            password=os.getenv("STOCK_CLICKHOUSE_PASSWORD", ""),
+            database=os.getenv("STOCK_CLICKHOUSE_DATABASE", "stock"),
+        )
+
+
 # ── App Settings ───────────────────────────────────────────────
 
 class AppSettings(BaseModel):
     trading: TradingRules = Field(default_factory=TradingRules.from_yaml)
     commission: CommissionConfig = Field(default_factory=CommissionConfig.from_yaml)
     data: DataSourceConfig = Field(default_factory=DataSourceConfig)
+    clickhouse: ClickHouseSettings = Field(default_factory=ClickHouseSettings)
     tushare_token: str = ""
     log_level: str = "INFO"
 
@@ -184,6 +201,7 @@ class AppSettings(BaseModel):
             load_dotenv(PROJECT_ROOT / ".env.example")
 
         data.setdefault("tushare_token", os.getenv("TUSHARE_TOKEN", ""))
+        data.setdefault("clickhouse", ClickHouseSettings.from_env())
         super().__init__(**data)
 
 

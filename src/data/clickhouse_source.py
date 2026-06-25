@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date, datetime, time
 from typing import Any
 
 import pandas as pd
 
+from config.settings import get_settings
 from src.core.constants import format_symbol, is_st
 from src.data.base import DataSourceBase
 from src.data.models import FinancialStatement, StockInfo
@@ -20,31 +20,29 @@ class ClickHouseStockDataSource(DataSourceBase):
 
     def __init__(
         self,
-        host: str = "10.211.49.42",
-        user: str = "default",
-        password: str = "stock123",
-        database: str = "stock",
+        host: str | None = None,
+        user: str | None = None,
+        password: str | None = None,
+        database: str | None = None,
         client: Any | None = None,
     ):
         super().__init__(rate_limit=0.0)
-        self.host = host
-        self.user = user
-        self.password = password
-        self.database = database
+        settings = get_settings().clickhouse
+        self.host = host if host is not None else settings.host
+        self.user = user if user is not None else settings.user
+        self.password = password if password is not None else settings.password
+        self.database = database if database is not None else settings.database
         self._client = client
 
     @classmethod
     def from_env(cls) -> "ClickHouseStockDataSource | None":
         """Create from STOCK_CLICKHOUSE_* env vars when enabled."""
+        import os
+
         host = os.getenv("STOCK_CLICKHOUSE_HOST")
         if not host:
             return None
-        return cls(
-            host=host,
-            user=os.getenv("STOCK_CLICKHOUSE_USER", "default"),
-            password=os.getenv("STOCK_CLICKHOUSE_PASSWORD", ""),
-            database=os.getenv("STOCK_CLICKHOUSE_DATABASE", "stock"),
-        )
+        return cls()
 
     def fetch_stock_list(self) -> list[StockInfo]:
         rows = self._execute(

@@ -28,10 +28,10 @@ def sync_clickhouse_minute1_kline(
     max_fetch_symbols: int = 0,
     db_path: str | Path | None = None,
     client: Any | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
 ) -> dict[str, Any]:
     """Fetch 1-minute bars and append missing rows into ClickHouse."""
     del db_path
@@ -126,7 +126,7 @@ def sync_clickhouse_minute1_kline(
     return result
 
 
-def _client(*, host: str, user: str, password: str, database: str) -> Any:
+def _client(*, host: str | None, user: str | None, password: str | None, database: str | None) -> Any:
     source = ClickHouseStockDataSource(host=host, user=user, password=password, database=database)
     return source._client_instance()
 

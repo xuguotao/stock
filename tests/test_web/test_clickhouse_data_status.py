@@ -203,7 +203,7 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
 
     assert payload["database"] == {
         "type": "clickhouse",
-        "host": "10.211.49.42",
+        "host": "localhost",
         "database": "stock",
         "exists": True,
         "size_bytes": 0,

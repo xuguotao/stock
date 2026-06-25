@@ -1349,13 +1349,13 @@ def _run_daily_maintenance_job(
             store.update_job(job_id, status="running", progress=_progress(84, "daily_repair", "用 5m 分钟线修复日线"))
             daily_repair = daily_repair_runner(trade_date=trade_date)
         index_daily = None
-        if index_daily_sync_runner is not None:
+        if _should_run_index_daily_sync(index_daily_sync_runner, before_status):
             start = trade_date - timedelta(days=6)
             store.update_job(job_id, status="running", progress=_progress(86, "index_daily", "补齐指数日线"))
             index_daily = index_daily_sync_runner(start=start, end=trade_date)
         after_status = data_status_runner()
         health_snapshot = None
-        if quality_snapshot_writer is not None:
+        if _should_write_quality_snapshot(quality_snapshot_writer, after_status):
             store.update_job(job_id, status="running", progress=_progress(88, "quality_snapshot", "写入数据质量快照"))
             health_snapshot = quality_snapshot_writer(quality=after_status.get("quality"))
         strategy_review = None
@@ -1488,6 +1488,22 @@ def _maintenance_verification(status: dict[str, Any]) -> dict[str, Any]:
         "minute5_complete_symbols": health.get("minute5_symbol_count", 0),
         "status": health.get("status", "unknown"),
     }
+
+
+def _should_run_index_daily_sync(index_daily_sync_runner, status: dict[str, Any]) -> bool:
+    if index_daily_sync_runner is None:
+        return False
+    if index_daily_sync_runner is not sync_clickhouse_index_daily:
+        return True
+    return "index_daily" in (status.get("tables") or {})
+
+
+def _should_write_quality_snapshot(quality_snapshot_writer, status: dict[str, Any]) -> bool:
+    if quality_snapshot_writer is None:
+        return False
+    if quality_snapshot_writer is not persist_clickhouse_quality_snapshot:
+        return True
+    return status.get("quality") is not None
 
 
 def _parse_optional_date(value: Any) -> date | None:

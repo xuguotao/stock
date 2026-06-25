@@ -13,14 +13,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_history_window, sync_clickhouse_minute5_kline
+from config.settings import get_settings
 
 
 def main() -> None:
+    clickhouse = get_settings().clickhouse
     parser = argparse.ArgumentParser(description="Sync 5-minute A-share K-line data into ClickHouse")
-    parser.add_argument("--host", default="10.211.49.42", help="ClickHouse host")
-    parser.add_argument("--user", default="default", help="ClickHouse user")
-    parser.add_argument("--password", default="stock123", help="ClickHouse password")
-    parser.add_argument("--database", default="stock", help="ClickHouse database")
+    parser.add_argument("--host", default=clickhouse.host, help="ClickHouse host")
+    parser.add_argument("--user", default=clickhouse.user, help="ClickHouse user")
+    parser.add_argument("--password", default=clickhouse.password, help="ClickHouse password")
+    parser.add_argument("--database", default=clickhouse.database, help="ClickHouse database")
     parser.add_argument("--trade-date", default=None, help="Trade date, YYYY-MM-DD")
     parser.add_argument("--start", default=None, help="Historical window start date, YYYY-MM-DD")
     parser.add_argument("--end", default=None, help="Historical window end date, YYYY-MM-DD")

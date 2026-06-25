@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from config.settings import reset_settings
 from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.models import StockInfo
 
@@ -81,6 +82,22 @@ class GapFillingClickHouseClient(FakeClickHouseClient):
                 ("000001", datetime(2026, 6, 15, 14, 45), 10.45, 10.6, 10.4, 10.55, 1600, 16880.0),
             ]
         return super().execute(query, params)
+
+
+def test_clickhouse_source_defaults_to_settings_env(monkeypatch) -> None:
+    reset_settings()
+    monkeypatch.setenv("STOCK_CLICKHOUSE_HOST", "clickhouse.local")
+    monkeypatch.setenv("STOCK_CLICKHOUSE_USER", "quant")
+    monkeypatch.setenv("STOCK_CLICKHOUSE_PASSWORD", "secret")
+    monkeypatch.setenv("STOCK_CLICKHOUSE_DATABASE", "stock_test")
+
+    source = ClickHouseStockDataSource()
+
+    assert source.host == "clickhouse.local"
+    assert source.user == "quant"
+    assert source.password == "secret"
+    assert source.database == "stock_test"
+    reset_settings()
 
 
 def test_clickhouse_source_reads_stock_list() -> None:

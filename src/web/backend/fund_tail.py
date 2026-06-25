@@ -364,8 +364,11 @@ def _fund_names(repository=None) -> dict[str, str]:
 def _watchlist_codes(repository=None) -> set[str]:
     if repository is None:
         return set()
-    repository.seed_watchlist_from_static_funds(FUNDS, proxy_specs=PROXY_INDEXES)
-    return {str(item["fund_code"]).zfill(6) for item in repository.list_watchlist()}
+    try:
+        repository.seed_watchlist_from_static_funds(FUNDS, proxy_specs=PROXY_INDEXES)
+        return {str(item["fund_code"]).zfill(6) for item in repository.list_watchlist()}
+    except Exception:  # noqa: BLE001 - opportunity discovery can still run without watchlist exclusions.
+        return set()
 
 
 def _selected_funds(

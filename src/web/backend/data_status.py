@@ -125,26 +125,22 @@ def inspect_stock_database(db_path: str | Path = "data/stock.db") -> dict[str, A
 def inspect_clickhouse_database(
     *,
     client: Any | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
     as_of: date | None = None,
 ) -> dict[str, Any]:
     """Return read-only coverage metrics for the ClickHouse stock database."""
+    source = ClickHouseStockDataSource(host=host, user=user, password=password, database=database)
     db_info = {
         "type": "clickhouse",
-        "host": host,
-        "database": database,
+        "host": source.host,
+        "database": source.database,
         "exists": True,
         "size_bytes": 0,
     }
-    clickhouse = client or ClickHouseStockDataSource(
-        host=host,
-        user=user,
-        password=password,
-        database=database,
-    )._client_instance()
+    clickhouse = client or source._client_instance()
 
     try:
         available_tables = {
@@ -216,25 +212,21 @@ def persist_clickhouse_quality_snapshot(
     client: Any | None = None,
     quality: dict[str, Any] | None = None,
     checked_at: datetime | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
 ) -> dict[str, Any]:
     """Persist the current ClickHouse data quality result for historical review."""
-    clickhouse = client or ClickHouseStockDataSource(
-        host=host,
-        user=user,
-        password=password,
-        database=database,
-    )._client_instance()
+    source = ClickHouseStockDataSource(host=host, user=user, password=password, database=database)
+    clickhouse = client or source._client_instance()
     snapshot_time = checked_at or datetime.now()
     quality_payload = quality or inspect_clickhouse_database(
         client=clickhouse,
-        host=host,
-        user=user,
-        password=password,
-        database=database,
+        host=source.host,
+        user=source.user,
+        password=source.password,
+        database=source.database,
     )["quality"]
     clickhouse.execute(
         """

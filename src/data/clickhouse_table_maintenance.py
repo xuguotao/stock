@@ -11,10 +11,10 @@ from src.data.clickhouse_source import ClickHouseStockDataSource
 def minute5_duplicate_stats(
     *,
     client: Any | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
 ) -> dict[str, int]:
     """Return duplicate key stats for minute5_kline."""
     clickhouse = client or _client(host=host, user=user, password=password, database=database)
@@ -39,10 +39,10 @@ def minute5_duplicate_stats(
 def daily_duplicate_stats(
     *,
     client: Any | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
 ) -> dict[str, int]:
     """Return duplicate key stats for daily_kline."""
     clickhouse = client or _client(host=host, user=user, password=password, database=database)
@@ -67,10 +67,10 @@ def daily_duplicate_stats(
 def deduplicate_minute5_kline(
     *,
     client: Any | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
     dry_run: bool = True,
     suffix: str | None = None,
 ) -> dict[str, Any]:
@@ -126,10 +126,10 @@ def deduplicate_minute5_kline(
 def deduplicate_daily_kline(
     *,
     client: Any | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
     dry_run: bool = True,
     suffix: str | None = None,
 ) -> dict[str, Any]:
@@ -188,10 +188,10 @@ def deduplicate_daily_kline(
 def optimize_quote_snapshot_rollups(
     *,
     client: Any | None = None,
-    host: str = "10.211.49.42",
-    user: str = "default",
-    password: str = "stock123",
-    database: str = "stock",
+    host: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
 ) -> dict[str, Any]:
     """Trigger ReplacingMergeTree final merges for quote snapshot rollup tables."""
     clickhouse = client or _client(host=host, user=user, password=password, database=database)
@@ -201,7 +201,7 @@ def optimize_quote_snapshot_rollups(
     return {"tables": tables, "optimized": len(tables)}
 
 
-def _client(*, host: str, user: str, password: str, database: str) -> Any:
+def _client(*, host: str | None, user: str | None, password: str | None, database: str | None) -> Any:
     source = ClickHouseStockDataSource(host=host, user=user, password=password, database=database)
     return source._client_instance()
 
