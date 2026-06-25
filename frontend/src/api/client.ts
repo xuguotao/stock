@@ -393,6 +393,10 @@ export interface TailMlModelManifest {
     validation_days?: number
     top_n?: number
   }
+  feature_importance?: Array<{
+    feature: string
+    importance: number
+  }>
   feature_columns?: string[]
   metrics?: Record<string, number | string | null>
   promotion_decision?: {

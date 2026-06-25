@@ -115,6 +115,7 @@ def train_tail_model_artifact(
         "sample_count": result["sample_count"],
         "fold_count": result["fold_count"],
         "feature_columns": features,
+        "feature_importance": _feature_importance(frame, features),
         "sample_window": _sample_window(frame),
         "training_config": {
             "train_days": train_days,
@@ -133,6 +134,21 @@ def _sample_window(frame: pd.DataFrame) -> dict[str, str | None]:
         return {"start": None, "end": None}
     dates = sorted(pd.to_datetime(frame["trade_date"]).dt.date.unique())
     return {"start": dates[0].isoformat(), "end": dates[-1].isoformat()}
+
+
+def _feature_importance(frame: pd.DataFrame, features: list[str]) -> list[dict[str, float | str]]:
+    if frame.empty or "next_high_return" not in frame:
+        return [{"feature": feature, "importance": 0.0} for feature in features]
+    target = pd.to_numeric(frame["next_high_return"], errors="coerce")
+    rows = []
+    for feature in features:
+        values = pd.to_numeric(frame.get(feature, 0), errors="coerce")
+        if values.nunique(dropna=True) <= 1 or target.nunique(dropna=True) <= 1:
+            corr = 0.0
+        else:
+            corr = values.corr(target)
+        rows.append({"feature": feature, "importance": round(abs(float(corr)) if pd.notna(corr) else 0.0, 6)})
+    return sorted(rows, key=lambda row: (-float(row["importance"]), str(row["feature"])))
 
 
 def _prepared_samples(samples: pd.DataFrame, features: list[str]) -> pd.DataFrame:

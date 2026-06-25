@@ -60,6 +60,9 @@
             回撤 {{ formatPercent(baselineMetric(row, 'avg_next_low_drawdown')) }}
           </template>
         </el-table-column>
+        <el-table-column label="重要特征" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ featureImportanceText(row) }}</template>
+        </el-table-column>
         <el-table-column label="提升门禁" min-width="240" show-overflow-tooltip>
           <template #default="{ row }">{{ promotionText(row) }}</template>
         </el-table-column>
@@ -170,6 +173,12 @@ function trainingConfigText(row: TailMlModelManifest) {
   const config = row.training_config
   if (!config) return '-'
   return `${config.train_days ?? '-'} / ${config.validation_days ?? '-'} / Top${config.top_n ?? '-'}`
+}
+
+function featureImportanceText(row: TailMlModelManifest) {
+  const items = row.feature_importance ?? []
+  if (!items.length) return '-'
+  return items.slice(0, 5).map((item) => `${item.feature} ${item.importance.toFixed(3)}`).join('，')
 }
 
 function formatPercent(value: unknown) {
