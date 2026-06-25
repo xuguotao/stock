@@ -7,6 +7,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Literal
 
+import pandas as pd
 from pydantic import BaseModel, Field
 
 from config.settings import reset_settings
@@ -57,6 +58,8 @@ class TailLiveSelectionRequest(BaseModel):
 def run_tail_live_selection(
     request: TailLiveSelectionRequest,
     progress: ProgressCallback | None = None,
+    *,
+    model_scorer: Any | None = None,
 ) -> dict[str, Any]:
     """Run a selection-only live tail-session scan and return UI-friendly output."""
     reset_settings()
@@ -112,6 +115,7 @@ def run_tail_live_selection(
                 quote_status=quote_status,
                 stage_timings=timings,
                 progress=progress,
+                model_scorer=model_scorer,
             )
     timings["quote_and_breadth"] = _elapsed(stage_started)
 
@@ -157,6 +161,7 @@ def run_tail_live_selection(
         quote_status=quote_status,
         stage_timings=timings,
         progress=progress,
+        model_scorer=model_scorer,
     )
 
 
@@ -178,6 +183,7 @@ def _write_live_selection_result(
     quote_status: dict[str, Any] | None = None,
     stage_timings: dict[str, float] | None = None,
     progress: ProgressCallback | None,
+    model_scorer: Any | None = None,
 ) -> dict[str, Any]:
     _report_progress(progress, 80, "writing_outputs", "写入选股结果文件")
     stage_started = perf_counter()
@@ -227,7 +233,7 @@ def _write_live_selection_result(
     )
     timings = dict(stage_timings or {})
     timings["write_outputs"] = _elapsed(stage_started)
-    return {
+    result = {
         "mode": mode,
         "trade_date": request.trade_date.isoformat(),
         "scanned_count": len(symbols),
@@ -270,6 +276,78 @@ def _write_live_selection_result(
         "strategy_rules": _strategy_rules(request),
         "stage_timings": timings,
     }
+    _apply_model_scores(result, strategy_mode=request.strategy_mode, model_scorer=model_scorer)
+    return result
+
+
+MODEL_SCORE_SECTIONS = (
+    "ranked_signals",
+    "selections",
+    "preview_signals",
+    "watchlist_signals",
+    "weak_signals",
+)
+
+
+def _apply_model_scores(
+    result: dict[str, Any],
+    *,
+    strategy_mode: str,
+    model_scorer: Any | None,
+) -> None:
+    diagnostics = result.setdefault("diagnostics", {})
+    diagnostics["strategy_mode"] = strategy_mode
+    if strategy_mode == "rule":
+        diagnostics["effective_strategy_mode"] = "rule"
+        diagnostics["model_status"] = "disabled"
+        return
+    if model_scorer is None:
+        diagnostics["effective_strategy_mode"] = "rule"
+        diagnostics["model_status"] = "no_promoted_model"
+        return
+
+    rows_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for section in MODEL_SCORE_SECTIONS:
+        rows = result.get(section)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol") or "")
+            if not symbol:
+                continue
+            rows_by_symbol.setdefault(symbol, []).append(row)
+
+    if not rows_by_symbol:
+        diagnostics["effective_strategy_mode"] = "rule"
+        diagnostics["model_status"] = "no_scoreable_rows"
+        return
+
+    feature_rows = [rows[0] for rows in rows_by_symbol.values()]
+    scores = model_scorer.score(pd.DataFrame(feature_rows))
+    scored_by_symbol = {
+        str(row.get("symbol")): row
+        for row in scores
+        if isinstance(row, dict) and row.get("symbol")
+    }
+    for symbol, rows in rows_by_symbol.items():
+        score = scored_by_symbol.get(symbol)
+        if not score:
+            continue
+        model_payload = {
+            "model_version": score.get("model_version"),
+            "model_score": score.get("model_score"),
+            "hit_probability": score.get("hit_probability"),
+            "expected_high_return": score.get("expected_high_return"),
+            "risk_probability": score.get("risk_probability"),
+        }
+        for row in rows:
+            row["model"] = model_payload
+
+    diagnostics["effective_strategy_mode"] = strategy_mode
+    diagnostics["model_status"] = "scored"
+    diagnostics["model_scored_symbols"] = len(scored_by_symbol)
 
 
 def _result_mode_from_signal_mode(signal_mode: str) -> str:

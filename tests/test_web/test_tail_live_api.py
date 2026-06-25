@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from src.strategy.scanner import TailSessionSignal
 from src.web.backend.app import create_app
-from src.web.backend.tail_live import TailLiveSelectionRequest, _final_trade_candidates, _ranked_signal_rows, run_tail_live_selection
+from src.web.backend.tail_live import TailLiveSelectionRequest, _apply_model_scores, _final_trade_candidates, _ranked_signal_rows, run_tail_live_selection
 
 
 def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
@@ -313,6 +313,49 @@ def test_tail_live_selection_preserves_requested_strategy_mode(monkeypatch, tmp_
     )
 
     assert result["diagnostics"]["strategy_mode"] == "hybrid"
+
+
+def test_tail_live_selection_model_scoring_enriches_result_rows() -> None:
+    class FakeScorer:
+        def score(self, rows):
+            assert list(rows["symbol"]) == ["000001.SZ"]
+            return [
+                {
+                    "symbol": "000001.SZ",
+                    "model_version": "tail-test-001",
+                    "model_score": 0.72,
+                    "hit_probability": 0.68,
+                    "expected_high_return": 0.025,
+                    "risk_probability": 0.18,
+                }
+            ]
+
+    result = {
+        "diagnostics": {"strategy_mode": "model"},
+        "ranked_signals": [{"symbol": "000001.SZ", "tail_return": 0.01}],
+        "selections": [],
+    }
+
+    _apply_model_scores(result, strategy_mode="model", model_scorer=FakeScorer())
+
+    assert result["diagnostics"]["effective_strategy_mode"] == "model"
+    assert result["diagnostics"]["model_status"] == "scored"
+    assert result["ranked_signals"][0]["model"] == {
+        "model_version": "tail-test-001",
+        "model_score": 0.72,
+        "hit_probability": 0.68,
+        "expected_high_return": 0.025,
+        "risk_probability": 0.18,
+    }
+
+
+def test_tail_live_selection_model_mode_degrades_to_rule_without_scorer() -> None:
+    result = {"diagnostics": {"strategy_mode": "hybrid"}, "ranked_signals": [{"symbol": "000001.SZ"}]}
+
+    _apply_model_scores(result, strategy_mode="hybrid", model_scorer=None)
+
+    assert result["diagnostics"]["effective_strategy_mode"] == "rule"
+    assert result["diagnostics"]["model_status"] == "no_promoted_model"
 
 
 def test_tail_live_selection_job_defaults_to_snapshot_refresh_before_scanning(tmp_path) -> None:
