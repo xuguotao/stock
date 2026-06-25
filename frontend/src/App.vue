@@ -12,6 +12,7 @@
         <el-menu-item index="options-strategy">期权策略</el-menu-item>
         <el-menu-item index="signal-review">策略复盘</el-menu-item>
         <el-menu-item index="tail-replay">尾盘时段回测</el-menu-item>
+        <el-menu-item index="tail-model-lab">尾盘模型实验</el-menu-item>
         <el-menu-item index="backtest">尾盘回测</el-menu-item>
         <el-menu-item index="fund-tail">基金尾盘</el-menu-item>
         <el-menu-item index="jobs">任务中心</el-menu-item>
@@ -32,6 +33,7 @@
         <OptionsStrategy v-else-if="activePage === 'options-strategy'" />
         <SignalReview v-else-if="activePage === 'signal-review'" />
         <TailReplayBacktest v-else-if="activePage === 'tail-replay'" :job-id="targetJobId" />
+        <TailModelLab v-else-if="activePage === 'tail-model-lab'" />
         <TailBacktest v-else-if="activePage === 'backtest'" :job-id="targetJobId" />
         <FundTail v-else-if="activePage === 'fund-tail'" :job-id="targetJobId" />
         <Jobs v-else @open-result="openResult" />
@@ -52,6 +54,7 @@ import SignalReview from './pages/SignalReview.vue'
 import StockTrend from './pages/StockTrend.vue'
 import TailBacktest from './pages/TailBacktest.vue'
 import TailLiveSelection from './pages/TailLiveSelection.vue'
+import TailModelLab from './pages/TailModelLab.vue'
 import TailReplayBacktest from './pages/TailReplayBacktest.vue'
 import WatchlistMonitor from './pages/WatchlistMonitor.vue'
 

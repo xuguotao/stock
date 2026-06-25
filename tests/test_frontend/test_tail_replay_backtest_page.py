@@ -23,6 +23,16 @@ def test_app_adds_tail_replay_backtest_navigation() -> None:
     assert "TailReplayBacktest" in source
 
 
+def test_app_adds_tail_model_lab_navigation() -> None:
+    source = Path("frontend/src/App.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert 'index="tail-model-lab"' in source
+    assert "TailModelLab" in source
+    assert "getTailMlModels" in client
+    assert "TailMlModelsResponse" in client
+
+
 def test_jobs_page_can_open_tail_replay_results() -> None:
     source = Path("frontend/src/pages/Jobs.vue").read_text(encoding="utf-8")
 

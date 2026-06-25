@@ -375,6 +375,30 @@ export interface TailMlAuditResponse {
   issues: string[]
 }
 
+export interface TailMlModelManifest {
+  version: string
+  status: string
+  reason?: string | null
+  created_at?: string
+  artifact_dir?: string
+  sample_count?: number
+  fold_count?: number
+  top_n?: number
+  feature_columns?: string[]
+  metrics?: Record<string, number | string | null>
+  promotion_decision?: {
+    eligible: boolean
+    status: string
+    reasons: string[]
+  }
+  baseline_metrics?: Record<string, number | string | null>
+}
+
+export interface TailMlModelsResponse {
+  model_root: string
+  items: TailMlModelManifest[]
+}
+
 export interface StockDbSyncPayload {
   remote?: string
   backup?: boolean
@@ -866,6 +890,9 @@ export const api = {
   },
   getTailMlAudit() {
     return request<TailMlAuditResponse>('/api/ml/tail/audit')
+  },
+  getTailMlModels() {
+    return request<TailMlModelsResponse>('/api/ml/tail/models')
   },
   getStockTrend(symbol: string, tradeDate?: string, dailyWindow = 90, granularity = '5m') {
     const params = new URLSearchParams({ daily_window: String(dailyWindow) })

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -171,6 +172,7 @@ def create_app(
     clickhouse_dataset_builder=build_clickhouse_research_dataset,
     tail_signal_repository=None,
     tail_ml_audit_runner=audit_tail_ml_data,
+    tail_model_root: str | Path = "models/tail_session",
     stock_trend_runner=analyze_stock_trend,
     watchlist_monitor_runner=get_watchlist_report,
     watchlist_config_runner=get_watchlist_config,
@@ -255,6 +257,7 @@ def create_app(
     app.state.clickhouse_dataset_builder = clickhouse_dataset_builder
     app.state.tail_signal_repository = tail_signal_repository or ClickHouseTailSignalRepository()
     app.state.tail_ml_audit_runner = tail_ml_audit_runner
+    app.state.tail_model_root = Path(tail_model_root)
     app.state.stock_trend_runner = stock_trend_runner
     app.state.watchlist_monitor_runner = watchlist_monitor_runner
     app.state.watchlist_config_runner = watchlist_config_runner
@@ -790,6 +793,10 @@ def create_app(
                 "error": str(exc),
             }
 
+    @app.get("/api/ml/tail/models")
+    def get_tail_ml_models() -> dict[str, Any]:
+        return _list_tail_model_manifests(app.state.tail_model_root)
+
     @app.post("/api/tail-session/review-outcomes")
     def review_tail_signal_outcomes(payload: TailSignalOutcomeReviewRequest) -> dict[str, Any]:
         if payload.mode == "pending":
@@ -807,6 +814,27 @@ def _default_fund_tail_repository(fund_tail_data_dir: str | Path):
 
 def _default_fund_tail_proxy_refresher(**kwargs) -> dict[str, Any]:
     return refresh_fund_tail_proxy_quotes(proxy_specs=PROXY_INDEXES, **kwargs)
+
+
+def _list_tail_model_manifests(model_root: Path) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    if model_root.exists():
+        for manifest_path in sorted(model_root.glob("*/manifest.json")):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                manifest = {
+                    "version": manifest_path.parent.name,
+                    "status": "invalid",
+                    "error": str(exc),
+                    "metrics": {},
+                    "feature_columns": [],
+                }
+            manifest.setdefault("version", manifest_path.parent.name)
+            manifest["artifact_dir"] = str(manifest_path.parent)
+            items.append(manifest)
+    items.sort(key=lambda item: str(item.get("created_at") or item.get("version") or ""), reverse=True)
+    return {"model_root": str(model_root), "items": items}
 
 
 app = create_app()
