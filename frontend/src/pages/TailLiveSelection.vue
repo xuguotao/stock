@@ -302,6 +302,14 @@
           <el-table-column label="V2分" width="100" align="right">
             <template #default="{ row }">{{ formatScore(row.v2_score) }}</template>
           </el-table-column>
+          <el-table-column v-if="hasModelScores" label="模型" width="136" align="right">
+            <template #default="{ row }">
+              <div class="metric-stack">
+                <strong>{{ formatScore(row.model?.model_score) }}</strong>
+                <span>{{ formatPercent(row.model?.hit_probability) }}</span>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column label="规则分" width="120" align="right">
             <template #default="{ row }">
               <el-tag :type="credibilityType(row.credibility?.rule_score ?? row.credibility?.score)" effect="plain">
@@ -380,10 +388,13 @@
                 <el-descriptions :column="2" border>
                   <el-descriptions-item label="规则分">{{ row.credibility?.rule_score ?? row.credibility?.score ?? '-' }} / 100（{{ row.credibility?.rule_grade ?? row.credibility?.grade ?? '-' }}）</el-descriptions-item>
                   <el-descriptions-item label="校准概率">{{ formatPercent(row.credibility?.calibrated_probability) }}</el-descriptions-item>
+                  <el-descriptions-item v-if="row.model" label="模型版本">{{ row.model.model_version ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item v-if="row.model" label="模型分">{{ formatScore(row.model.model_score) }}，命中 {{ formatPercent(row.model.hit_probability) }}</el-descriptions-item>
                   <el-descriptions-item label="阶段">{{ row.credibility?.phase ?? '-' }}</el-descriptions-item>
                   <el-descriptions-item label="历史胜率">{{ formatPercent(row.credibility?.historical_hit_rate) }}</el-descriptions-item>
                   <el-descriptions-item label="原始排名">{{ row.raw_rank ?? '-' }}</el-descriptions-item>
                   <el-descriptions-item label="历史平均收益">{{ formatPercent(row.credibility?.historical_avg_return) }}</el-descriptions-item>
+                  <el-descriptions-item v-if="row.model" label="模型收益/风险">{{ formatPercent(row.model.expected_high_return) }} / {{ formatPercent(row.model.risk_probability) }}</el-descriptions-item>
                   <el-descriptions-item label="候选排名">{{ row.final_candidate_rank ?? '-' }}</el-descriptions-item>
                   <el-descriptions-item label="信号强度">{{ formatScore(row.credibility?.components?.signal_strength) }}</el-descriptions-item>
                   <el-descriptions-item label="量能质量">{{ formatScore(row.credibility?.components?.volume_quality) }}</el-descriptions-item>
@@ -417,6 +428,14 @@
               <el-tag :type="credibilityType(row.credibility?.rule_score ?? row.credibility?.score)" effect="plain">
                 {{ row.credibility?.rule_score ?? row.credibility?.score ?? '-' }} {{ row.credibility?.rule_grade ?? row.credibility?.grade ?? '' }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="hasModelScores" label="模型" width="136" align="right">
+            <template #default="{ row }">
+              <div class="metric-stack">
+                <strong>{{ formatScore(row.model?.model_score) }}</strong>
+                <span>{{ formatPercent(row.model?.hit_probability) }}</span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="校准概率" width="120" align="right">
@@ -605,6 +624,15 @@ interface SelectionRow {
     pullback_penalty: number
     v2_total?: number | null
   }
+  model?: ModelScore
+}
+
+interface ModelScore {
+  model_version?: string | null
+  model_score?: number | null
+  hit_probability?: number | null
+  expected_high_return?: number | null
+  risk_probability?: number | null
 }
 
 interface Credibility {
@@ -796,6 +824,7 @@ const finalSelections = computed(() => result.value?.selections ?? [])
 const previewSignals = computed(() => result.value?.preview_signals ?? [])
 const selections = computed(() => resultMode.value === 'preview' ? previewSignals.value : finalSelections.value)
 const rankedSignals = computed(() => result.value?.ranked_signals ?? [])
+const hasModelScores = computed(() => rankedSignals.value.some((row) => Boolean(row.model)))
 const watchlistSignals = computed(() => result.value?.watchlist_signals ?? [])
 const weakSignals = computed(() => result.value?.weak_signals ?? [])
 const signalLayers = computed(() => result.value?.signal_layers ?? { strong: 0, watchlist: 0, weak: 0 })

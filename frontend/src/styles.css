@@ -71,6 +71,23 @@ body {
   overflow-wrap: anywhere;
 }
 
+.metric-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  line-height: 1.2;
+}
+
+.metric-stack strong {
+  font-size: 13px;
+}
+
+.metric-stack span {
+  color: #6b7280;
+  font-size: 12px;
+}
+
 .panel {
   border: 1px solid #e1e5ea;
   border-radius: 6px;
