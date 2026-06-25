@@ -28,6 +28,7 @@ def build_tail_feature_frame(
         symbol: symbol_daily.reset_index(drop=True)
         for symbol, symbol_daily in daily.groupby("symbol", sort=True)
     }
+    market_by_date = _market_context_by_date(daily_by_symbol)
     rows = []
     for (symbol, trade_date), day_bars in minute5.groupby(["symbol", "trade_date"], sort=True):
         symbol_daily = daily_by_symbol.get(symbol)
@@ -43,6 +44,13 @@ def build_tail_feature_frame(
             continue
         first_tail_close = float(tail_bars.iloc[0]["close"])
         prior = _daily_features(prior_daily)
+        market = market_by_date.get(trade_date, _empty_market_context())
+        prior = {
+            **prior,
+            **market,
+            "relative_ret_5": prior["daily_ret_5"] - market["market_ret_5"],
+            "relative_ret_20": prior["daily_ret_20"] - market["market_ret_20"],
+        }
         for decision_time in decision_values:
             observed = tail_bars[tail_bars["bar_time"] <= decision_time]
             if observed.empty:
@@ -108,6 +116,39 @@ def _daily_features(prior_daily: pd.DataFrame) -> dict[str, float]:
         "avg_amount_20": float(amount.tail(20).mean()),
         "avg_5m_volume_20": float(volume.tail(20).mean() / 48.0),
     }
+
+
+def _market_context_by_date(daily_by_symbol: dict[str, pd.DataFrame]) -> dict[object, dict[str, float]]:
+    rows = []
+    for symbol_daily in daily_by_symbol.values():
+        for index in range(6, len(symbol_daily)):
+            prior_daily = symbol_daily.iloc[:index]
+            trade_date = symbol_daily.iloc[index]["date"]
+            features = _daily_features(prior_daily)
+            rows.append(
+                {
+                    "trade_date": trade_date,
+                    "daily_ret_5": features["daily_ret_5"],
+                    "daily_ret_20": features["daily_ret_20"],
+                    "above_ma20": 1.0 if features["ma20_distance"] > 0 else 0.0,
+                }
+            )
+    if not rows:
+        return {}
+    frame = pd.DataFrame(rows)
+    grouped = frame.groupby("trade_date", sort=True)
+    result: dict[object, dict[str, float]] = {}
+    for trade_date, group in grouped:
+        result[trade_date] = {
+            "market_ret_5": float(group["daily_ret_5"].mean()),
+            "market_ret_20": float(group["daily_ret_20"].mean()),
+            "market_breadth_20": float(group["above_ma20"].mean()),
+        }
+    return result
+
+
+def _empty_market_context() -> dict[str, float]:
+    return {"market_ret_5": 0.0, "market_ret_20": 0.0, "market_breadth_20": 0.0}
 
 
 def _window_return(close: pd.Series, rows: int) -> float:

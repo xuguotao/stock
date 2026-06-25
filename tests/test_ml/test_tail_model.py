@@ -63,6 +63,7 @@ def test_train_tail_model_artifact_persists_manifest_and_model(tmp_path) -> None
     manifest = json.loads((tmp_path / "tail-test-001" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["version"] == "tail-test-001"
     assert manifest["feature_columns"] == DEFAULT_FEATURE_COLUMNS
+    assert {"market_ret_5", "market_breadth_20", "relative_ret_5"}.issubset(DEFAULT_FEATURE_COLUMNS)
     assert manifest["metrics"]["selected_days"] > 0
 
 
@@ -91,6 +92,11 @@ def _model_samples() -> pd.DataFrame:
                     "tail_volume_ratio": 2.5 if strong else 0.8,
                     "last3_close_slope": 0.012 if strong else -0.004,
                     "last6_close_slope": 0.018 if strong else -0.003,
+                    "market_ret_5": 0.004,
+                    "market_ret_20": 0.012,
+                    "market_breadth_20": 0.55,
+                    "relative_ret_5": 0.01 * symbol_index - 0.004,
+                    "relative_ret_20": 0.01 * symbol_index - 0.012,
                     "next_open_return": 0.01 if strong else -0.005,
                     "next_high_return": 0.03 if strong else 0.002,
                     "next_low_return": -0.004 if strong else -0.03,

@@ -104,6 +104,35 @@ def test_build_tail_feature_frame_uses_only_prior_daily_and_current_tail_bars() 
     assert second["daily_ret_5"] == pytest.approx(12.6 / 12.1 - 1)
 
 
+def test_build_tail_feature_frame_adds_prior_market_context_without_future_leakage() -> None:
+    daily = _daily_fixture()
+    peer_rows = []
+    for row in daily.to_dict("records"):
+        peer = dict(row)
+        peer["symbol"] = "000002.SZ"
+        peer["close"] = float(peer["close"]) * 2
+        peer["open"] = float(peer["open"]) * 2
+        peer["high"] = float(peer["high"]) * 2
+        peer["low"] = float(peer["low"]) * 2
+        peer["amount"] = float(peer["amount"]) * 2
+        peer_rows.append(peer)
+    # This future daily jump must not leak into the 2026-02-09 feature row.
+    daily.loc[daily["date"] == date(2026, 2, 10), "close"] = 99.0
+    daily = pd.concat([daily, pd.DataFrame(peer_rows)], ignore_index=True)
+
+    features = build_tail_feature_frame(
+        daily_bars=daily,
+        minute5_bars=_minute5_fixture(),
+        decision_times=[time(14, 40)],
+    )
+
+    row = features.iloc[0]
+    expected_market_ret_5 = ((12.6 / 12.1 - 1) + (25.2 / 24.2 - 1)) / 2
+    assert row["market_ret_5"] == pytest.approx(expected_market_ret_5)
+    assert row["market_breadth_20"] == pytest.approx(1.0)
+    assert row["relative_ret_5"] == pytest.approx(row["daily_ret_5"] - row["market_ret_5"])
+
+
 def test_build_tail_label_frame_uses_next_session_returns_from_entry_price() -> None:
     features = build_tail_feature_frame(
         daily_bars=_daily_fixture(),

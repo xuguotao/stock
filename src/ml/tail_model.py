@@ -25,6 +25,11 @@ DEFAULT_FEATURE_COLUMNS = [
     "tail_volume_ratio",
     "last3_close_slope",
     "last6_close_slope",
+    "market_ret_5",
+    "market_ret_20",
+    "market_breadth_20",
+    "relative_ret_5",
+    "relative_ret_20",
 ]
 
 
