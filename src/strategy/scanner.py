@@ -7,6 +7,8 @@ from datetime import date, time
 
 import pandas as pd
 
+from src.core.trading_windows import TAIL_SESSION_END, TAIL_SESSION_START
+
 
 @dataclass(frozen=True)
 class TailSessionSignal:
@@ -31,8 +33,8 @@ class IntradayScanner:
         self,
         aggregator,
         frequency: str = "5m",
-        tail_start: time = time(14, 30),
-        tail_end: time = time(15, 0),
+        tail_start: time = TAIL_SESSION_START,
+        tail_end: time = TAIL_SESSION_END,
         volume_ratio_threshold: float = 1.5,
         min_tail_return: float = 0.0,
         confirmation_count: int = 3,

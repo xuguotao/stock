@@ -16,6 +16,7 @@ from datetime import date, datetime, time
 from typing import Callable
 
 from src.core.calendar import TradingCalendar
+from src.core.trading_windows import TAIL_SESSION_END, TAIL_SESSION_START
 
 
 class TradingScheduler:
@@ -111,6 +112,4 @@ class TradingScheduler:
     def is_tail_session(self, current_time: time | None = None) -> bool:
         """Check if within tail session (14:30-15:00)."""
         now = current_time or datetime.now().time()
-        tail_start = time(14, 30)
-        tail_end = time(15, 0)
-        return tail_start <= now <= tail_end
+        return TAIL_SESSION_START <= now <= TAIL_SESSION_END

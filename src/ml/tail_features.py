@@ -7,8 +7,9 @@ from typing import Iterable
 
 import pandas as pd
 
+from src.core.trading_windows import TAIL_DECISION_TIMES, TAIL_SESSION_START, tail_bar_time_label
 
-DEFAULT_DECISION_TIMES = [time(14, 30), time(14, 35), time(14, 40), time(14, 45), time(14, 50), time(14, 55)]
+DEFAULT_DECISION_TIMES = TAIL_DECISION_TIMES
 
 
 def build_tail_feature_frame(
@@ -37,7 +38,7 @@ def build_tail_feature_frame(
         if len(prior_daily) < 6:
             continue
         day_bars = day_bars.sort_values("datetime")
-        tail_bars = day_bars[day_bars["bar_time"] >= "14:30"]
+        tail_bars = day_bars[day_bars["bar_time"] >= tail_bar_time_label(TAIL_SESSION_START)]
         if tail_bars.empty:
             continue
         first_tail_close = float(tail_bars.iloc[0]["close"])
