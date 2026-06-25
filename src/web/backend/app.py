@@ -816,6 +816,13 @@ def create_app(
     def get_tail_ml_models() -> dict[str, Any]:
         return _list_tail_model_manifests(app.state.tail_model_root)
 
+    @app.post("/api/ml/tail/models/{version}/promote")
+    def promote_tail_ml_model(version: str) -> dict[str, Any]:
+        try:
+            return _promote_tail_model_manifest(app.state.tail_model_root, version)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/ml/tail/train")
     def create_tail_ml_train(
         payload: TailModelTrainRequest,
@@ -892,6 +899,26 @@ def _load_promoted_tail_model_scorer(model_root: Path) -> TailModelInference | N
         if model_path.exists():
             return TailModelInference(model_path)
     return None
+
+
+def _promote_tail_model_manifest(model_root: Path, version: str) -> dict[str, Any]:
+    target_path = model_root / version / "manifest.json"
+    if not target_path.exists():
+        raise FileNotFoundError(f"Tail model manifest not found: {version}")
+    promoted_manifest: dict[str, Any] | None = None
+    for manifest_path in model_root.glob("*/manifest.json"):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.setdefault("version", manifest_path.parent.name)
+        if manifest_path == target_path:
+            manifest["status"] = "promoted"
+            promoted_manifest = manifest
+        elif manifest.get("status") == "promoted":
+            manifest["status"] = "ready"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    if promoted_manifest is None:
+        raise FileNotFoundError(f"Tail model manifest not found: {version}")
+    promoted_manifest["artifact_dir"] = str(target_path.parent)
+    return promoted_manifest
 
 
 app = create_app()

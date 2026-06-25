@@ -155,3 +155,30 @@ def test_tail_ml_train_api_runs_inline_training_job(tmp_path) -> None:
     assert calls["trainer"]["output_root"] == tmp_path / "models"
     assert job["result"]["dataset_summary"]["sample_rows"] == 1
     assert job["result"]["manifest"]["version"] == "tail-test-train"
+
+
+def test_tail_ml_promote_api_marks_only_requested_model_promoted(tmp_path) -> None:
+    model_root = tmp_path / "models"
+    first = model_root / "tail-a"
+    second = model_root / "tail-b"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    (first / "manifest.json").write_text(
+        json.dumps({"version": "tail-a", "status": "promoted", "created_at": "2026-06-25T09:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    (second / "manifest.json").write_text(
+        json.dumps({"version": "tail-b", "status": "ready", "created_at": "2026-06-25T10:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    app = create_app(db_path=tmp_path / "jobs.sqlite3", tail_model_root=model_root)
+    client = TestClient(app)
+
+    response = client.post("/api/ml/tail/models/tail-b/promote")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["version"] == "tail-b"
+    assert payload["status"] == "promoted"
+    assert json.loads((first / "manifest.json").read_text(encoding="utf-8"))["status"] == "ready"
+    assert json.loads((second / "manifest.json").read_text(encoding="utf-8"))["status"] == "promoted"

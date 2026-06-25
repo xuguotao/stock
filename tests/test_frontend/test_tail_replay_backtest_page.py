@@ -32,6 +32,7 @@ def test_app_adds_tail_model_lab_navigation() -> None:
     assert "getTailMlModels" in client
     assert "TailMlModelsResponse" in client
     assert "trainTailMlModel" in client
+    assert "promoteTailMlModel" in client
     assert "TailMlTrainPayload" in client
 
 
@@ -40,6 +41,8 @@ def test_tail_model_lab_exposes_training_action() -> None:
 
     assert "训练模型" in source
     assert "trainTailMlModel" in source
+    assert "推广" in source
+    assert "promoteTailMlModel" in source
     assert "training" in source
 
 

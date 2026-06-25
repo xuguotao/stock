@@ -911,6 +911,11 @@ export const api = {
       body: JSON.stringify(payload)
     })
   },
+  promoteTailMlModel(version: string) {
+    return request<TailMlModelManifest>(`/api/ml/tail/models/${encodeURIComponent(version)}/promote`, {
+      method: 'POST'
+    })
+  },
   getStockTrend(symbol: string, tradeDate?: string, dailyWindow = 90, granularity = '5m') {
     const params = new URLSearchParams({ daily_window: String(dailyWindow) })
     if (tradeDate) params.set('trade_date', tradeDate)

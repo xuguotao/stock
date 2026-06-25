@@ -57,6 +57,20 @@
         <el-table-column label="提升门禁" min-width="240" show-overflow-tooltip>
           <template #default="{ row }">{{ promotionText(row) }}</template>
         </el-table-column>
+        <el-table-column label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              type="primary"
+              link
+              :disabled="row.status === 'promoted'"
+              :loading="promotingVersion === row.version"
+              @click="promoteModel(row)"
+            >
+              推广
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </div>
   </section>
@@ -69,6 +83,7 @@ import { api, type TailMlModelManifest } from '../api/client'
 
 const loading = ref(false)
 const training = ref(false)
+const promotingVersion = ref('')
 const models = ref<TailMlModelManifest[]>([])
 const modelRoot = ref('')
 const trainRange = ref<[string, string]>(defaultTrainRange())
@@ -107,6 +122,20 @@ async function trainModel() {
     ElMessage.error(`提交尾盘模型训练失败：${String(error)}`)
   } finally {
     training.value = false
+  }
+}
+
+async function promoteModel(row: TailMlModelManifest) {
+  if (!row.version) return
+  promotingVersion.value = row.version
+  try {
+    await api.promoteTailMlModel(row.version)
+    ElMessage.success(`已推广模型：${row.version}`)
+    await loadModels()
+  } catch (error) {
+    ElMessage.error(`推广模型失败：${String(error)}`)
+  } finally {
+    promotingVersion.value = ''
   }
 }
 
