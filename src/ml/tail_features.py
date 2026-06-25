@@ -24,26 +24,22 @@ def build_tail_feature_frame(
     daily = _prepare_daily(daily_bars)
     minute5 = _prepare_minute5(minute5_bars)
     decision_values = sorted(_time_label(value) for value in decision_times)
-    daily_by_symbol = {
-        symbol: symbol_daily.reset_index(drop=True)
-        for symbol, symbol_daily in daily.groupby("symbol", sort=True)
+    daily_features = _daily_feature_table(daily)
+    daily_feature_by_key = {
+        (row.symbol, row.trade_date): row._asdict()
+        for row in daily_features.itertuples(index=False)
     }
-    market_by_date = _market_context_by_date(daily_by_symbol)
+    market_by_date = _market_context_by_date(daily_features)
     rows = []
     for (symbol, trade_date), day_bars in minute5.groupby(["symbol", "trade_date"], sort=True):
-        symbol_daily = daily_by_symbol.get(symbol)
-        if symbol_daily is None:
-            continue
-        cutoff = int(symbol_daily["date"].searchsorted(trade_date, side="left"))
-        prior_daily = symbol_daily.iloc[:cutoff]
-        if len(prior_daily) < 6:
+        prior = daily_feature_by_key.get((symbol, trade_date))
+        if prior is None:
             continue
         day_bars = day_bars.sort_values("datetime")
         tail_bars = day_bars[day_bars["bar_time"] >= tail_bar_time_label(TAIL_SESSION_START)]
         if tail_bars.empty:
             continue
         first_tail_close = float(tail_bars.iloc[0]["close"])
-        prior = _daily_features(prior_daily)
         market = market_by_date.get(trade_date, _empty_market_context())
         prior = {
             **prior,
@@ -118,24 +114,60 @@ def _daily_features(prior_daily: pd.DataFrame) -> dict[str, float]:
     }
 
 
-def _market_context_by_date(daily_by_symbol: dict[str, pd.DataFrame]) -> dict[object, dict[str, float]]:
-    rows = []
-    for symbol_daily in daily_by_symbol.values():
-        for index in range(6, len(symbol_daily)):
-            prior_daily = symbol_daily.iloc[:index]
-            trade_date = symbol_daily.iloc[index]["date"]
-            features = _daily_features(prior_daily)
-            rows.append(
-                {
-                    "trade_date": trade_date,
-                    "daily_ret_5": features["daily_ret_5"],
-                    "daily_ret_20": features["daily_ret_20"],
-                    "above_ma20": 1.0 if features["ma20_distance"] > 0 else 0.0,
-                }
-            )
-    if not rows:
+def _daily_feature_table(daily: pd.DataFrame) -> pd.DataFrame:
+    frames = []
+    for symbol, symbol_daily in daily.groupby("symbol", sort=True):
+        frame = symbol_daily.sort_values("date").reset_index(drop=True).copy()
+        close = frame["close"].astype(float)
+        volume = frame["volume"].astype(float)
+        amount = frame["amount"].astype(float)
+        prior_close = close.shift(1)
+        returns = close.pct_change()
+        feature_frame = pd.DataFrame(
+            {
+                "trade_date": frame["date"],
+                "symbol": symbol,
+                "prior_close": prior_close,
+                "daily_ret_5": prior_close / close.shift(6) - 1.0,
+                "daily_ret_10": prior_close / close.shift(11) - 1.0,
+                "daily_ret_20": prior_close / close.shift(21) - 1.0,
+                "daily_volatility_20": returns.rolling(20, min_periods=1).std().shift(1).fillna(0.0),
+                "ma5_distance": prior_close / close.shift(1).rolling(5, min_periods=5).mean() - 1.0,
+                "ma20_distance": prior_close / close.shift(1).rolling(20, min_periods=20).mean() - 1.0,
+                "avg_volume_20": volume.shift(1).rolling(20, min_periods=1).mean(),
+                "avg_amount_20": amount.shift(1).rolling(20, min_periods=1).mean(),
+                "avg_5m_volume_20": volume.shift(1).rolling(20, min_periods=1).mean() / 48.0,
+            }
+        )
+        feature_frame = feature_frame.iloc[6:].copy()
+        feature_frame[["daily_ret_10", "daily_ret_20", "ma20_distance"]] = feature_frame[
+            ["daily_ret_10", "daily_ret_20", "ma20_distance"]
+        ].fillna(0.0)
+        frames.append(feature_frame)
+    if not frames:
+        return pd.DataFrame()
+    result = pd.concat(frames, ignore_index=True)
+    numeric_columns = [
+        "prior_close",
+        "daily_ret_5",
+        "daily_ret_10",
+        "daily_ret_20",
+        "daily_volatility_20",
+        "ma5_distance",
+        "ma20_distance",
+        "avg_volume_20",
+        "avg_amount_20",
+        "avg_5m_volume_20",
+    ]
+    result[numeric_columns] = result[numeric_columns].fillna(0.0)
+    return result
+
+
+def _market_context_by_date(daily_features: pd.DataFrame) -> dict[object, dict[str, float]]:
+    if daily_features.empty:
         return {}
-    frame = pd.DataFrame(rows)
+    frame = daily_features.copy()
+    frame["above_ma20"] = (frame["ma20_distance"] > 0).astype(float)
     grouped = frame.groupby("trade_date", sort=True)
     result: dict[object, dict[str, float]] = {}
     for trade_date, group in grouped:

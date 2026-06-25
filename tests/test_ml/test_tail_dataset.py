@@ -133,6 +133,31 @@ def test_build_tail_feature_frame_adds_prior_market_context_without_future_leaka
     assert row["relative_ret_5"] == pytest.approx(row["daily_ret_5"] - row["market_ret_5"])
 
 
+def test_build_tail_feature_frame_precomputes_daily_context(monkeypatch) -> None:
+    import src.ml.tail_features as tail_features
+
+    daily = pd.concat([_daily_fixture().assign(symbol="000001.SZ"), _daily_fixture().assign(symbol="000002.SZ")], ignore_index=True)
+    minute5 = pd.concat([_minute5_fixture().assign(symbol="000001.SZ"), _minute5_fixture().assign(symbol="000002.SZ")], ignore_index=True)
+    calls = 0
+    original_daily_features = tail_features._daily_features
+
+    def counting_daily_features(prior_daily):
+        nonlocal calls
+        calls += 1
+        return original_daily_features(prior_daily)
+
+    monkeypatch.setattr(tail_features, "_daily_features", counting_daily_features)
+
+    features = tail_features.build_tail_feature_frame(
+        daily_bars=daily,
+        minute5_bars=minute5,
+        decision_times=[time(14, 35), time(14, 40)],
+    )
+
+    assert len(features) == 4
+    assert calls <= 2
+
+
 def test_build_tail_label_frame_uses_next_session_returns_from_entry_price() -> None:
     features = build_tail_feature_frame(
         daily_bars=_daily_fixture(),
