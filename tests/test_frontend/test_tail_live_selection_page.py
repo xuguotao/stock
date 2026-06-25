@@ -56,7 +56,7 @@ def test_tail_live_selection_page_explains_new_filter_reasons() -> None:
 
 
 def test_tail_live_selection_page_labels_signal_quality_and_rank_context() -> None:
-    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    source = tail_live_sources()
 
     assert "规则分" in source
     assert "校准概率" in source
@@ -70,7 +70,7 @@ def test_tail_live_selection_page_labels_signal_quality_and_rank_context() -> No
 
 
 def test_tail_live_selection_page_shows_model_feature_snapshot() -> None:
-    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    source = tail_live_sources()
 
     assert "模型因子" in source
     assert "feature_snapshot" in source
@@ -80,7 +80,7 @@ def test_tail_live_selection_page_shows_model_feature_snapshot() -> None:
 
 
 def test_tail_live_selection_page_shows_executability_fields() -> None:
-    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    source = tail_live_sources()
 
     assert "可执行性" in source
     assert "涨停距离" in source
@@ -170,8 +170,33 @@ def test_tail_live_selection_limits_large_result_tables() -> None:
     assert ".table-footer-actions" in styles
 
 
+def test_tail_live_selection_uses_dedicated_final_selection_table_component() -> None:
+    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    component_path = Path("frontend/src/pages/tail-live/TailSelectionTable.vue")
+
+    assert component_path.exists()
+    component = component_path.read_text(encoding="utf-8")
+    assert "import TailSelectionTable" in source
+    assert "<TailSelectionTable" in source
+    assert ":rows=\"selections\"" in source
+    assert "@open-stock-trend=\"openStockTrend\"" in source
+    assert "credibility-detail" in component
+    assert "模型因子" in component
+    assert "defineEmits" in component
+
+
 def test_tail_live_selection_precheck_data_status_column_has_single_slot_template() -> None:
     source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
 
     assert '<el-table-column label="数据状态" width="130">' in source
     assert '<template #default="{ row }">\n            <template #default="{ row }">' not in source
+
+
+def tail_live_sources() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [
+            Path("frontend/src/pages/TailLiveSelection.vue"),
+            Path("frontend/src/pages/tail-live/TailSelectionTable.vue"),
+        ]
+    )

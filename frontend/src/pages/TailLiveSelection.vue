@@ -381,95 +381,13 @@
             <el-descriptions-item label="下一步">14:30 后重新运行，系统会进入正式尾盘评分</el-descriptions-item>
           </el-descriptions>
         </div>
-        <el-table v-else :data="selections" height="420" :empty-text="selectionEmptyText">
-          <el-table-column type="expand">
-            <template #default="{ row }">
-              <div class="credibility-detail">
-                <el-descriptions :column="2" border>
-                  <el-descriptions-item label="规则分">{{ row.credibility?.rule_score ?? row.credibility?.score ?? '-' }} / 100（{{ row.credibility?.rule_grade ?? row.credibility?.grade ?? '-' }}）</el-descriptions-item>
-                  <el-descriptions-item label="校准概率">{{ formatPercent(row.credibility?.calibrated_probability) }}</el-descriptions-item>
-                  <el-descriptions-item v-if="row.model" label="模型版本">{{ row.model.model_version ?? '-' }}</el-descriptions-item>
-                  <el-descriptions-item v-if="row.model" label="模型分">{{ formatScore(row.model.model_score) }}，命中 {{ formatPercent(row.model.hit_probability) }}</el-descriptions-item>
-                  <el-descriptions-item label="阶段">{{ row.credibility?.phase ?? '-' }}</el-descriptions-item>
-                  <el-descriptions-item label="历史胜率">{{ formatPercent(row.credibility?.historical_hit_rate) }}</el-descriptions-item>
-                  <el-descriptions-item label="原始排名">{{ row.raw_rank ?? '-' }}</el-descriptions-item>
-                  <el-descriptions-item label="历史平均收益">{{ formatPercent(row.credibility?.historical_avg_return) }}</el-descriptions-item>
-                  <el-descriptions-item label="历史冲高/回撤">{{ formatPercent(row.credibility?.history?.max_win_rate) }} / {{ formatPercent(row.credibility?.history?.avg_min_return) }}</el-descriptions-item>
-                  <el-descriptions-item v-if="row.model" label="模型收益/风险">{{ formatPercent(row.model.expected_high_return) }} / {{ formatPercent(row.model.risk_probability) }}</el-descriptions-item>
-                  <el-descriptions-item v-if="row.model" label="模型因子">{{ modelFeatureText(row.model.feature_snapshot) }}</el-descriptions-item>
-                  <el-descriptions-item label="候选排名">{{ row.final_candidate_rank ?? '-' }}</el-descriptions-item>
-                  <el-descriptions-item label="信号强度">{{ formatScore(row.credibility?.components?.signal_strength) }}</el-descriptions-item>
-                  <el-descriptions-item label="量能质量">{{ formatScore(row.credibility?.components?.volume_quality) }}</el-descriptions-item>
-                  <el-descriptions-item label="涨幅质量">{{ formatScore(row.credibility?.components?.return_quality) }}</el-descriptions-item>
-                  <el-descriptions-item label="历史样本">{{ row.credibility?.sample_size ?? row.credibility?.history?.sample_count ?? 0 }}，{{ row.credibility?.history_status ?? row.credibility?.history?.status ?? '-' }}：{{ row.credibility?.history?.note ?? '-' }}</el-descriptions-item>
-                </el-descriptions>
-                <div class="credibility-lists">
-                  <div>
-                    <div class="metric-label">确认条件</div>
-                    <ul>
-                      <li v-for="item in row.credibility?.confirmation_checks ?? []" :key="item">{{ item }}</li>
-                    </ul>
-                  </div>
-                  <div>
-                    <div class="metric-label">主要风险</div>
-                    <ul>
-                      <li v-for="item in row.credibility?.risks ?? []" :key="item">{{ item }}</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="股票" min-width="120">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="openStockTrend(row.symbol)">{{ row.symbol }}</el-button>
-            </template>
-          </el-table-column>
-          <el-table-column label="规则分" width="120" align="right">
-            <template #default="{ row }">
-              <el-tag :type="credibilityType(row.credibility?.rule_score ?? row.credibility?.score)" effect="plain">
-                {{ row.credibility?.rule_score ?? row.credibility?.score ?? '-' }} {{ row.credibility?.rule_grade ?? row.credibility?.grade ?? '' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="hasModelScores" label="模型" width="136" align="right">
-            <template #default="{ row }">
-              <div class="metric-stack">
-                <strong>{{ formatScore(row.model?.model_score) }}</strong>
-                <span>{{ formatPercent(row.model?.hit_probability) }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="校准概率" width="120" align="right">
-            <template #default="{ row }">{{ formatPercent(row.credibility?.calibrated_probability) }}</template>
-          </el-table-column>
-          <el-table-column label="强度" width="110" align="right">
-            <template #default="{ row }">{{ formatScore(row.strength) }}</template>
-          </el-table-column>
-          <el-table-column label="最新价" width="110" align="right">
-            <template #default="{ row }">{{ formatPrice(row.last_price) }}</template>
-          </el-table-column>
-          <el-table-column label="量比" width="110" align="right">
-            <template #default="{ row }">{{ formatScore(row.volume_ratio) }}</template>
-          </el-table-column>
-          <el-table-column label="尾盘涨幅" width="120" align="right">
-            <template #default="{ row }">{{ formatPercent(row.tail_return) }}</template>
-          </el-table-column>
-          <el-table-column label="可执行性" width="120" align="right">
-            <template #default="{ row }">
-              <el-tag :type="executionFlagType(row.tradability?.execution_flag)" effect="plain">
-                {{ executionFlagText(row.tradability?.execution_flag) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="涨停距离" width="120" align="right">
-            <template #default="{ row }">{{ formatPercent(row.tradability?.limit_up_distance) }}</template>
-          </el-table-column>
-          <el-table-column label="次日卖出" min-width="150">
-            <template #default="{ row }">{{ sellPolicyText(row.next_day_plan?.sell_policy) }}</template>
-          </el-table-column>
-          <el-table-column prop="reason" label="原因" min-width="260" show-overflow-tooltip />
-        </el-table>
+        <TailSelectionTable
+          v-else
+          :rows="selections"
+          :empty-text="selectionEmptyText"
+          :has-model-scores="hasModelScores"
+          @open-stock-trend="openStockTrend"
+        />
       </div>
 
       <div class="panel">
@@ -573,6 +491,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api, type DataStatusResponse, type JobRecord, type JobStatus, type TailLiveSelectionPayload } from '../api/client'
+import TailSelectionTable from './tail-live/TailSelectionTable.vue'
 
 interface SelectionRow {
   rank?: number
@@ -1147,10 +1066,6 @@ function formatScore(value: unknown) {
   return typeof value === 'number' ? value.toFixed(4) : '-'
 }
 
-function formatPrice(value: unknown) {
-  return typeof value === 'number' ? value.toFixed(2) : '-'
-}
-
 function formatPercent(value: unknown) {
   return typeof value === 'number' ? `${(value * 100).toFixed(2)}%` : '-'
 }
@@ -1212,50 +1127,6 @@ function resetResultTableLimits() {
   weakRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
 }
 
-const modelFeatureLabels: Record<string, string> = {
-  daily_ret_5: '5日涨幅',
-  daily_ret_10: '10日涨幅',
-  daily_ret_20: '20日涨幅',
-  daily_volatility_20: '20日波动',
-  ma5_distance: 'MA5距离',
-  ma20_distance: 'MA20距离',
-  avg_amount_20: '20日成交额',
-  tail_return_from_1430: '尾盘涨幅',
-  tail_high_return_from_1430: '尾盘高点',
-  tail_pullback_from_high: '高点回撤',
-  tail_volume_ratio: '尾盘量比',
-  last3_close_slope: '近3根斜率',
-  last6_close_slope: '近6根斜率',
-  market_ret_5: '市场5日',
-  market_ret_20: '市场20日',
-  market_breadth_20: '市场宽度',
-  relative_ret_5: '相对5日',
-  relative_ret_20: '相对20日',
-  industry_ret_5: '行业5日',
-  industry_ret_20: '行业20日',
-  industry_breadth_20: '行业宽度',
-  industry_relative_ret_5: '相对行业5日',
-  industry_relative_ret_20: '相对行业20日',
-}
-
-function modelFeatureText(items?: ModelFeatureSnapshot[]) {
-  if (!items?.length) return '-'
-  return items
-    .filter((item) => typeof item.value === 'number')
-    .slice(0, 8)
-    .map((item) => `${modelFeatureLabels[item.feature] ?? item.feature} ${formatModelFeatureValue(item)}`)
-    .join('，')
-}
-
-function formatModelFeatureValue(item: ModelFeatureSnapshot) {
-  if (typeof item.value !== 'number') return '-'
-  if (item.feature.includes('return') || item.feature.includes('distance') || item.feature.includes('slope') || item.feature.includes('breadth')) {
-    return formatPercent(item.value)
-  }
-  if (item.feature.includes('amount')) return `${(item.value / 100000000).toFixed(2)}亿`
-  return item.value.toFixed(2)
-}
-
 function filterReasonText(value: unknown) {
   if (value === 'below_candidate_threshold') return '未达候选阈值'
   if (value === 'below_min_strength') return '低于最小强度'
@@ -1281,11 +1152,6 @@ function executionFlagType(value: unknown) {
   if (value === 'near_limit_up') return 'warning'
   if (value === 'executable') return 'success'
   return 'info'
-}
-
-function sellPolicyText(value: unknown) {
-  if (value === 'open_or_morning_strength') return '开盘/早盘强弱卖'
-  return value ? String(value) : '-'
 }
 
 function v2LayerText(value: unknown) {
