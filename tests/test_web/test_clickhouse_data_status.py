@@ -92,6 +92,8 @@ class FakeClickHouseClient:
             return [(2, 3)]
         if "left join daily_kline" in normalized or "left join minute5_kline" in normalized:
             return []
+        if "select symbol, name from stocks" in normalized:
+            return [("000001", "平安银行"), ("000002", "*ST测试"), ("000003", "best科技")]
         if "countif(upper(name)" in normalized:
             return [(3, 2, 1)]
         if "from stocks" in normalized and "uniqexact(symbol)" in normalized:
@@ -213,6 +215,9 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
         "non_st_stock_count": 2,
         "st_stock_count": 1,
     }
+    stock_queries = [" ".join(query.lower().split()) for query, _ in client.commands if "from stocks" in query.lower()]
+    assert any("select symbol, name from stocks" in query for query in stock_queries)
+    assert all("countif(upper(name)" not in query for query in stock_queries)
     assert payload["tables"]["daily_kline"]["date_range"] == {
         "start": "2026-06-11",
         "end": "2026-06-15",

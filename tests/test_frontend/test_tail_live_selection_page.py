@@ -168,3 +168,10 @@ def test_tail_live_selection_limits_large_result_tables() -> None:
     assert "showMoreStrategyRows" in source
     assert "仅展示前" in source
     assert ".table-footer-actions" in styles
+
+
+def test_tail_live_selection_precheck_data_status_column_has_single_slot_template() -> None:
+    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+
+    assert '<el-table-column label="数据状态" width="130">' in source
+    assert '<template #default="{ row }">\n            <template #default="{ row }">' not in source

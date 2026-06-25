@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.core.constants import format_symbol
+from src.core.constants import format_symbol, is_st
 from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.clickhouse_table_maintenance import daily_duplicate_stats, minute5_duplicate_stats
 from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
@@ -545,10 +545,9 @@ def _table_status(conn: sqlite3.Connection, table: str, spec: dict[str, str]) ->
 
 
 def _stock_summary(conn: sqlite3.Connection) -> dict[str, int]:
-    stock_count = conn.execute("select count(*) from stocks").fetchone()[0]
-    st_stock_count = conn.execute(
-        "select count(*) from stocks where upper(name) like '%ST%'"
-    ).fetchone()[0]
+    rows = conn.execute("select symbol, name from stocks").fetchall()
+    stock_count = len(rows)
+    st_stock_count = sum(1 for row in rows if is_st(str(row[1] or "")))
     return {
         "stock_count": stock_count,
         "non_st_stock_count": stock_count - st_stock_count,
@@ -587,16 +586,18 @@ def _safe_clickhouse_table_status(client: Any, table: str, spec: dict[str, str])
 
 
 def _clickhouse_stock_summary(client: Any) -> dict[str, int]:
-    row = client.execute(
-        """
-        select count(), count() - countIf(upper(name) like '%ST%'), countIf(upper(name) like '%ST%')
-        from stocks
-        """
-    )[0]
+    rows = client.execute("select symbol, name from stocks")
+    stock_count = len(rows)
+    st_stock_count = 0
+    for row in rows:
+        values = tuple(row)
+        name = str(values[1] if len(values) > 1 else "")
+        if is_st(name):
+            st_stock_count += 1
     return {
-        "stock_count": int(row[0] or 0),
-        "non_st_stock_count": int(row[1] or 0),
-        "st_stock_count": int(row[2] or 0),
+        "stock_count": stock_count,
+        "non_st_stock_count": stock_count - st_stock_count,
+        "st_stock_count": st_stock_count,
     }
 
 

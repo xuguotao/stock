@@ -26,6 +26,7 @@ def _create_stock_db(path) -> None:
         [
             ("000001", "平安银行", "银行", "SZ", "1991-04-03", "2026-06-12 15:10:00"),
             ("000004", "*ST国华", "软件", "SZ", "1990-12-01", "2026-06-12 15:10:00"),
+            ("000005", "best科技", "软件", "SZ", "1991-01-01", "2026-06-12 15:10:00"),
         ],
     )
     conn.executemany(
@@ -68,8 +69,8 @@ def test_data_status_api_returns_stock_db_coverage(tmp_path) -> None:
     assert payload["database"]["exists"] is True
     assert payload["database"]["path"] == str(stock_db)
     assert payload["stock_summary"] == {
-        "stock_count": 2,
-        "non_st_stock_count": 1,
+        "stock_count": 3,
+        "non_st_stock_count": 2,
         "st_stock_count": 1,
     }
     assert payload["tables"]["daily_kline"]["row_count"] == 3
@@ -140,7 +141,7 @@ def test_data_sync_api_runs_inline_job_and_returns_refreshed_status(tmp_path) ->
     assert job["progress"] == {"percent": 100, "stage": "completed", "message": "旧 Stock DB 同步完成"}
     assert job["result"]["legacy"] is True
     assert job["result"]["sync"]["integrity"] == "ok"
-    assert job["result"]["status"]["stock_summary"]["stock_count"] == 2
+    assert job["result"]["status"]["stock_summary"]["stock_count"] == 3
 
 
 def test_minute5_sync_api_runs_inline_job_and_returns_refreshed_status(tmp_path) -> None:
