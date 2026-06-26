@@ -170,6 +170,16 @@ def test_tail_live_selection_limits_large_result_tables() -> None:
     assert ".table-footer-actions" in styles
 
 
+def test_tail_live_selection_polls_long_running_full_market_jobs() -> None:
+    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+
+    assert "JOB_POLL_INTERVAL_MS = 1000" in source
+    assert "JOB_POLL_MAX_ATTEMPTS = 900" in source
+    assert "attempt < JOB_POLL_MAX_ATTEMPTS" in source
+    assert "sleep(JOB_POLL_INTERVAL_MS)" in source
+    assert "任务仍在运行，页面会保留当前任务" in source
+
+
 def test_tail_live_selection_uses_dedicated_final_selection_table_component() -> None:
     source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
     component_path = Path("frontend/src/pages/tail-live/TailSelectionTable.vue")

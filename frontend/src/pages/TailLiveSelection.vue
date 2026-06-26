@@ -691,6 +691,8 @@ const props = defineProps<{
 
 const today = new Date().toISOString().slice(0, 10)
 const RESULT_TABLE_RENDER_BATCH_SIZE = 120
+const JOB_POLL_INTERVAL_MS = 1000
+const JOB_POLL_MAX_ATTEMPTS = 900
 const form = ref<TailLiveSelectionPayload>({
   trade_date: today,
   symbols: null,
@@ -1029,16 +1031,18 @@ async function loadJob(jobId: string) {
 }
 
 async function pollJobUntilDone(jobId: string) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt += 1) {
     job.value = await api.getJob(jobId)
     if (job.value.status === 'success') return true
     if (job.value.status === 'failed') {
       ElMessage.error(job.value.error ?? '今日尾盘选股失败')
       return false
     }
-    await sleep(500)
+    await sleep(JOB_POLL_INTERVAL_MS)
   }
-  ElMessage.warning('任务仍在运行，请稍后刷新')
+  job.value = await api.getJob(jobId)
+  if (job.value.status === 'success') return true
+  ElMessage.warning('任务仍在运行，页面会保留当前任务，可稍后刷新运行记录')
   return false
 }
 
