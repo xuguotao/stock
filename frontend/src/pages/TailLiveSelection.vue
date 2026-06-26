@@ -212,6 +212,15 @@
       <div v-if="diagnostics.empty_message" class="diagnostic-message">
         {{ diagnostics.empty_message }}
       </div>
+      <div v-if="hasModelEnhancement" class="model-enhancement-panel">
+        <div class="model-enhancement-title">模型增强状态</div>
+        <div class="result-status-grid">
+          <div class="result-status-item" v-for="item in modelEnhancementItems" :key="item.label">
+            <div class="result-status-label">{{ item.label }}</div>
+            <div class="result-status-value">{{ item.value }}</div>
+          </div>
+        </div>
+      </div>
       <div class="diagnostic-tags">
         <el-tag
           v-for="symbol in diagnostics.scan_universe_preview"
@@ -278,6 +287,16 @@
                 {{ row.status === 'selected' ? '入选' : '过滤' }}
               </el-tag>
             </template>
+          </el-table-column>
+          <el-table-column v-if="hasModelScores" label="模型决策" width="126">
+            <template #default="{ row }">
+              <el-tag :type="modelDecisionType(row)" effect="plain">
+                {{ modelDecisionText(row) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="hasModelScores" label="规则候选→最终" width="132" align="center">
+            <template #default="{ row }">{{ candidateRankShiftText(row) }}</template>
           </el-table-column>
           <el-table-column label="强度" width="110" align="right">
             <template #default="{ row }">{{ formatScore(row.strength) }}</template>
@@ -447,6 +466,7 @@
           <el-descriptions-item label="确认条件">连续确认 {{ strategyRules?.confirmations ?? '-' }} 次</el-descriptions-item>
           <el-descriptions-item label="最终过滤">Top {{ strategyRules?.top_n ?? '-' }}，最小强度 {{ strategyRules?.min_strength ?? '未设置' }}，市场宽度 {{ strategyRules?.min_market_breadth_above_ma20 ?? '未设置' }}</el-descriptions-item>
           <el-descriptions-item label="排序方法">{{ strategyRules?.ranking ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="模型增强">{{ modelEnhancementDescription }}</el-descriptions-item>
           <el-descriptions-item label="扫描口径">{{ scanScopeText }}</el-descriptions-item>
           <el-descriptions-item label="补数据">{{ syncDiagnosticText }}</el-descriptions-item>
           <el-descriptions-item label="阶段耗时">{{ stageTimingText }}</el-descriptions-item>
@@ -675,6 +695,12 @@ interface TailLiveResult {
       latest_snapshot_at?: string | null
       latest_bucket?: string | null
     }
+    effective_strategy_mode?: 'rule' | 'model' | 'hybrid'
+    model_status?: string
+    model_scored_symbols?: number
+    model_score_rank_limit?: number
+    model_selection_applied?: boolean
+    model_selection_mode?: 'rule' | 'model' | 'hybrid'
   }
   stage_timings?: Record<string, number>
   persistence?: {
@@ -741,6 +767,10 @@ const previewSignals = computed(() => result.value?.preview_signals ?? [])
 const selections = computed(() => resultMode.value === 'preview' ? previewSignals.value : finalSelections.value)
 const rankedSignals = computed(() => result.value?.ranked_signals ?? [])
 const hasModelScores = computed(() => rankedSignals.value.some((row) => Boolean(row.model)))
+const hasModelEnhancement = computed(() => {
+  const status = diagnostics.value?.model_status
+  return Boolean(hasModelScores.value || status || diagnostics.value?.effective_strategy_mode === 'model' || diagnostics.value?.effective_strategy_mode === 'hybrid')
+})
 const watchlistSignals = computed(() => result.value?.watchlist_signals ?? [])
 const weakSignals = computed(() => result.value?.weak_signals ?? [])
 const signalLayers = computed(() => result.value?.signal_layers ?? { strong: 0, watchlist: 0, weak: 0 })
@@ -801,6 +831,31 @@ const summaryItems = computed(() => [
   { label: resultMode.value === 'precheck' ? '等待原因' : resultMode.value === 'preview' ? '预演入选' : '最终选股', value: resultMode.value === 'precheck' ? emptyReasonText.value : resultMode.value === 'preview' ? String(result.value?.preview_count ?? 0) : String(result.value?.selected_count ?? '-') },
   { label: '交易日', value: result.value?.trade_date ?? '-' }
 ])
+const modelEnhancementItems = computed(() => [
+  { label: '模型增强状态', value: modelEnhancementStateText.value },
+  { label: '策略模式', value: strategyModeText(diagnostics.value?.effective_strategy_mode ?? diagnostics.value?.strategy_mode ?? form.value.strategy_mode) },
+  { label: '评分范围', value: `${diagnostics.value?.model_scored_symbols ?? 0} 只 / Top ${diagnostics.value?.model_score_rank_limit ?? '-'}` },
+  { label: '参与排序', value: diagnostics.value?.model_selection_applied ? '已参与最终排序' : '未参与最终排序' },
+  { label: '入选变化', value: modelSelectionImpactText.value },
+])
+const modelEnhancementStateText = computed(() => {
+  const status = diagnostics.value?.model_status
+  if (status === 'scored') return '模型已评分'
+  if (status === 'disabled') return '规则模式，未启用模型'
+  if (status === 'no_promoted_model') return '无已推广模型'
+  if (status === 'no_scoreable_rows') return '无可评分标的'
+  return status ? String(status) : '-'
+})
+const modelSelectionImpactText = computed(() => {
+  if (!diagnostics.value?.model_selection_applied) return '未改变最终排序'
+  const promoted = selections.value.filter((row) => isModelPromoted(row)).length
+  const eliminated = rankedSignals.value.filter((row) => isModelEliminated(row)).length
+  return `模型提权 ${promoted}，模型淘汰 ${eliminated}`
+})
+const modelEnhancementDescription = computed(() => {
+  if (!hasModelEnhancement.value) return '未启用模型增强，按规则/V2排序。'
+  return `${modelEnhancementStateText.value}；${modelSelectionImpactText.value}；评分 ${diagnostics.value?.model_scored_symbols ?? 0} 只，模式 ${strategyModeText(diagnostics.value?.effective_strategy_mode ?? diagnostics.value?.strategy_mode)}。`
+})
 const scanCountText = computed(() => {
   const scanned = result.value?.scanned_count
   const requested = diagnostics.value?.requested_scan_limit ?? form.value.limit
@@ -1123,9 +1178,57 @@ function filterReasonText(value: unknown) {
   if (value === 'limit_up_not_buyable') return '涨停/近涨停，无法买入'
   if (value === 'tail_pullback_risk') return '尾盘冲高回落'
   if (value === 'outside_historical_calibration_top_n') return '历史校准排名超出 Top N'
+  if (value === 'outside_model_top_n') return '模型未进 Top N'
   if (value === 'outside_top_n') return '排名超出 Top N'
   if (value === 'not_selected') return '未入选'
   return '-'
+}
+
+function strategyModeText(value: unknown) {
+  if (value === 'model') return '模型排序'
+  if (value === 'hybrid') return '混合模式'
+  if (value === 'rule') return '规则优先'
+  return '-'
+}
+
+function modelDecisionText(row: SelectionRow) {
+  if (!row.model) return '规则排序'
+  if (isModelPromoted(row)) return '模型提权'
+  if (isModelEliminated(row)) return '模型淘汰'
+  if (row.status === 'selected') return '规则+模型一致'
+  return '模型观察'
+}
+
+function modelDecisionType(row: SelectionRow) {
+  if (isModelPromoted(row)) return 'success'
+  if (isModelEliminated(row)) return 'danger'
+  if (row.status === 'selected') return 'warning'
+  return 'info'
+}
+
+function isModelPromoted(row: SelectionRow) {
+  return Boolean(
+    row.model
+    && row.status === 'selected'
+    && typeof row.rank === 'number'
+    && typeof row.final_candidate_rank === 'number'
+    && row.rank < row.final_candidate_rank
+  )
+}
+
+function isModelEliminated(row: SelectionRow) {
+  return Boolean(
+    row.model
+    && row.status === 'filtered'
+    && row.final_candidate_rank != null
+    && (row.filter_reason === 'outside_model_top_n' || row.filter_reason === 'outside_top_n')
+  )
+}
+
+function candidateRankShiftText(row: SelectionRow) {
+  const candidateRank = row.final_candidate_rank ?? '-'
+  const finalRank = row.status === 'selected' ? row.rank ?? '-' : '未入选'
+  return `${candidateRank} → ${finalRank}`
 }
 
 function executionFlagText(value: unknown) {

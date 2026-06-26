@@ -43,6 +43,16 @@
         <el-button link type="primary" @click="$emit('openStockTrend', row.symbol)">{{ row.symbol }}</el-button>
       </template>
     </el-table-column>
+    <el-table-column v-if="hasModelScores" label="模型决策" width="126">
+      <template #default="{ row }">
+        <el-tag :type="modelDecisionType(row)" effect="plain">
+          {{ modelDecisionText(row) }}
+        </el-tag>
+      </template>
+    </el-table-column>
+    <el-table-column v-if="hasModelScores" label="规则候选→最终" width="132" align="center">
+      <template #default="{ row }">{{ candidateRankShiftText(row) }}</template>
+    </el-table-column>
     <el-table-column label="规则分" width="120" align="right">
       <template #default="{ row }">
         <el-tag :type="credibilityType(row.credibility?.rule_score ?? row.credibility?.score)" effect="plain">
@@ -55,6 +65,14 @@
         <div class="metric-stack">
           <strong>{{ formatScore(row.model?.model_score) }}</strong>
           <span>{{ formatPercent(row.model?.hit_probability) }}</span>
+        </div>
+      </template>
+    </el-table-column>
+    <el-table-column v-if="hasModelScores" label="模型收益/风险" width="148" align="right">
+      <template #default="{ row }">
+        <div class="metric-stack">
+          <strong>{{ formatPercent(row.model?.expected_high_return) }}</strong>
+          <span>风险 {{ formatPercent(row.model?.risk_probability) }}</span>
         </div>
       </template>
     </el-table-column>
@@ -97,6 +115,7 @@ interface ModelFeatureSnapshot {
 }
 
 interface TailSelectionRow {
+  rank?: number
   raw_rank?: number | null
   final_candidate_rank?: number | null
   symbol: string
@@ -105,6 +124,8 @@ interface TailSelectionRow {
   volume_ratio: number
   tail_return: number
   reason: string
+  status?: 'selected' | 'filtered'
+  filter_reason?: string | null
   credibility?: {
     score?: number
     grade?: string
@@ -194,6 +215,46 @@ function executionFlagType(value: unknown) {
 function sellPolicyText(value: unknown) {
   if (value === 'open_or_morning_strength') return '开盘/早盘强弱卖'
   return value ? String(value) : '-'
+}
+
+function modelDecisionText(row: TailSelectionRow) {
+  if (!row.model) return '规则排序'
+  if (isModelPromoted(row)) return '模型提权'
+  if (isModelEliminated(row)) return '模型淘汰'
+  if (row.status === 'selected') return '规则+模型一致'
+  return '模型观察'
+}
+
+function modelDecisionType(row: TailSelectionRow) {
+  if (isModelPromoted(row)) return 'success'
+  if (isModelEliminated(row)) return 'danger'
+  if (row.status === 'selected') return 'warning'
+  return 'info'
+}
+
+function isModelPromoted(row: TailSelectionRow) {
+  return Boolean(
+    row.model
+    && row.status === 'selected'
+    && typeof row.rank === 'number'
+    && typeof row.final_candidate_rank === 'number'
+    && row.rank < row.final_candidate_rank
+  )
+}
+
+function isModelEliminated(row: TailSelectionRow) {
+  return Boolean(
+    row.model
+    && row.status === 'filtered'
+    && row.final_candidate_rank != null
+    && (row.filter_reason === 'outside_model_top_n' || row.filter_reason === 'outside_top_n')
+  )
+}
+
+function candidateRankShiftText(row: TailSelectionRow) {
+  const candidateRank = row.final_candidate_rank ?? '-'
+  const finalRank = row.status === 'selected' ? row.rank ?? '-' : '未入选'
+  return `${candidateRank} → ${finalRank}`
 }
 
 const modelFeatureLabels: Record<string, string> = {

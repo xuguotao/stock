@@ -299,6 +299,17 @@ body {
   color: #7b8493;
 }
 
+.model-enhancement-panel {
+  margin-top: 12px;
+}
+
+.model-enhancement-title {
+  margin-bottom: 8px;
+  color: #20242a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .diagnostic-tags {
   margin-top: 10px;
   display: flex;

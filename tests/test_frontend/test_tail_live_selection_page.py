@@ -79,6 +79,20 @@ def test_tail_live_selection_page_shows_model_feature_snapshot() -> None:
     assert "相对行业5日" in source
 
 
+def test_tail_live_selection_page_explains_model_enhanced_selection() -> None:
+    source = tail_live_sources()
+
+    assert "模型增强状态" in source
+    assert "modelEnhancementItems" in source
+    assert "modelDecisionText" in source
+    assert "模型提权" in source
+    assert "规则+模型一致" in source
+    assert "模型淘汰" in source
+    assert "规则候选→最终" in source
+    assert "outside_model_top_n" in source
+    assert "模型未进 Top N" in source
+
+
 def test_tail_live_selection_page_shows_executability_fields() -> None:
     source = tail_live_sources()
 
