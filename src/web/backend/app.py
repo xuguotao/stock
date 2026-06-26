@@ -67,6 +67,8 @@ from src.web.backend.tail_live import TailLiveSelectionRequest, run_tail_live_se
 from src.web.backend.tail_replay_backtest import TailReplayBacktestRequest, run_tail_replay_backtest
 from src.web.backend.watchlist_monitor import get_watchlist_config, get_watchlist_report
 
+TAIL_RESULT_ENRICHMENT_RANK_LIMIT = 300
+
 
 class CreateJobRequest(BaseModel):
     kind: str = Field(min_length=1)
@@ -1219,6 +1221,7 @@ def _run_tail_live_selection_job(
             diagnostics["data_refresh_mode"] = payload.data_refresh_mode
             diagnostics["effective_data_refresh_mode"] = refresh_mode
         stage_started = perf_counter()
+        store.update_job(job_id, status="running", progress=_progress(88, "historical_calibration", "校准候选历史胜率"))
         _apply_tail_historical_calibration(signal_repository, result)
         _apply_tail_historical_selection(result)
         stage_timings["historical_calibration"] = _elapsed(stage_started)
@@ -1375,6 +1378,8 @@ def _apply_tail_historical_calibration(signal_repository, result: dict[str, Any]
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            if not _should_calibrate_tail_history(section, row):
+                continue
             credibility = row.get("credibility")
             if not isinstance(credibility, dict):
                 continue
@@ -1397,6 +1402,25 @@ def _apply_tail_historical_calibration(signal_repository, result: dict[str, Any]
                     }
             credibility["history"] = cache[key]
             _update_tail_calibrated_credibility(credibility, cache[key])
+    result.setdefault("diagnostics", {})["historical_calibration_rank_limit"] = TAIL_RESULT_ENRICHMENT_RANK_LIMIT
+
+
+def _should_calibrate_tail_history(section: str, row: dict[str, Any]) -> bool:
+    if section in {"selections", "preview_signals"}:
+        return True
+    if section != "ranked_signals":
+        return False
+    if row.get("status") in {"selected", "preview"}:
+        return True
+    if row.get("final_candidate_rank") is not None:
+        return True
+    rank = row.get("rank")
+    if rank is None:
+        return True
+    try:
+        return int(rank) <= TAIL_RESULT_ENRICHMENT_RANK_LIMIT
+    except (TypeError, ValueError):
+        return False
 
 
 def _apply_tail_historical_selection(result: dict[str, Any]) -> None:

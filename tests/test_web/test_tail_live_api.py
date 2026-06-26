@@ -265,6 +265,47 @@ def test_tail_live_selection_api_reranks_final_selection_with_historical_calibra
     assert job["result"]["persistence"]["outcomes"]["missing_symbols"] == ["000002.SZ"]
 
 
+def test_tail_historical_calibration_limits_full_market_rows() -> None:
+    class FakeSignalRepository:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def historical_calibration_for_signal(self, *, v2_score, volume_ratio, tail_return):
+            self.calls.append((v2_score, volume_ratio, tail_return))
+            return {"status": "样本不足", "sample_count": 0}
+
+    ranked = [
+        {
+            "symbol": f"{index:06d}.SZ",
+            "rank": index,
+            "v2_score": float(index),
+            "volume_ratio": 2.0,
+            "tail_return": 0.01,
+            "credibility": {"score": 60.0},
+        }
+        for index in range(1, 351)
+    ]
+    ranked[-1]["final_candidate_rank"] = 1
+    result = {
+        "ranked_signals": ranked,
+        "selections": [dict(ranked[-1])],
+        "watchlist_signals": [{"symbol": "999998.SZ", "credibility": {"score": 60.0}}],
+        "weak_signals": [{"symbol": "999999.SZ", "credibility": {"score": 60.0}}],
+        "diagnostics": {},
+    }
+    repository = FakeSignalRepository()
+
+    app_module._apply_tail_historical_calibration(repository, result)
+
+    assert len(repository.calls) == 301
+    assert result["diagnostics"]["historical_calibration_rank_limit"] == 300
+    assert result["ranked_signals"][0]["credibility"]["history"]["status"] == "样本不足"
+    assert "history" not in result["ranked_signals"][300]["credibility"]
+    assert result["ranked_signals"][-1]["credibility"]["history"]["status"] == "样本不足"
+    assert "history" not in result["watchlist_signals"][0]["credibility"]
+    assert "history" not in result["weak_signals"][0]["credibility"]
+
+
 def test_tail_signal_stats_api_returns_repository_metrics(tmp_path) -> None:
     class FakeSignalRepository:
         def signal_stats(self, *, start=None, end=None):
@@ -690,6 +731,54 @@ def test_tail_live_selection_model_mode_penalizes_high_risk_candidates() -> None
 
     assert [row["symbol"] for row in result["selections"]] == ["000002.SZ"]
     assert result["ranked_signals"][0]["symbol"] == "000002.SZ"
+
+
+def test_tail_live_selection_model_scoring_limits_full_market_payload() -> None:
+    class FakeScorer:
+        def score(self, rows):
+            self.symbols = list(rows["symbol"])
+            return [
+                {
+                    "symbol": symbol,
+                    "model_version": "tail-test-001",
+                    "model_score": 0.5,
+                    "hit_probability": 0.6,
+                    "expected_high_return": 0.02,
+                    "risk_probability": 0.1,
+                    "feature_snapshot": [{"feature": "tail_volume_ratio", "value": 2.0}],
+                }
+                for symbol in self.symbols
+            ]
+
+    scorer = FakeScorer()
+    ranked = [
+        {
+            "symbol": f"{index:06d}.SZ",
+            "rank": index,
+            "status": "filtered",
+            "tradability": {"buyable": True},
+        }
+        for index in range(1, 351)
+    ]
+    ranked[-1]["final_candidate_rank"] = 1
+    result = {
+        "selected_count": 1,
+        "diagnostics": {"strategy_mode": "hybrid"},
+        "ranked_signals": ranked,
+        "selections": [dict(ranked[-1])],
+        "watchlist_signals": [{"symbol": "999998.SZ"}],
+        "weak_signals": [{"symbol": "999999.SZ"}],
+    }
+
+    _apply_model_scores(result, strategy_mode="hybrid", model_scorer=scorer)
+
+    assert len(scorer.symbols) == 301
+    assert "000350.SZ" in scorer.symbols
+    assert "999998.SZ" not in scorer.symbols
+    assert "999999.SZ" not in scorer.symbols
+    assert "model" in result["ranked_signals"][0]
+    assert "model" not in next(row for row in result["ranked_signals"] if row["symbol"] == "000301.SZ")
+    assert result["diagnostics"]["model_score_rank_limit"] == 300
 
 
 def test_tail_live_selection_model_mode_degrades_to_rule_without_scorer() -> None:

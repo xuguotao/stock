@@ -302,6 +302,7 @@ MODEL_SCORE_SECTIONS = (
     "watchlist_signals",
     "weak_signals",
 )
+MODEL_SCORE_RANK_LIMIT = 300
 
 
 def _apply_model_scores(
@@ -329,6 +330,8 @@ def _apply_model_scores(
             continue
         for row in rows:
             if not isinstance(row, dict):
+                continue
+            if not _should_score_model_row(section, row):
                 continue
             symbol = str(row.get("symbol") or "")
             if not symbol:
@@ -368,7 +371,26 @@ def _apply_model_scores(
     diagnostics["effective_strategy_mode"] = strategy_mode
     diagnostics["model_status"] = "scored"
     diagnostics["model_scored_symbols"] = len(scored_by_symbol)
+    diagnostics["model_score_rank_limit"] = MODEL_SCORE_RANK_LIMIT
     _apply_model_selection(result, strategy_mode=strategy_mode)
+
+
+def _should_score_model_row(section: str, row: dict[str, Any]) -> bool:
+    if section in {"selections", "preview_signals"}:
+        return True
+    if section != "ranked_signals":
+        return False
+    if row.get("status") in {"selected", "preview"}:
+        return True
+    if row.get("final_candidate_rank") is not None:
+        return True
+    rank = row.get("rank")
+    if rank is None:
+        return True
+    try:
+        return int(rank) <= MODEL_SCORE_RANK_LIMIT
+    except (TypeError, ValueError):
+        return False
 
 
 def _apply_model_selection(result: dict[str, Any], *, strategy_mode: str) -> None:
