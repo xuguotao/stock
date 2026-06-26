@@ -474,7 +474,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type FundTailDataStatusItem, type FundTailOpportunityResponse, type FundTailReportResponse, type FundTailUniverseItem, type FundWatchlistItem, type JobRecord, type JobStatus } from '../api/client'
+import { api, type FundTailDataStatusItem, type FundTailOpportunityResponse, type FundTailReportResponse, type FundTailUniverseItem, type FundTailUniverseResponse, type FundWatchlistItem, type FundWatchlistResponse, type JobRecord, type JobStatus } from '../api/client'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -594,13 +594,18 @@ async function loadAll() {
 function applyLoadResult(results: PromiseSettledResult<unknown>[]) {
   const [universeResult, watchlistResult, reportResult, opportunityResult] = results
   let failed = 0
+  const degradedErrors: string[] = []
   if (universeResult.status === 'fulfilled') {
-    universe.value = (universeResult.value as { items: FundTailUniverseItem[] }).items
+    const response = universeResult.value as FundTailUniverseResponse
+    universe.value = response.items
+    collectSectionError(degradedErrors, '基金池', response)
   } else {
     failed += 1
   }
   if (watchlistResult.status === 'fulfilled') {
-    watchlist.value = (watchlistResult.value as { items: FundWatchlistItem[] }).items
+    const response = watchlistResult.value as FundWatchlistResponse
+    watchlist.value = response.items
+    collectSectionError(degradedErrors, '观察池', response)
   } else {
     failed += 1
   }
@@ -612,6 +617,7 @@ function applyLoadResult(results: PromiseSettledResult<unknown>[]) {
       proxy_refresh: reportResponse.proxy_refresh ?? null,
       data_status: reportResponse.data_status ?? universe.value
     }
+    collectSectionError(degradedErrors, '建议报告', reportResponse)
   } else {
     failed += 1
   }
@@ -623,6 +629,15 @@ function applyLoadResult(results: PromiseSettledResult<unknown>[]) {
   if (failed > 0) {
     loadError.value = `基金尾盘数据加载异常：${failed} 项接口失败，请检查后端服务或稍后刷新`
     ElMessage.warning(`基金尾盘部分数据加载失败：${failed} 项`)
+  } else if (degradedErrors.length > 0) {
+    loadError.value = `基金尾盘数据源降级：${degradedErrors.join('；')}`
+    ElMessage.warning('基金尾盘数据源降级，请检查 ClickHouse 配置或连接')
+  }
+}
+
+function collectSectionError(errors: string[], label: string, response: { status?: string, error?: string }) {
+  if (response.status === 'degraded' || response.error) {
+    errors.push(`${label} ${response.error ?? '数据源不可用'}`)
   }
 }
 

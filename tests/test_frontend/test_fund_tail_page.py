@@ -135,6 +135,8 @@ def test_fund_tail_page_loads_sections_resiliently() -> None:
     assert "Promise.allSettled" in source
     assert "applyLoadResult" in source
     assert "基金尾盘部分数据加载失败" in source
+    assert "基金尾盘数据源降级" in source
+    assert "collectSectionError" in source
 
 
 def test_fund_tail_page_keeps_visible_load_error_instead_of_silent_zero_state() -> None:

@@ -111,6 +111,17 @@ class FakeFundTailRepository:
         }
 
 
+class BrokenFundTailRepository:
+    def list_universe(self, fund_names, *, proxy_specs=None):
+        raise RuntimeError("clickhouse unavailable")
+
+    def seed_watchlist_from_static_funds(self, fund_names, proxy_specs=None):
+        raise RuntimeError("clickhouse unavailable")
+
+    def load_latest_advice_report(self):
+        raise RuntimeError("clickhouse unavailable")
+
+
 def test_fund_tail_api_lists_universe_with_local_data_status(tmp_path) -> None:
     data_dir = tmp_path / "fund_tail"
     data_dir.mkdir()
@@ -139,6 +150,38 @@ def test_fund_tail_api_lists_universe_with_local_data_status(tmp_path) -> None:
     assert first["has_proxy"] is True
     assert first["latest_nav_date"] == "2026-06-11"
     assert first["latest_proxy_date"] == "2026-06-12"
+
+
+def test_fund_tail_read_apis_degrade_when_repository_is_unavailable(tmp_path) -> None:
+    report_path = tmp_path / "fund_tail_backtest.csv"
+    markdown_path = tmp_path / "latest.md"
+    pd.DataFrame(
+        [{"基金名称": "本地报告", "基金代码": "001632", "最终操作建议": "观察"}]
+    ).to_csv(report_path, index=False)
+    markdown_path.write_text("# 本地基金报告\n", encoding="utf-8")
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_report_path=report_path,
+        fund_tail_markdown_path=markdown_path,
+        fund_tail_repository=BrokenFundTailRepository(),
+    )
+    client = TestClient(app)
+
+    universe = client.get("/api/fund-tail/universe")
+    watchlist = client.get("/api/fund-tail/watchlist")
+    report = client.get("/api/fund-tail/report")
+
+    assert universe.status_code == 200
+    assert universe.json()["items"] == []
+    assert universe.json()["status"] == "degraded"
+    assert "clickhouse unavailable" in universe.json()["error"]
+    assert watchlist.status_code == 200
+    assert watchlist.json()["items"] == []
+    assert watchlist.json()["status"] == "degraded"
+    assert report.status_code == 200
+    assert report.json()["rows"][0]["基金代码"] == "001632"
+    assert report.json()["status"] == "degraded"
+    assert "clickhouse unavailable" in report.json()["error"]
 
 
 def test_fund_tail_watchlist_api_lists_and_updates_items(tmp_path) -> None:

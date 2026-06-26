@@ -561,6 +561,8 @@ export interface FundTailUniverseItem {
 
 export interface FundTailUniverseResponse {
   items: FundTailUniverseItem[]
+  status?: string
+  error?: string
 }
 
 export interface FundTailProxyRefreshResponse {
@@ -579,6 +581,8 @@ export interface FundTailReportResponse {
   markdown_path: string
   report_updated_at?: string | null
   markdown_updated_at?: string | null
+  status?: string
+  error?: string
 }
 
 export interface FundTailDataStatusItem {
@@ -638,6 +642,8 @@ export type FundWatchlistPayload = FundWatchlistItem
 
 export interface FundWatchlistResponse {
   items: FundWatchlistItem[]
+  status?: string
+  error?: string
 }
 
 export interface FundWatchlistItemResponse {

@@ -607,16 +607,27 @@ def create_app(
     @app.get("/api/fund-tail/universe")
     def get_fund_tail_universe() -> dict[str, Any]:
         if app.state.fund_tail_repository is not None:
-            return {"items": list_fund_universe_from_repository(app.state.fund_tail_repository)}
+            try:
+                return {"items": list_fund_universe_from_repository(app.state.fund_tail_repository)}
+            except Exception as exc:  # noqa: BLE001 - keep the fund-tail page diagnosable when ClickHouse is down.
+                return _fund_tail_degraded_response(exc, items=[])
         return {"items": list_fund_universe(fund_tail_paths.data_dir)}
 
     @app.get("/api/fund-tail/report")
     def get_fund_tail_report() -> dict[str, Any]:
-        return load_latest_fund_tail_report(
-            fund_tail_paths.report_path,
-            fund_tail_paths.markdown_path,
-            app.state.fund_tail_repository,
-        )
+        try:
+            return load_latest_fund_tail_report(
+                fund_tail_paths.report_path,
+                fund_tail_paths.markdown_path,
+                app.state.fund_tail_repository,
+            )
+        except Exception as exc:  # noqa: BLE001 - fall back to local report if repository access fails.
+            payload = load_latest_fund_tail_report(
+                fund_tail_paths.report_path,
+                fund_tail_paths.markdown_path,
+                None,
+            )
+            return _fund_tail_degraded_response(exc, **payload)
 
     @app.get("/api/fund-tail/opportunities/latest")
     def get_fund_tail_opportunities() -> dict[str, Any]:
@@ -629,7 +640,10 @@ def create_app(
     def get_fund_tail_watchlist() -> dict[str, Any]:
         if app.state.fund_tail_repository is None:
             raise HTTPException(status_code=503, detail="Fund watchlist requires ClickHouse repository")
-        return {"items": list_fund_watchlist(app.state.fund_tail_repository)}
+        try:
+            return {"items": list_fund_watchlist(app.state.fund_tail_repository)}
+        except Exception as exc:  # noqa: BLE001 - keep read-only page load from failing hard.
+            return _fund_tail_degraded_response(exc, items=[])
 
     @app.post("/api/fund-tail/refresh-proxy")
     def refresh_fund_tail_proxy(payload: FundTailProxyRefreshRequest) -> dict[str, Any]:
@@ -1856,6 +1870,12 @@ def _maintenance_verification(status: dict[str, Any]) -> dict[str, Any]:
         "minute5_complete_symbols": health.get("minute5_symbol_count", 0),
         "status": health.get("status", "unknown"),
     }
+
+
+def _fund_tail_degraded_response(error: Exception, **payload: Any) -> dict[str, Any]:
+    payload["status"] = "degraded"
+    payload["error"] = f"{type(error).__name__}: {error}"
+    return payload
 
 
 def _should_run_index_daily_sync(index_daily_sync_runner, status: dict[str, Any]) -> bool:
