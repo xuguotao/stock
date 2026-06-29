@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from datetime import date
 
 import sys
 from pathlib import Path
@@ -44,13 +43,36 @@ def test_walk_forward_folds_are_rolling_fixed_windows():
             assert start > folds[i - 1][0]  # 起点后移
 
 
-def test_diagnose_fold_returns_ic_and_quantile_for_subset():
+def test_diagnose_fold_subsets_by_fold_dates():
+    """fold_dates 必须真正限制 IC/分层的计算日期子集。
+
+    若 diagnose_fold 内部的 .isin(date_set) 过滤变成 no-op（在全部 120 日上算 IC），
+    仅靠键存在性断言无法发现。这里用两个不同大小的子集分别调用 diagnose_fold，
+    断言其 IC 不同，从而证明 fold_dates 子集被真正应用。当 .isin() 失效时两次调用
+    会在相同的全量数据上聚合，ic_mean 必然相等，断言失败。
+    """
     bars = _fake_bars_long()
     fr = compute_overnight_forward_return(bars)
     fv = OvernightMomentumFactor(smoothing_window=1).compute(bars)
     dates = bars.index.get_level_values("date").unique().sort_values()
-    fold_dates = dates[0:60]  # 第一折训练窗
-    result = diagnose_fold(fv, fr, fold_dates, OvernightMomentumFactor(smoothing_window=1), n_quantiles=3)
-    assert result["factor"] == "overnight_momentum"
-    assert "ic_mean" in result["ic"] and "icir" in result["ic"]
-    assert "spread_return" in result["quantile"]
+
+    # 小子集（前 20 交易日）vs 大子集（前 60 交易日）。8 symbols/日，远超
+    # ICAnalyzer 的 ≥3 obs/日 与 QuantileAnalyzer 的 ≥n_quantiles 要求。
+    factor = OvernightMomentumFactor(smoothing_window=1)
+    result_small = diagnose_fold(fv, fr, dates[0:20], factor, n_quantiles=3)
+    result_large = diagnose_fold(fv, fr, dates[0:60], factor, n_quantiles=3)
+
+    # 键存在性仍成立。
+    assert result_large["factor"] == "overnight_momentum"
+    assert "ic_mean" in result_large["ic"] and "icir" in result_large["ic"]
+    assert "spread_return" in result_large["quantile"]
+
+    # 子集必须生效：不同 fold_dates → 不同 IC。若 .isin() 过滤为 no-op，两次调用都在
+    # 全部 120 日上聚合，两个 ic_mean 必然相等 → 断言失败。1e-6 容差远低于实际差异
+    # （约 0.006），又远高于浮点噪声，确保对退化全量相等情形依然失败。
+    ic_small = result_small["ic"]["ic_mean"]
+    ic_large = result_large["ic"]["ic_mean"]
+    assert abs(ic_small - ic_large) > 1e-6, (
+        f"small(20d) 与 large(60d) 子集 ic_mean 相同 ({ic_small} == {ic_large})，"
+        "fold_dates 子集未被应用"
+    )

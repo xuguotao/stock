@@ -2,10 +2,8 @@
 from __future__ import annotations
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
-from datetime import date
 
 import pandas as pd
 
@@ -15,7 +13,6 @@ if str(ROOT) not in sys.path:
 
 from scripts.diagnose_tail_factors import (
     compute_overnight_forward_return,
-    diagnose_factor,
     _sanitize_for_json,
 )
 from src.research.factor_analysis.ic_analysis import ICAnalyzer
