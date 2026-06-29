@@ -359,7 +359,13 @@
         <el-row :gutter="12">
           <el-col :span="8">
             <el-form-item label="基金代码">
-              <el-input v-model="watchlistForm.fund_code" :disabled="Boolean(watchlistEditingCode)" />
+              <el-input
+                v-model="watchlistForm.fund_code"
+                :disabled="Boolean(watchlistEditingCode)"
+                maxlength="6"
+                @blur="autofillWatchlistFormFromCode"
+                @keyup.enter="autofillWatchlistFormFromCode"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="16">
@@ -368,6 +374,14 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <el-alert
+          v-if="watchlistAutocompleteHint"
+          :title="watchlistAutocompleteHint"
+          type="success"
+          show-icon
+          :closable="false"
+          class="watchlist-position-hint"
+        />
         <el-row :gutter="12">
           <el-col :span="8">
             <el-form-item label="状态">
@@ -485,6 +499,7 @@ const watchlistStatusFilter = ref('all')
 const watchlistDialogVisible = ref(false)
 const watchlistEditingCode = ref('')
 const watchlistForm = ref<WatchlistForm>(emptyWatchlistForm())
+const watchlistAutocompleteHint = ref('')
 const report = ref<FundTailReportResponse>({
   rows: [],
   markdown: '',
@@ -693,11 +708,83 @@ function openWatchlistDialog(item?: FundWatchlistItem) {
   watchlistForm.value = item
     ? { ...item, position_return_pct: decimalToPercent(item.position_return_pct) }
     : emptyWatchlistForm()
+  watchlistAutocompleteHint.value = ''
   watchlistDialogVisible.value = true
 }
 
+function autofillWatchlistFormFromCode() {
+  if (watchlistEditingCode.value) return
+  const code = normalizeFundCode(watchlistForm.value.fund_code)
+  watchlistForm.value.fund_code = code
+  if (!/^\d{6}$/.test(code)) {
+    watchlistAutocompleteHint.value = ''
+    return
+  }
+  const metadata = fundMetadataForCode(code)
+  if (!metadata) {
+    watchlistAutocompleteHint.value = '本地基金池未识别该代码，请手动填写基金名称。'
+    return
+  }
+  if (!watchlistForm.value.fund_name.trim()) {
+    watchlistForm.value.fund_name = metadata.name
+  }
+  if (watchlistForm.value.fund_type === 'other' && metadata.fund_type) {
+    watchlistForm.value.fund_type = metadata.fund_type
+  }
+  if (metadata.status && watchlistForm.value.status === 'watching') {
+    watchlistForm.value.status = metadata.status
+  }
+  if (metadata.priority && watchlistForm.value.priority === 'normal') {
+    watchlistForm.value.priority = metadata.priority
+  }
+  watchlistAutocompleteHint.value = `已补全：${metadata.name}`
+}
+
+function fundMetadataForCode(code: string): Partial<FundWatchlistItem> & { name: string } | null {
+  const existing = watchlist.value.find((item) => item.fund_code === code)
+  if (existing) return { ...existing, name: existing.fund_name }
+  const universeItem = universe.value.find((item) => item.code === code)
+  if (universeItem) {
+    return {
+      name: universeItem.name,
+      fund_type: inferFundTypeFromName(universeItem.name)
+    }
+  }
+  const reportRow = adviceRows.value.find((row) => normalizeFundCode(String(row['基金代码'] ?? '')) === code)
+  if (reportRow) {
+    const name = String(reportRow['基金名称'] ?? '')
+    if (name) return { name, fund_type: inferFundTypeFromName(name) }
+  }
+  const opportunityRow = opportunityRows.value.find((row) => normalizeFundCode(String(row['基金代码'] ?? '')) === code)
+  if (opportunityRow) {
+    const name = String(opportunityRow['基金名称'] ?? '')
+    if (name) {
+      return {
+        name,
+        fund_type: fundTypeFromOpportunity(opportunityRow as AdviceRow)
+      }
+    }
+  }
+  return null
+}
+
+function normalizeFundCode(value: string) {
+  const digits = value.replace(/\D/g, '')
+  return digits ? digits.padStart(6, '0').slice(-6) : ''
+}
+
+function inferFundTypeFromName(name: string): FundWatchlistItem['fund_type'] {
+  if (/纳斯达克|QDII|标普|海外|恒生/.test(name)) return 'overseas'
+  if (/医疗|医药|生物|保健/.test(name)) return 'medical'
+  if (/消费|食品|饮料|白酒/.test(name)) return 'consumer'
+  if (/债|货币|现金/.test(name)) return 'bond'
+  if (/沪深300|中证500|深证100|创业板|上证50|宽基/.test(name)) return 'broad_index'
+  if (/新能源|环保|半导体|军工|行业|主题|芯片|科技/.test(name)) return 'sector'
+  return 'other'
+}
+
 async function saveWatchlistItem() {
-  const code = watchlistForm.value.fund_code.trim().padStart(6, '0')
+  const code = normalizeFundCode(watchlistForm.value.fund_code)
   if (!/^\d{6}$/.test(code)) {
     ElMessage.error('基金代码需为 6 位数字')
     return

@@ -91,6 +91,17 @@ def test_fund_tail_watchlist_position_fields_use_plain_inputs() -> None:
     assert "el-input-number" not in source
 
 
+def test_fund_tail_watchlist_form_autofills_known_fund_metadata() -> None:
+    source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
+
+    assert '@blur="autofillWatchlistFormFromCode"' in source
+    assert '@keyup.enter="autofillWatchlistFormFromCode"' in source
+    assert "watchlistAutocompleteHint" in source
+    assert "function autofillWatchlistFormFromCode()" in source
+    assert "function fundMetadataForCode" in source
+    assert "function inferFundTypeFromName" in source
+
+
 def test_fund_tail_page_shows_data_trust_and_action_groups() -> None:
     source = Path("frontend/src/pages/FundTail.vue").read_text(encoding="utf-8")
 
