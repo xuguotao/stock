@@ -65,3 +65,39 @@ def test_build_clickhouse_research_dataset_respects_symbols_and_limit(tmp_path) 
 
     assert manifest["requested_symbols"] == ["000001.SZ"]
     assert manifest["symbols"] == ["000001.SZ"]
+
+
+class InvalidOhlcClickHouseClient:
+    """ClickHouse stub returning a negative-price dirty row alongside clean rows."""
+
+    def execute(self, query, params=None):
+        normalized = " ".join(query.lower().split())
+        if "from stocks" in normalized:
+            return [("000937", "冀中能源"), ("600519", "贵州茅台")]
+        if "from daily_kline" in normalized:
+            # Column order matches the real query: symbol, date, open, high, low, close, volume, amount
+            return [
+                ("000937", date(2021, 3, 26), -0.21, -0.23, -0.20, -0.21, 1000.0, -210.0),  # 负价脏行
+                ("000937", date(2021, 3, 29), 10.0, 10.2, 9.8, 10.1, 2000.0, 20200.0),       # 正常
+                ("600519", date(2021, 3, 29), 1800.0, 1810.0, 1790.0, 1805.0, 500.0, 902500.0),
+            ]
+        return []
+
+
+def test_build_clickhouse_research_dataset_filters_invalid_ohlc_rows(tmp_path) -> None:
+    output = tmp_path / "research" / "daily_clickhouse.parquet"
+
+    manifest = build_clickhouse_research_dataset(
+        start=date(2021, 3, 26),
+        end=date(2021, 3, 29),
+        output_path=output,
+        symbols=["000937.SZ", "600519.SH"],
+        client=InvalidOhlcClickHouseClient(),
+    )
+
+    df = pd.read_parquet(output)
+    # 防御历史 invalid OHLC（如 000937 2020-2021 负价），负价脏行不应进 parquet
+    assert (df["close"] <= 0).sum() == 0
+    assert (df[["open", "high", "low", "close"]] > 0).all().all()
+    assert len(df) == 2  # 负价脏行被滤除，剩 2 行
+    assert manifest["row_count"] == 2

@@ -104,4 +104,7 @@ def _dataset_frame(rows: list[tuple]) -> pd.DataFrame:
     for column in ["open", "high", "low", "close", "volume", "amount"]:
         df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
     df["adjusted_close"] = df["close"]
-    return df[BAR_COLUMNS].drop_duplicates(["date", "symbol"]).sort_values(["date", "symbol"]).reset_index(drop=True)
+    df = df[BAR_COLUMNS].drop_duplicates(["date", "symbol"])
+    # 防御历史 invalid OHLC（如 000937 2020-2021 负价），避免进回测/训练 parquet
+    df = df[(df[["open", "high", "low", "close"]] > 0).all(axis=1)]
+    return df.sort_values(["date", "symbol"]).reset_index(drop=True)
