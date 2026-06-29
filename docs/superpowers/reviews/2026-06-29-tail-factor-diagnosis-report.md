@@ -116,3 +116,20 @@ python scripts/diagnose_tail_factors.py --offline-cache \
 ```
 
 输出含 `tail_session` / `overnight_momentum` 两因子的 IC/RankIC/ICIR/IC 正比率/spread/monotonicity。运行时有 6 条 `RuntimeWarning`/`ConstantInputWarning`（tail_session warmup 期常量数组导致 corr=NaN，已在 `ic_summary` 内 dropna）——属预期，非异常。
+
+---
+
+## 8. 附录：min_score 修复复跑验证（Task 6）
+
+Task 5 修了 `min_score` 逐因子过滤 bug 后，复跑之前**全空**的历史选股窗口验证（`--min-score 0.7`，无 breadth 门，以隔离 min_score 这一独立根因）：
+
+| 指标 | 修复前（bug） | 修复后 |
+|---|---|---|
+| `selection_count` | **0**（全空） | **110**（22 天 × 5/天） |
+| 代表性分数 | 全是 `0.42`（=0.7×0.6，隔夜贡献 0，无区分度） | `0.276 / 0.282 / 0.288 / 0.294 / 0.30`（隔夜贡献生效，有区分度） |
+
+结论：bug 修复**恢复了隔夜因子的贡献**——选股不再打空、分数不再退化到单一值。退化分数 `0.42` 的消失直接印证了第 5 节的判断（隔夜是有预测力的因子，却被 bug 丢掉了）。
+
+> 注意：原全空报告的另一根因——市场宽度门默认偏严（root cause #2）——**不在本 plan 范围**。本复跑用无 breadth 门隔离了 min_score 根因；breadth 门仍需单独处理（见原 review `2026-06-29-tail-selection-current-state.md` §5.1 原因二）。
+
+回归测试：`pytest tests/test_strategy tests/test_research tests/test_data/test_clickhouse_research_dataset.py tests/test_web/test_backtests_api.py` → **155 passed**（6 条 warmup warning 属预期）。
