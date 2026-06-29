@@ -790,6 +790,7 @@ export interface TailSignalStatsResponse {
     trade_date: string
     outcome_date: string | null
     symbol: string
+    stock_name?: string
     mode: string
     rank: number
     status: string

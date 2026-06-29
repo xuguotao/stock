@@ -91,7 +91,68 @@
       </div>
     </div>
 
+    <div class="panel">
+      <div class="page-header panel-title-row">
+        <div>
+          <h2 class="page-title">最终入选收益明细</h2>
+          <p class="panel-subtitle">收益复盘口径：以信号日收盘价为基准，优先看当前收益，其次看次日开盘、最高、最低、收盘收益。</p>
+        </div>
+        <el-tag effect="plain">{{ stats?.details?.length ?? 0 }}</el-tag>
+      </div>
+      <el-table :data="stats?.details ?? []" height="520" empty-text="暂无最终入选复盘">
+        <el-table-column prop="trade_date" label="信号日" width="112" fixed />
+        <el-table-column label="股票/名称" min-width="170" fixed show-overflow-tooltip>
+          <template #default="{ row }">{{ formatStockLabel(row) }}</template>
+        </el-table-column>
+        <el-table-column prop="rank" label="入选排名" width="92" align="right" />
+        <el-table-column label="复盘状态" width="104">
+          <template #default="{ row }">{{ reviewStatusText(row.review_status) }}</template>
+        </el-table-column>
+        <el-table-column label="当前价" width="96" align="right">
+          <template #default="{ row }">{{ formatPrice(row.current_price) }}</template>
+        </el-table-column>
+        <el-table-column label="当前收益" width="112" align="right">
+          <template #default="{ row }">
+            <span :class="currentReturnClass(row.current_return)">{{ formatPercent(row.current_return) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="最新时间" width="150" show-overflow-tooltip>
+          <template #default="{ row }">{{ formatDateTime(row.latest_snapshot_at) }}</template>
+        </el-table-column>
+        <el-table-column label="信号收盘" width="100" align="right">
+          <template #default="{ row }">{{ formatPrice(row.signal_close) }}</template>
+        </el-table-column>
+        <el-table-column label="次日开盘" width="100" align="right">
+          <template #default="{ row }">{{ formatPrice(row.next_open) }}</template>
+        </el-table-column>
+        <el-table-column label="次日收益" width="112" align="right">
+          <template #default="{ row }">
+            <span :class="currentReturnClass(row.close_return)">{{ formatPercent(row.close_return) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="最高收益" width="112" align="right">
+          <template #default="{ row }">{{ formatPercent(row.max_return) }}</template>
+        </el-table-column>
+        <el-table-column label="最低回撤" width="112" align="right">
+          <template #default="{ row }">{{ formatPercent(row.min_return) }}</template>
+        </el-table-column>
+        <el-table-column prop="execution_label" label="表现标签" width="116" />
+        <el-table-column prop="risk_label" label="回撤风险" width="104" />
+        <el-table-column label="量比/尾盘涨幅" width="140" align="right">
+          <template #default="{ row }">{{ formatRatio(row.volume_ratio ?? 0) }} / {{ formatPercent(row.tail_return ?? 0) }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <div class="tail-result-grid">
+      <div class="panel diagnostic-section-header">
+        <div class="page-header panel-title-row">
+          <div>
+            <h2 class="page-title">策略诊断分组</h2>
+            <p class="panel-subtitle">这些分组用于解释策略表现来源，优先级低于上方最终入选收益明细。</p>
+          </div>
+        </div>
+      </div>
       <div class="panel">
         <div class="page-header panel-title-row">
           <h2 class="page-title">近期复盘</h2>
@@ -277,61 +338,6 @@
       </el-table>
     </div>
 
-    <div class="panel">
-      <div class="page-header panel-title-row">
-        <h2 class="page-title">单票复盘明细</h2>
-        <el-tag effect="plain">{{ stats?.details?.length ?? 0 }}</el-tag>
-      </div>
-      <el-table :data="stats?.details ?? []" height="420" empty-text="暂无单票复盘">
-        <el-table-column prop="trade_date" label="信号日" width="120" />
-        <el-table-column prop="symbol" label="股票" width="120" />
-        <el-table-column prop="rank" label="排名" width="80" align="right" />
-        <el-table-column label="复核状态" width="110">
-          <template #default="{ row }">{{ reviewStatusText(row.review_status) }}</template>
-        </el-table-column>
-        <el-table-column prop="mode" label="模式" width="110" />
-        <el-table-column prop="v2_layer" label="信号层" width="120" show-overflow-tooltip />
-        <el-table-column prop="confidence_bucket" label="可信度" width="100" />
-        <el-table-column prop="execution_label" label="表现标签" width="120" />
-        <el-table-column prop="risk_label" label="回撤风险" width="100" />
-        <el-table-column label="强度" width="100" align="right">
-          <template #default="{ row }">{{ formatScore(row.strength) }}</template>
-        </el-table-column>
-        <el-table-column label="量比" width="100" align="right">
-          <template #default="{ row }">{{ formatRatio(row.volume_ratio ?? 0) }}</template>
-        </el-table-column>
-        <el-table-column label="信号收盘" width="110" align="right">
-          <template #default="{ row }">{{ formatPrice(row.signal_close) }}</template>
-        </el-table-column>
-        <el-table-column label="次日开盘" width="110" align="right">
-          <template #default="{ row }">{{ formatPrice(row.next_open) }}</template>
-        </el-table-column>
-        <el-table-column label="次日最高" width="110" align="right">
-          <template #default="{ row }">{{ formatPrice(row.next_high) }}</template>
-        </el-table-column>
-        <el-table-column label="次日最低" width="110" align="right">
-          <template #default="{ row }">{{ formatPrice(row.next_low) }}</template>
-        </el-table-column>
-        <el-table-column label="当前价" width="100" align="right">
-          <template #default="{ row }">{{ formatPrice(row.current_price) }}</template>
-        </el-table-column>
-        <el-table-column label="当前收益" width="120" align="right">
-          <template #default="{ row }">{{ formatPercent(row.current_return) }}</template>
-        </el-table-column>
-        <el-table-column label="开盘收益" width="120" align="right">
-          <template #default="{ row }">{{ formatPercent(row.open_return) }}</template>
-        </el-table-column>
-        <el-table-column label="最高收益" width="120" align="right">
-          <template #default="{ row }">{{ formatPercent(row.max_return) }}</template>
-        </el-table-column>
-        <el-table-column label="最低回撤" width="120" align="right">
-          <template #default="{ row }">{{ formatPercent(row.min_return) }}</template>
-        </el-table-column>
-        <el-table-column label="收盘收益" width="120" align="right">
-          <template #default="{ row }">{{ formatPercent(row.close_return) }}</template>
-        </el-table-column>
-      </el-table>
-    </div>
   </section>
 </template>
 
@@ -394,6 +400,20 @@ function formatPrice(value: number) {
   return value ? value.toFixed(2) : '-'
 }
 
+function formatDateTime(value?: string | null) {
+  return value ? value.replace('T', ' ').slice(0, 19) : '-'
+}
+
+function formatStockLabel(row: { symbol?: string; stock_name?: string }) {
+  const symbol = row.symbol ?? '-'
+  return row.stock_name ? `${symbol} ${row.stock_name}` : symbol
+}
+
+function currentReturnClass(value?: number | null) {
+  if (value == null || value === 0) return 'return-neutral'
+  return value > 0 ? 'return-positive' : 'return-negative'
+}
+
 function formatScore(value?: number | null) {
   if (value == null) return '-'
   return value.toFixed(2)
@@ -437,10 +457,28 @@ onMounted(loadStats)
   margin-top: 14px;
 }
 
+.diagnostic-section-header {
+  grid-column: 1 / -1;
+}
+
 .panel-subtitle {
   color: #909399;
   font-size: 13px;
   margin: 4px 0 0;
+}
+
+.return-positive {
+  color: #cf1322;
+  font-weight: 650;
+}
+
+.return-negative {
+  color: #047857;
+  font-weight: 650;
+}
+
+.return-neutral {
+  color: #606266;
 }
 
 @media (max-width: 900px) {

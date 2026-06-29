@@ -66,17 +66,13 @@ class FakeClickHouseClient:
                 (date(2026, 6, 23), 2, 0, 2),
                 (date(2026, 6, 22), 2, 1, 1),
             ]
-        if "group by s.trade_date" in normalized:
-            return [
-                (date(2026, 6, 16), 4, 3, 3, 4, 0.008, 0.018, 0.045, -0.012),
-                (date(2026, 6, 15), 5, 2, 2, 3, -0.002, 0.006, 0.03, -0.02),
-            ]
         if "select s.trade_date, o.outcome_date" in normalized:
             return [
                 (
                     date(2026, 6, 16),
                     date(2026, 6, 17),
                     "000001",
+                    "平安银行",
                     "selection",
                     1,
                     "selected",
@@ -100,6 +96,11 @@ class FakeClickHouseClient:
                     10.66,
                     datetime(2026, 6, 17, 13, 55, 13),
                 )
+            ]
+        if "group by s.trade_date" in normalized:
+            return [
+                (date(2026, 6, 16), 4, 3, 3, 4, 0.008, 0.018, 0.045, -0.012),
+                (date(2026, 6, 15), 5, 2, 2, 3, -0.002, 0.006, 0.03, -0.02),
             ]
         if "s.status = 'selected'" in normalized:
             return [(10, 6, 0.01, 0.02, 0.05, -0.015)]
@@ -313,6 +314,7 @@ def test_signal_stats_returns_overall_and_grouped_metrics() -> None:
         "payoff_ratio": 0.0,
     }
     assert result["details"][0]["symbol"] == "000001.SZ"
+    assert result["details"][0]["stock_name"] == "平安银行"
     assert result["details"][0]["review_status"] == "completed"
     assert result["details"][0]["next_high"] == 10.9
     assert result["details"][0]["current_price"] == 10.66

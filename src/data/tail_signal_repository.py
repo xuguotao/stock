@@ -489,6 +489,7 @@ class ClickHouseTailSignalRepository:
                 s.trade_date,
                 o.outcome_date,
                 s.symbol,
+                any(st.name) as stock_name,
                 s.mode,
                 s.rank,
                 s.status,
@@ -527,8 +528,39 @@ class ClickHouseTailSignalRepository:
                 from stock_quote_snapshots
                 group by code
             ) q on q.code = s.symbol
+            left join (
+                select symbol, any(name) as name
+                from stocks
+                group by symbol
+            ) st on st.symbol = s.symbol
             where {_stats_date_filter()}
                 {status_filter}
+            group by
+                s.trade_date,
+                o.outcome_date,
+                s.symbol,
+                s.mode,
+                s.rank,
+                s.status,
+                s.filter_reason,
+                s.v2_layer,
+                s.v2_action,
+                s.strength,
+                s.v2_score,
+                s.volume_ratio,
+                s.tail_return,
+                o.signal_close,
+                d.close,
+                o.next_open,
+                o.next_high,
+                o.next_low,
+                o.next_close,
+                o.open_return,
+                o.close_return,
+                o.max_return,
+                o.min_return,
+                q.latest_price,
+                q.latest_snapshot_at
             order by s.trade_date desc, s.rank asc
             limit %(limit)s
             """,
@@ -785,6 +817,7 @@ def _detail_row(row: tuple[Any, ...]) -> dict[str, Any]:
         trade_date,
         outcome_date,
         symbol,
+        stock_name,
         mode,
         rank,
         status,
@@ -816,6 +849,7 @@ def _detail_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "trade_date": _date_string(trade_date),
         "outcome_date": _date_string(outcome_date) if has_outcome else None,
         "symbol": _format_symbol(str(symbol)),
+        "stock_name": str(stock_name or ""),
         "mode": str(mode or ""),
         "rank": int(rank or 0),
         "status": str(status or ""),
