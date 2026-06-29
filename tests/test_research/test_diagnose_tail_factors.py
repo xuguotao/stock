@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -84,6 +86,16 @@ def test_run_diagnosis_returns_ic_and_quantile_per_factor():
     for f in result["factors"]:
         assert "ic_mean" in f["ic"] and "rank_icir" in f["ic"]
         assert "spread_return" in f["quantile"] and "monotonicity" in f["quantile"]
+        # Key presence alone can't catch an all-NaN regression: run_diagnosis
+        # does not sanitize, so a broken pipeline leaves raw NaN/Inf metrics
+        # whose keys still exist. Assert the ICIR and quantile spread are real,
+        # finite numbers (NaN/Inf fail math.isfinite; on real non-degenerate
+        # data ICIR ~0.2-0.4, larger on this regular synthetic fixture but
+        # always finite when the pipeline is intact).
+        icir = f["ic"]["icir"]
+        assert icir is not None and math.isfinite(icir)
+        spread = f["quantile"]["spread_return"]
+        assert spread is not None and math.isfinite(spread)
 
 
 def test_sanitize_for_json_converts_nonfinite_floats_to_none():
@@ -153,3 +165,12 @@ def test_main_writes_json_with_factor_results(tmp_path, monkeypatch):
     for f in payload["factors"]:
         assert "ic_mean" in f["ic"] and "rank_icir" in f["ic"]
         assert "spread_return" in f["quantile"] and "monotonicity" in f["quantile"]
+        # main() sanitizes the result (_sanitize_for_json -> NaN/Inf become
+        # None), so a broken pipeline surfaces None metrics whose keys still
+        # exist. The strict parse above rejected raw NaN/Infinity tokens; this
+        # guards the remaining hole — None values from sanitization — by
+        # requiring the ICIR and quantile spread to be real, finite numbers.
+        icir = f["ic"]["icir"]
+        assert icir is not None and math.isfinite(icir)
+        spread = f["quantile"]["spread_return"]
+        assert spread is not None and math.isfinite(spread)

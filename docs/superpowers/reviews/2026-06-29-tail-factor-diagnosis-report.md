@@ -3,7 +3,7 @@
 > **范围**：度量尾盘选股系统 A 现有两个因子（`tail_session`、`overnight_momentum`）对"隔夜收益"的预测力，回答"因子到底有没有用"。
 > **方法**：新建独立诊断脚本 `scripts/diagnose_tail_factors.py`，复用 `ICAnalyzer`/`QuantileAnalyzer`，forward return 自定义为隔夜 `open(t+1)/close(t) - 1`（匹配 S01 一夜持股法：尾盘买 close(t)、次日开盘 open(t+1) 卖）。**不预设因子有效/无效**——跑出什么写什么。
 > **数据**：offline parquet cache（`data/cache/bars/`，187 文件），窗口 2025-01-01 ~ 2026-06-01。
-> **产物**：`reports/tail_session/factor_diagnosis.json`。
+> **产物**：`reports/tail_session/factor_diagnosis.json`（`reports/` 全目录被 `.gitignore` 排除——见 `.gitignore:56`——故为本地生成物、不入库；可用 §7 命令复现，不强制提交 JSON）。
 > **前序**：`docs/superpowers/reviews/2026-06-29-tail-selection-current-state.md`、`docs/superpowers/plans/2026-06-29-tail-factor-diagnosis-and-bugfix.md`。
 
 ---

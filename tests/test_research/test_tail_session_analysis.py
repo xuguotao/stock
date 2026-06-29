@@ -105,8 +105,10 @@ def test_evaluate_tail_session_grid_high_min_score_preserves_overnight_trades() 
     threshold NaN'd both the discrete ``tail_session`` column (max 1.0) and the
     continuous ``overnight_momentum`` column (~0), zeroing all trades. Post-fix
     the grid converts the scalar to ``{"tail_session": <v>}``, so overnight is
-    untouched and still drives selections: trades are NOT zeroed. The high
-    threshold must not produce more trades than the ungated baseline.
+    untouched and still drives selections: trades are NOT zeroed. The real
+    discriminator on this 2-symbol fixture is ``trade_count > 0`` (both configs
+    select the whole 2-symbol universe, so a ``high <= low`` comparison is
+    vacuous and can't fail — it is intentionally not asserted here).
     """
     results = evaluate_tail_session_grid(
         bars=_bars(),
@@ -117,10 +119,8 @@ def test_evaluate_tail_session_grid_high_min_score_preserves_overnight_trades() 
         initial_capital=100_000,
     )
 
-    low_threshold = results.loc[results["min_score"] == 0.0, "trade_count"].iloc[0]
     high_threshold = results.loc[results["min_score"] == 1.1, "trade_count"].iloc[0]
     assert high_threshold > 0
-    assert high_threshold <= low_threshold
 
 
 def test_evaluate_tail_session_grid_quality_filters_are_reported_and_applied() -> None:
