@@ -43,7 +43,7 @@ def main() -> None:
         type=float,
         nargs="+",
         default=[None],
-        help="Minimum raw factor score required before ranking; omit for no gate",
+        help="Minimum raw tail_session factor score required before ranking (gates tail_session only; overnight_momentum is left untouched); omit for no gate",
     )
     parser.add_argument("--capital", type=float, default=100_000)
     parser.add_argument("--output", default="reports/tail_session/grid_results.csv")

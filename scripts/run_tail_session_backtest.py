@@ -46,7 +46,7 @@ def build_historical_selection_rows(
     start: date,
     end: date,
     top_n: int,
-    min_score: float | None = None,
+    min_score: float | dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Build daily tail-session selections from daily backtest scores.
 
@@ -72,7 +72,7 @@ def main() -> None:
     parser.add_argument("--end", default="2025-06-01", help="End date")
     parser.add_argument("--capital", type=float, default=100_000, help="Initial capital")
     parser.add_argument("--top-n", type=int, default=5, help="Number of stocks to hold")
-    parser.add_argument("--min-score", type=float, default=None, help="Minimum raw factor score required before ranking")
+    parser.add_argument("--min-score", type=float, default=None, help="Minimum raw tail_session factor score required before ranking (gates tail_session only; overnight_momentum is left untouched)")
     parser.add_argument("--min-close-above-ma20", action="store_true", help="Require close above MA20 before tail-session scoring")
     parser.add_argument("--max-daily-return", type=float, default=None, help="Reject signals with same-day close return above this decimal threshold")
     parser.add_argument("--min-turnover-value", type=float, default=None, help="Reject signals below this traded value; falls back to close*volume when amount is missing")
@@ -127,6 +127,13 @@ def main() -> None:
     factors = [tail_factor, overnight_factor]
     factor_weights = [0.7, 0.3]
 
+    # Gate only the discrete tail_session factor; leaving overnight_momentum out
+    # of the dict preserves its 0.3 weight (a scalar gate would NaN the whole
+    # continuous overnight column and silently drop it).
+    min_score = (
+        {"tail_session": args.min_score} if args.min_score is not None else None
+    )
+
     if args.selection_report_json or args.selection_report_csv:
         selection_start = date.fromisoformat(args.selection_start) if args.selection_start else start
         selection_end = date.fromisoformat(args.selection_end) if args.selection_end else end
@@ -137,7 +144,7 @@ def main() -> None:
             start=selection_start,
             end=selection_end,
             top_n=args.top_n,
-            min_score=args.min_score,
+            min_score=min_score,
         )
         print(f"Historical selections: {len(selection_rows)} rows across {len({row['date'] for row in selection_rows})} days")
         if args.selection_report_json:
@@ -158,7 +165,7 @@ def main() -> None:
         rebalance_days=1,
         initial_capital=args.capital,
         equal_weight=True,
-        min_score=args.min_score,
+        min_score=min_score,
     )
 
     result = engine.run()
