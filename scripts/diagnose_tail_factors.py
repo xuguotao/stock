@@ -111,6 +111,30 @@ def _load_bars(args):
     return agg.get_bars_batch(_default_symbols(), start, end)
 
 
+def _sanitize_for_json(obj):
+    """Convert non-finite floats (NaN/Inf/-Inf) to None for strict-valid JSON.
+
+    ``json.dumps`` defaults to ``allow_nan=True``, emitting the invalid
+    RFC 8259 tokens ``NaN``/``Infinity``/``-Infinity`` that strict parsers
+    (jq, serde_json, most JS engines) reject. Degenerate factor metrics
+    (e.g. ``monotonicity`` in narrow windows) produce these values, so the
+    diagnosis result is sanitized before serialization. Walks dicts/lists
+    recursively; finite floats and all other values pass through untouched.
+    """
+    import math
+
+    if isinstance(obj, float):
+        # numpy.float64 also subclasses float, so this covers pandas->dict output.
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {key: _sanitize_for_json(val) for key, val in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(item) for item in obj]
+    return obj
+
+
 def main():
     parser = argparse.ArgumentParser(description="Diagnose tail-session factors (IC/quantile).")
     parser.add_argument("--bars-dataset", help="parquet research dataset path")
@@ -126,6 +150,7 @@ def main():
 
     bars = _load_bars(args)
     result = run_diagnosis(bars, n_quantiles=args.n_quantiles)
+    result = _sanitize_for_json(result)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))

@@ -1,7 +1,11 @@
 import numpy as np
 import pandas as pd
 
-from scripts.diagnose_tail_factors import compute_overnight_forward_return, run_diagnosis
+from scripts.diagnose_tail_factors import (
+    _sanitize_for_json,
+    compute_overnight_forward_return,
+    run_diagnosis,
+)
 
 
 def _fake_bars():
@@ -82,6 +86,46 @@ def test_run_diagnosis_returns_ic_and_quantile_per_factor():
         assert "spread_return" in f["quantile"] and "monotonicity" in f["quantile"]
 
 
+def test_sanitize_for_json_converts_nonfinite_floats_to_none():
+    """NaN/Inf/-Inf (nested in lists/dicts) become None -> strict-valid JSON.
+
+    json.dumps defaults to allow_nan=True, emitting the invalid RFC 8259
+    tokens ``NaN``/``Infinity``/``-Infinity``; strict parsers (jq, serde_json,
+    most JS engines) reject them. The sanitizer converts non-finite floats to
+    None so the serialized output is strict-valid JSON.
+    """
+    import json
+
+    payload = {
+        "a": float("nan"),
+        "b": float("inf"),
+        "c": -float("inf"),
+        "nested": {
+            "list": [1, float("nan"), {"deep": float("inf")}],
+            "ok": 3.14,
+        },
+        "label": "ok",
+    }
+    sanitized = _sanitize_for_json(payload)
+
+    assert sanitized["a"] is None
+    assert sanitized["b"] is None
+    assert sanitized["c"] is None
+    assert sanitized["nested"]["list"][1] is None
+    assert sanitized["nested"]["list"][2]["deep"] is None
+    # finite floats and non-float values pass through untouched
+    assert sanitized["nested"]["ok"] == 3.14
+    assert sanitized["label"] == "ok"
+
+    # allow_nan=False raises on any surviving non-finite float: proves the
+    # serialized output is strict-valid JSON.
+    serialized = json.dumps(
+        sanitized, ensure_ascii=False, indent=2, default=str, allow_nan=False
+    )
+    assert "NaN" not in serialized
+    assert "Infinity" not in serialized
+
+
 def test_main_writes_json_with_factor_results(tmp_path, monkeypatch):
     """main() loads bars via _load_bars and writes IC/quantile JSON to --out."""
     import json
@@ -95,7 +139,14 @@ def test_main_writes_json_with_factor_results(tmp_path, monkeypatch):
     )
     mod.main()
 
-    payload = json.loads(out.read_text())
+    text = out.read_text()
+
+    def _reject_constant(value):
+        raise ValueError(f"non-finite JSON constant: {value!r}")
+
+    # Output must be strict-valid JSON (RFC 8259): parse_constant rejects the
+    # NaN/Infinity tokens json.dumps would emit with allow_nan=True.
+    payload = json.loads(text, parse_constant=_reject_constant)
     assert payload["forward_return"] == "overnight_open/close-1"
     names = {f["factor"] for f in payload["factors"]}
     assert names == {"tail_session", "overnight_momentum"}
