@@ -17,7 +17,7 @@ def build_historical_selection_rows(
     start: date,
     end: date,
     top_n: int,
-    min_score: float | None = None,
+    min_score: float | dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Build daily selection rows using the shared factor scoring contract."""
     if bars.empty:

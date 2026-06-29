@@ -31,7 +31,7 @@ class FactorScoreEngine:
         factors: list[Factor],
         factor_weights: list[float] | None = None,
         top_n: int = 10,
-        min_score: float | None = None,
+        min_score: float | dict[str, float] | None = None,
     ):
         self.factors = factors
         self.factor_weights = factor_weights or [1.0 / len(factors)] * len(factors) if factors else []
@@ -49,8 +49,13 @@ class FactorScoreEngine:
                 values = factor.compute(bars)
                 if values.empty:
                     continue
-                if self.min_score is not None:
-                    values = values.where(values >= self.min_score)
+                threshold = (
+                    self.min_score.get(factor.name)
+                    if isinstance(self.min_score, dict)
+                    else self.min_score
+                )
+                if threshold is not None:
+                    values = values.where(values >= threshold)
                 ranked = values.groupby(level=0).rank(pct=True)
                 scores.append(ranked * weight)
             except Exception as exc:

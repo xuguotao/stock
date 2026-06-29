@@ -62,7 +62,7 @@ def run_tail_backtest(
         bars=bars,
         factors=factors,
         top_n=request.top_n,
-        min_score=request.min_score,
+        min_score=_tail_min_score_gate(request.min_score),
     )
     _report_progress(progress, 65, "simulating_events", "执行次日开盘事件回测")
     event_result = _run_tail_event_backtest(
@@ -103,6 +103,19 @@ def _report_progress(
 ) -> None:
     if progress is not None:
         progress(percent, stage, message)
+
+
+def _tail_min_score_gate(min_score: float | None) -> dict[str, float] | None:
+    """Convert the request's scalar min_score into a per-factor gate.
+
+    The tail strategy gates the discrete ``tail_session`` factor (raw values
+    0/0.4/0.7/1.0) while leaving the continuous ``overnight_momentum`` factor
+    untouched, so its 0.3 weight survives in the composite. A scalar gate
+    would NaN the entire overnight column and silently drop that weight.
+    """
+    if min_score is None:
+        return None
+    return {"tail_session": min_score}
 
 
 def _load_bars(request: TailBacktestRequest) -> pd.DataFrame:
@@ -283,7 +296,7 @@ def _rebalance_selections(
     bars: pd.DataFrame,
     factors: list,
     top_n: int,
-    min_score: float | None,
+    min_score: float | dict[str, float] | None,
 ) -> list[dict[str, Any]]:
     scorer = FactorScoreEngine(
         factors=factors,
@@ -587,7 +600,7 @@ def _factor_explanations(
     *,
     factors: list,
     weights: list[float],
-    min_score: float | None,
+    min_score: float | dict[str, float] | None,
 ) -> dict[str, dict[str, dict[str, float | None]]]:
     if bars.empty:
         return {}
@@ -597,8 +610,13 @@ def _factor_explanations(
         values = factor.compute(bars)
         if values.empty:
             continue
-        if min_score is not None:
-            ranked_source = values.where(values >= min_score)
+        threshold = (
+            min_score.get(factor.name)
+            if isinstance(min_score, dict)
+            else min_score
+        )
+        if threshold is not None:
+            ranked_source = values.where(values >= threshold)
         else:
             ranked_source = values
         contributions = ranked_source.groupby(level=0).rank(pct=True) * weight

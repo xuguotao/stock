@@ -145,7 +145,7 @@ class BacktestEngine:
         rebalance_days: int = 5,
         initial_capital: float = 1_000_000.0,
         equal_weight: bool = True,
-        min_score: float | None = None,
+        min_score: float | dict[str, float] | None = None,
     ):
         """Initialize backtest engine.
 
@@ -157,7 +157,12 @@ class BacktestEngine:
             rebalance_days: Days between rebalancing.
             initial_capital: Starting cash.
             equal_weight: If True, allocate equally to each position.
-            min_score: Minimum raw factor score required before ranking.
+            min_score: Minimum raw factor score required before ranking. A
+                float gates every factor at the same threshold; a dict
+                ``{factor_name: threshold}`` gates only the named factors
+                (use this to gate a discrete factor such as ``tail_session``
+                without NaN-ing a continuous factor such as
+                ``overnight_momentum``).
         """
         self.bars = bars.sort_index()
         self.factors = factors

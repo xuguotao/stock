@@ -62,7 +62,11 @@ def evaluate_tail_session_grid(
             rebalance_days=1,
             initial_capital=initial_capital,
             equal_weight=True,
-            min_score=float(min_score) if min_score is not None else None,
+            min_score=(
+                {"tail_session": float(min_score)}
+                if min_score is not None
+                else None
+            ),
         )
         result = engine.run()
         row = dict(config)

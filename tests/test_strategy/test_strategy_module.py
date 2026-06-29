@@ -537,7 +537,7 @@ class TestBacktestEngine:
             top_n=2,
             rebalance_days=1,
             initial_capital=100_000,
-            min_score=0.1,
+            min_score={"constant": 0.1},
         )
 
         result = engine.run()
