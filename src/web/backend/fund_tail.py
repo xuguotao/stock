@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
@@ -152,6 +153,60 @@ def delete_fund_watchlist_item(repository, fund_code: str) -> dict[str, int]:
     """Delete a fund watchlist item."""
     code = FundWatchlistItemRequest.validate_fund_code(fund_code)
     return repository.delete_watchlist_item(code)
+
+
+def lookup_fund_metadata(fund_code: str) -> dict[str, Any]:
+    """Resolve all-market fund metadata for watchlist auto-fill."""
+    code = FundWatchlistItemRequest.validate_fund_code(fund_code)
+    if code in FUNDS:
+        name = FUNDS[code]
+        return {
+            "fund_code": code,
+            "fund_name": name,
+            "fund_type": _watchlist_fund_type_from_name(name, ""),
+            "source": "builtin",
+        }
+    rows = _fund_name_rows()
+    for row in rows:
+        if str(row.get("基金代码", "")).strip().zfill(6) != code:
+            continue
+        name = str(row.get("基金简称", "")).strip()
+        fund_kind = str(row.get("基金类型", "")).strip()
+        if not name:
+            break
+        return {
+            "fund_code": code,
+            "fund_name": name,
+            "fund_type": _watchlist_fund_type_from_name(name, fund_kind),
+            "fund_kind": fund_kind,
+            "source": "akshare_fund_name_em",
+        }
+    raise KeyError(f"fund metadata not found for {code}")
+
+
+@lru_cache(maxsize=1)
+def _fund_name_rows() -> tuple[dict[str, Any], ...]:
+    import akshare as ak
+
+    frame = ak.fund_name_em()
+    return tuple(frame.fillna("").to_dict(orient="records"))
+
+
+def _watchlist_fund_type_from_name(name: str, fund_kind: str) -> str:
+    text = f"{name} {fund_kind}"
+    if any(keyword in text for keyword in ("QDII", "纳斯达克", "纳指", "标普", "恒生", "港股", "海外")):
+        return "overseas"
+    if any(keyword in text for keyword in ("医疗", "医药", "生物", "保健")):
+        return "medical"
+    if any(keyword in text for keyword in ("消费", "食品", "饮料", "白酒")):
+        return "consumer"
+    if any(keyword in text for keyword in ("债", "货币", "现金")):
+        return "bond"
+    if any(keyword in text for keyword in ("沪深300", "中证500", "中证1000", "深证100", "创业板", "上证50", "科创50", "宽基")):
+        return "broad_index"
+    if any(keyword in text for keyword in ("新能源", "环保", "半导体", "芯片", "军工", "行业", "主题", "科技")):
+        return "sector"
+    return "other"
 
 
 def load_latest_fund_tail_report(

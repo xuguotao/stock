@@ -221,6 +221,26 @@ def test_fund_tail_watchlist_api_lists_and_updates_items(tmp_path) -> None:
     assert delete_response.json() == {"deleted": 1}
 
 
+def test_fund_tail_metadata_api_resolves_unknown_watchlist_code(tmp_path) -> None:
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        fund_tail_metadata_lookup_runner=lambda code: {
+            "fund_code": str(code).zfill(6),
+            "fund_name": "华夏国证半导体芯片ETF联接C",
+            "fund_type": "sector",
+            "fund_kind": "指数型-股票",
+            "source": "test",
+        },
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/fund-tail/funds/008888")
+
+    assert response.status_code == 200
+    assert response.json()["item"]["fund_code"] == "008888"
+    assert response.json()["item"]["fund_name"] == "华夏国证半导体芯片ETF联接C"
+
+
 def test_fund_tail_api_loads_latest_report(tmp_path) -> None:
     report_path = tmp_path / "fund_tail_backtest.csv"
     markdown_path = tmp_path / "latest.md"
@@ -474,6 +494,7 @@ def test_fund_tail_advice_uses_watchlist_when_codes_are_omitted(tmp_path) -> Non
         fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
         fund_tail_advice_dir=tmp_path / "fund_tail_advice",
         run_jobs_inline=True,
+        fund_tail_downloader=lambda *args: None,
         fund_tail_repository=repository,
     )
     client = TestClient(app)
@@ -642,7 +663,9 @@ def test_fund_tail_default_proxy_refresher_receives_proxy_specs(tmp_path, monkey
         fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
         fund_tail_advice_dir=tmp_path / "fund_tail_advice",
         run_jobs_inline=True,
+        fund_tail_downloader=lambda *args: None,
         fund_tail_repository=repository,
+        fund_tail_proxy_refresher=backend_app._default_fund_tail_proxy_refresher,
     )
     client = TestClient(app)
 

@@ -97,7 +97,9 @@ def test_fund_tail_watchlist_form_autofills_known_fund_metadata() -> None:
     assert '@blur="autofillWatchlistFormFromCode"' in source
     assert '@keyup.enter="autofillWatchlistFormFromCode"' in source
     assert "watchlistAutocompleteHint" in source
-    assert "function autofillWatchlistFormFromCode()" in source
+    assert "async function autofillWatchlistFormFromCode()" in source
+    assert "api.lookupFundTailMetadata" in source
+    assert "正在查询基金信息" in source
     assert "function fundMetadataForCode" in source
     assert "function inferFundTypeFromName" in source
 

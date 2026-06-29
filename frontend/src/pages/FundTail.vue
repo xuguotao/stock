@@ -375,7 +375,15 @@
           </el-col>
         </el-row>
         <el-alert
-          v-if="watchlistAutocompleteHint"
+          v-if="watchlistLookupLoading"
+          title="正在查询基金信息..."
+          type="info"
+          show-icon
+          :closable="false"
+          class="watchlist-position-hint"
+        />
+        <el-alert
+          v-else-if="watchlistAutocompleteHint"
           :title="watchlistAutocompleteHint"
           type="success"
           show-icon
@@ -500,6 +508,7 @@ const watchlistDialogVisible = ref(false)
 const watchlistEditingCode = ref('')
 const watchlistForm = ref<WatchlistForm>(emptyWatchlistForm())
 const watchlistAutocompleteHint = ref('')
+const watchlistLookupLoading = ref(false)
 const report = ref<FundTailReportResponse>({
   rows: [],
   markdown: '',
@@ -712,7 +721,7 @@ function openWatchlistDialog(item?: FundWatchlistItem) {
   watchlistDialogVisible.value = true
 }
 
-function autofillWatchlistFormFromCode() {
+async function autofillWatchlistFormFromCode() {
   if (watchlistEditingCode.value) return
   const code = normalizeFundCode(watchlistForm.value.fund_code)
   watchlistForm.value.fund_code = code
@@ -720,9 +729,12 @@ function autofillWatchlistFormFromCode() {
     watchlistAutocompleteHint.value = ''
     return
   }
-  const metadata = fundMetadataForCode(code)
+  let metadata = fundMetadataForCode(code)
   if (!metadata) {
-    watchlistAutocompleteHint.value = '本地基金池未识别该代码，请手动填写基金名称。'
+    metadata = await lookupFundMetadataFromApi(code)
+  }
+  if (!metadata) {
+    watchlistAutocompleteHint.value = '未识别该基金代码，请手动填写基金名称。'
     return
   }
   if (!watchlistForm.value.fund_name.trim()) {
@@ -738,6 +750,21 @@ function autofillWatchlistFormFromCode() {
     watchlistForm.value.priority = metadata.priority
   }
   watchlistAutocompleteHint.value = `已补全：${metadata.name}`
+}
+
+async function lookupFundMetadataFromApi(code: string): Promise<(Partial<FundWatchlistItem> & { name: string }) | null> {
+  watchlistLookupLoading.value = true
+  try {
+    const response = await api.lookupFundTailMetadata(code)
+    return {
+      name: response.item.fund_name,
+      fund_type: response.item.fund_type
+    }
+  } catch {
+    return null
+  } finally {
+    watchlistLookupLoading.value = false
+  }
 }
 
 function fundMetadataForCode(code: string): Partial<FundWatchlistItem> & { name: string } | null {
@@ -788,6 +815,9 @@ async function saveWatchlistItem() {
   if (!/^\d{6}$/.test(code)) {
     ElMessage.error('基金代码需为 6 位数字')
     return
+  }
+  if (!watchlistForm.value.fund_name.trim()) {
+    await autofillWatchlistFormFromCode()
   }
   if (!watchlistForm.value.fund_name.trim()) {
     ElMessage.error('基金名称不能为空')

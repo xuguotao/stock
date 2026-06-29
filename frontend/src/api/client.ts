@@ -571,6 +571,18 @@ export interface FundTailProxyRefreshResponse {
   universe: FundTailUniverseItem[]
 }
 
+export interface FundTailMetadataItem {
+  fund_code: string
+  fund_name: string
+  fund_type: FundWatchlistType
+  fund_kind?: string
+  source: string
+}
+
+export interface FundTailMetadataResponse {
+  item: FundTailMetadataItem
+}
+
 export interface FundTailReportResponse {
   rows: Record<string, string>[]
   markdown: string
@@ -1015,6 +1027,9 @@ export const api = {
   },
   listFundTailUniverse() {
     return request<FundTailUniverseResponse>('/api/fund-tail/universe')
+  },
+  lookupFundTailMetadata(code: string) {
+    return request<FundTailMetadataResponse>(`/api/fund-tail/funds/${code}`)
   },
   getFundTailReport() {
     return request<FundTailReportResponse>('/api/fund-tail/report')

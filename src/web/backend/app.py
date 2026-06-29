@@ -55,6 +55,7 @@ from src.web.backend.fund_tail import (
     list_fund_watchlist,
     load_latest_fund_tail_report,
     load_latest_fund_tail_opportunities,
+    lookup_fund_metadata,
     run_local_fund_tail_advice,
     run_local_fund_tail_opportunities,
     upsert_fund_watchlist_item,
@@ -169,6 +170,7 @@ def create_app(
     fund_tail_downloader: FundTailDownloader | None = None,
     fund_tail_proxy_refresher: FundTailProxyRefresher | None = None,
     fund_tail_opportunity_refresher: FundTailOpportunityRefresher | None = None,
+    fund_tail_metadata_lookup_runner=lookup_fund_metadata,
     stock_db_sync_runner=sync_stock_database,
     minute5_sync_runner=sync_clickhouse_minute5_kline,
     minute5_monitor_session_checker=None,
@@ -254,6 +256,7 @@ def create_app(
     app.state.tail_live_runner = tail_live_runner
     app.state.tail_replay_runner = tail_replay_runner
     app.state.fund_tail_downloader = fund_tail_downloader
+    app.state.fund_tail_metadata_lookup_runner = fund_tail_metadata_lookup_runner
     app.state.fund_tail_proxy_refresher = (
         fund_tail_proxy_refresher
         if fund_tail_proxy_refresher is not None
@@ -646,6 +649,17 @@ def create_app(
             return {"items": list_fund_watchlist(app.state.fund_tail_repository)}
         except Exception as exc:  # noqa: BLE001 - keep read-only page load from failing hard.
             return _fund_tail_degraded_response(exc, items=[])
+
+    @app.get("/api/fund-tail/funds/{fund_code}")
+    def get_fund_tail_metadata(fund_code: str) -> dict[str, Any]:
+        try:
+            return {"item": app.state.fund_tail_metadata_lookup_runner(fund_code)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=f"Fund metadata lookup failed: {exc}") from exc
 
     @app.post("/api/fund-tail/refresh-proxy")
     def refresh_fund_tail_proxy(payload: FundTailProxyRefreshRequest) -> dict[str, Any]:
