@@ -346,10 +346,30 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api, type TailSignalStatsResponse } from '../api/client'
 
+const CHINA_MARKET_HOLIDAYS = new Set([
+  '2026-01-01',
+  '2026-02-16',
+  '2026-02-17',
+  '2026-02-18',
+  '2026-02-19',
+  '2026-02-20',
+  '2026-04-06',
+  '2026-05-01',
+  '2026-05-04',
+  '2026-05-05',
+  '2026-06-19',
+  '2026-09-25',
+  '2026-10-01',
+  '2026-10-02',
+  '2026-10-05',
+  '2026-10-06',
+  '2026-10-07',
+])
+
 const loading = ref(false)
 const reviewingOutcomes = ref(false)
 const stats = ref<TailSignalStatsResponse | null>(null)
-const range = ref<[string, string] | null>(null)
+const range = ref<[string, string] | null>(defaultSignalReviewRange())
 
 async function loadStats() {
   loading.value = true
@@ -412,6 +432,33 @@ function formatStockLabel(row: { symbol?: string; stock_name?: string }) {
 function currentReturnClass(value?: number | null) {
   if (value == null || value === 0) return 'return-neutral'
   return value > 0 ? 'return-positive' : 'return-negative'
+}
+
+function defaultSignalReviewRange(): [string, string] {
+  const previous = previousTradingDayLabel(new Date())
+  return [previous, previous]
+}
+
+function previousTradingDayLabel(anchor: Date) {
+  const current = new Date(anchor)
+  current.setHours(0, 0, 0, 0)
+  current.setDate(current.getDate() - 1)
+  while (!isTradingDay(current)) {
+    current.setDate(current.getDate() - 1)
+  }
+  return formatDateLabel(current)
+}
+
+function isTradingDay(value: Date) {
+  const day = value.getDay()
+  return day !== 0 && day !== 6 && !CHINA_MARKET_HOLIDAYS.has(formatDateLabel(value))
+}
+
+function formatDateLabel(value: Date) {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function formatScore(value?: number | null) {

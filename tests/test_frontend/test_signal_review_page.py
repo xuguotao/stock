@@ -60,3 +60,13 @@ def test_signal_review_page_prioritizes_selected_stock_return_review() -> None:
     assert "次日收益" in source
     assert "最新时间" in source
     assert "stock_name?: string" in client
+
+
+def test_signal_review_page_defaults_range_to_previous_trading_day() -> None:
+    source = Path("frontend/src/pages/SignalReview.vue").read_text(encoding="utf-8")
+
+    assert "defaultSignalReviewRange" in source
+    assert "previousTradingDayLabel" in source
+    assert "isTradingDay" in source
+    assert "CHINA_MARKET_HOLIDAYS" in source
+    assert "const range = ref<[string, string] | null>(defaultSignalReviewRange())" in source
