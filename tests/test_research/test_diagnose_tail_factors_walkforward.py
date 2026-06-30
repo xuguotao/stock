@@ -1,3 +1,5 @@
+import math
+
 import pandas as pd
 import numpy as np
 
@@ -9,6 +11,7 @@ from scripts.diagnose_tail_factors_walkforward import (
     walk_forward_folds,
     diagnose_fold,
     walk_forward_stability,
+    autocorrelation_probe,
 )
 from scripts.diagnose_tail_factors import compute_overnight_forward_return
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
@@ -93,3 +96,36 @@ def test_walk_forward_stability_summarizes_across_folds():
     assert "icir_positive_fold_ratio" in result and "worst_fold_icir" in result
     assert 0.0 <= result["icir_positive_fold_ratio"] <= 1.0
     assert len(result["folds"]) == result["fold_count"]
+
+
+def test_autocorrelation_probe_returns_three_signals():
+    bars = _fake_bars_long()
+    result = autocorrelation_probe(bars, OvernightMomentumFactor(smoothing_window=1), horizons=[1, 2, 3])
+    assert result["factor"] == "overnight_momentum"
+    assert set(result["decay_icir_by_horizon"].keys()) == {1, 2, 3}
+    assert result["lagged_baseline_corr"] is not None
+    assert 0.0 <= result["turnover_proxy"] <= 1.0
+
+
+def test_lagged_baseline_uses_prior_day_overnight():
+    """滞后基线：因子替换成前一日隔夜，forward return 不变。"""
+    bars = _fake_bars_long(n_days=80)
+    result = autocorrelation_probe(bars, OvernightMomentumFactor(smoothing_window=1), horizons=[1])
+    # 应产出一个有限数值（即便数据噪声大，也不会 None）
+    assert result["lagged_baseline_corr"] is not None
+    assert math.isfinite(result["lagged_baseline_corr"])
+
+
+def test_lagged_baseline_is_autocorrelation_floor_not_self_correlation():
+    """滞后基线必须是"昨日隔夜预测今日隔夜"的 IC（自相关地板），而非 corr(因子, 因子)=1.0。
+
+    对 overnight_momentum（smoothing_window=1），factor==fr1.shift(1) 严格相等；
+    若实现误把"因子本身"当作滞后期与因子做相关（brief 草稿的 corr(fv, lagged_overnight)），
+    会得到退化的 1.0。正确实现用 compute_ic(lagged_overnight, fr1) 给出有意义的自相关地板
+    （对随机数据 ~0.01），远小于 1.0。
+    """
+    bars = _fake_bars_long()
+    result = autocorrelation_probe(bars, OvernightMomentumFactor(smoothing_window=1), horizons=[1])
+    assert result["lagged_baseline_corr"] is not None
+    # 退化自相关 corr(factor, factor)≈1.0 必须被拒绝；真实地板远低于 1.0。
+    assert abs(result["lagged_baseline_corr"] - 1.0) > 0.05

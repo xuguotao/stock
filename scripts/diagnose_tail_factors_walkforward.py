@@ -98,3 +98,89 @@ def walk_forward_stability(bars, factor, train_days=60, step_days=10, n_quantile
         "worst_fold_icir": float(min(icirs)) if icirs else None,
         "ic_positive_ratio_mean": float(pd.Series(ic_pos).mean()) if ic_pos else None,
     }
+
+
+def _overnight_forward_return_horizon(bars: pd.DataFrame, h: int) -> pd.DataFrame:
+    """h 日隔夜 forward return: open(t+h)/close(t) - 1。
+
+    沿用 compute_overnight_forward_return 的 stack 口径（open/close，非收盘-收盘），
+    仅把 shift(-1) 推广为 shift(-h)。衰减探针用此构造多日 horizon 的隔夜收益。
+    """
+    bars = bars.sort_index()
+    close = bars["close"].unstack(level="symbol")
+    open_ = bars["open"].unstack(level="symbol").shift(-h)
+    ret = open_ / close - 1.0
+    return (
+        ret.stack(future_stack=True)
+        .to_frame(name="return")
+        .rename_axis(["date", "symbol"])["return"]
+        .to_frame()
+    )
+
+
+def autocorrelation_probe(bars, factor, horizons=(1, 2, 3, 5)) -> dict:
+    """自相关三项：多日衰减 ICIR + 滞后基线 + 换手率代理。
+
+    区分"隔夜 ICIR 0.36 是真实 edge"与"机械自相关"。overnight_momentum = 滞后隔夜，
+    forward return = 次日隔夜；若隔夜序列自相关，IC 看似高但并非可交易 edge。
+
+    1) 衰减：各 horizon 的隔夜 forward（open(t+h)/close(t)-1）对因子算 ICIR。
+       真 edge 缓慢衰减；自相关 1 日强后快速塌。
+    2) 滞后基线：因子替换成"前一日隔夜收益"（按 symbol shift(1)），forward return 不变，
+       算 IC —— 即 trivial 因子（昨日隔夜预测今日隔夜）的 IC，是"自相关地板"。
+    3) 换手率代理：因子逐日横截面排名变动比例。自相关信号换手率极低。
+    """
+    fr1 = compute_overnight_forward_return(bars)  # horizon=1
+    fv = factor.compute(bars)
+
+    # 1) 衰减：各 horizon 的 ICIR（隔夜 open/close 口径，非 ICAnalyzer.compute_forward_returns 收盘-收盘）
+    decay = {}
+    for h in horizons:
+        fr_h = _overnight_forward_return_horizon(bars, h)
+        ic = ICAnalyzer(forward_period=h)
+        ic_series = ic.compute_ic(fv, fr_h)
+        rank_ic = ic.compute_rank_ic(fv, fr_h)
+        summary = ic.ic_summary(ic_series, rank_ic)
+        decay[h] = summary.icir
+
+    # 2) 滞后基线：因子替换成"前一日隔夜收益"（按 symbol shift），forward return 不变（1 日）。
+    #    按 symbol shift（groupby(level="symbol").shift(1)）避免跨 symbol 边界串味；
+    #    列名 "lagged_factor" 避开与 forward return 列 "return" 在 compute_ic join 时的碰撞。
+    lagged_factor = (
+        fr1.groupby(level="symbol")["return"].shift(1).to_frame(name="lagged_factor")
+    )
+    ic_base = ICAnalyzer(forward_period=1)
+    base_ic = ic_base.compute_ic(lagged_factor, fr1).dropna()
+    lagged_baseline_corr = float(base_ic.mean()) if len(base_ic) > 0 else None
+
+    # 3) 换手率代理：因子逐日横截面排名变动比例 = rank(t)!=rank(t-1) 的 symbol 占比均值。
+    #    droplevel("date")：groupby(level="date") 后各组仍带 (date,symbol) 全 MultiIndex，
+    #      不丢 date 则相邻日 grp.index.intersection(prev.index) 比较 (date,symbol) 全元组、
+    #      交集恒为空 → turnover 恒 None。必须 droplevel 让 index 退化为 symbol。
+    #    NaN 守卫：仅比较 prev/cur 均非 NaN 的 symbol，避免 NaN!=NaN（pandas 下为 True）虚增换手。
+    ranks = fv.groupby(level="date").rank(pct=True)
+    rank_series = ranks.iloc[:, 0]
+    by_date = rank_series.groupby(level="date")
+    turnover_days = []
+    prev = None
+    for _d, grp in by_date:
+        cur = grp.droplevel("date")
+        if prev is not None:
+            common = cur.index.intersection(prev.index)
+            if len(common) > 0:
+                c = cur.loc[common]
+                p = prev.loc[common]
+                valid = ~(c.isna() | p.isna())
+                n_valid = int(valid.sum())
+                if n_valid > 0:
+                    changed = int((c[valid] != p[valid]).sum())
+                    turnover_days.append(float(changed) / n_valid)
+        prev = cur
+    turnover_proxy = float(pd.Series(turnover_days).mean()) if turnover_days else None
+
+    return {
+        "factor": factor.name,
+        "decay_icir_by_horizon": {int(h): v for h, v in decay.items()},
+        "lagged_baseline_corr": lagged_baseline_corr,
+        "turnover_proxy": turnover_proxy,
+    }
