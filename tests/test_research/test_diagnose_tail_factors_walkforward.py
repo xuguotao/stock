@@ -5,7 +5,11 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.diagnose_tail_factors_walkforward import walk_forward_folds, diagnose_fold
+from scripts.diagnose_tail_factors_walkforward import (
+    walk_forward_folds,
+    diagnose_fold,
+    walk_forward_stability,
+)
 from scripts.diagnose_tail_factors import compute_overnight_forward_return
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
 
@@ -76,3 +80,16 @@ def test_diagnose_fold_subsets_by_fold_dates():
         f"small(20d) 与 large(60d) 子集 ic_mean 相同 ({ic_small} == {ic_large})，"
         "fold_dates 子集未被应用"
     )
+
+
+def test_walk_forward_stability_summarizes_across_folds():
+    bars = _fake_bars_long()
+    result = walk_forward_stability(
+        bars, OvernightMomentumFactor(smoothing_window=1), train_days=60, step_days=10, n_quantiles=3
+    )
+    assert result["factor"] == "overnight_momentum"
+    assert result["fold_count"] > 0
+    assert "icir_mean" in result and "icir_std" in result
+    assert "icir_positive_fold_ratio" in result and "worst_fold_icir" in result
+    assert 0.0 <= result["icir_positive_fold_ratio"] <= 1.0
+    assert len(result["folds"]) == result["fold_count"]

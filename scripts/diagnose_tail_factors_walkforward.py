@@ -64,3 +64,37 @@ def diagnose_fold(fv: pd.DataFrame, fr: pd.DataFrame, fold_dates, factor, n_quan
         "quantile": qresult.summary,
         "quantile_returns_by_q": {q: float(v) for q, v in qresult.quantile_returns.mean().items()},
     }
+
+
+def walk_forward_stability(bars, factor, train_days=60, step_days=10, n_quantiles=5) -> dict:
+    """滚动窗逐折算 IC，汇总跨折稳定性。"""
+    fr = compute_overnight_forward_return(bars)
+    fv = factor.compute(bars)
+    dates = bars.index.get_level_values("date").unique().sort_values()
+    folds = walk_forward_folds(bars, train_days=train_days, step_days=step_days)
+
+    fold_results = []
+    for train_start, train_end in folds:
+        mask = (dates >= train_start) & (dates <= train_end)
+        fold_dates = dates[mask]
+        if len(fold_dates) < n_quantiles + 1:
+            continue
+        fold_results.append(diagnose_fold(fv, fr, fold_dates, factor, n_quantiles=n_quantiles))
+
+    if not fold_results:
+        return {"factor": factor.name, "fold_count": 0, "folds": [], "icir_mean": None,
+                "icir_std": None, "icir_positive_fold_ratio": None, "worst_fold_icir": None,
+                "ic_positive_ratio_mean": None}
+
+    icirs = [f["ic"]["icir"] for f in fold_results if f["ic"]["icir"] is not None]
+    ic_pos = [f["ic"]["ic_positive_ratio"] for f in fold_results if f["ic"]["ic_positive_ratio"] is not None]
+    return {
+        "factor": factor.name,
+        "fold_count": len(fold_results),
+        "folds": fold_results,
+        "icir_mean": float(pd.Series(icirs).mean()) if icirs else None,
+        "icir_std": float(pd.Series(icirs).std()) if icirs else None,
+        "icir_positive_fold_ratio": float(sum(1 for x in icirs if x > 0) / len(icirs)) if icirs else None,
+        "worst_fold_icir": float(min(icirs)) if icirs else None,
+        "ic_positive_ratio_mean": float(pd.Series(ic_pos).mean()) if ic_pos else None,
+    }
