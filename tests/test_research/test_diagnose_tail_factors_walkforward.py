@@ -211,8 +211,40 @@ def test_main_writes_strict_valid_json(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv", ["x", "--offline-cache", "--out", str(out), "--train-days", "60", "--step-days", "20"])
     mod.main()
     import json as _json
-    payload = _json.loads(out.read_text())  # strict parse
+    # 真严格：默认 json.loads 接受 NaN/Infinity token，parse_constant 让其抛 ValueError，
+    # 从而真正校验输出不含非标准 JSON 常量。
+    payload = _json.loads(
+        out.read_text(),
+        parse_constant=lambda x: (_ for _ in ()).throw(ValueError(x)),
+    )
     assert "factors" in payload
+
+
+def test_net_edge_survives_degenerate_factor():
+    """回归：quantile_returns 为 0 列时 net_edge 不得崩。
+
+    与 QuantileAnalyzer 的 0 列守卫同源：每日期因子值恒定 → pd.qcut(duplicates="drop")
+    全 NaN → qr 0 列 → QuantileAnalyzer 返回退化结果（spread=0.0、0 列 DataFrame）。
+    原 net_edge 的 top_col = qr.columns[-1] 在此抛 IndexError。本断言退化输入下
+    net_edge 不崩、gross_top=0.0，且 gross_spread 走 qresult.spread 不受影响。
+    """
+    bars = _fake_bars_long()
+
+    class _ConstPerDateFactor:
+        name = "const_per_date"
+
+        def compute(self, bars):
+            # 每日期恒定 0.5：有区分度退化但 index 与 bars 对齐。
+            return pd.DataFrame({"f": 0.5}, index=bars.index)
+
+    res = net_edge(bars, _ConstPerDateFactor(), n_quantiles=5)
+    assert res["factor"] == "const_per_date"
+    assert res["gross_top_quantile_return"] == 0.0
+    # gross_spread 走 qresult.spread（0 列时为 0.0），守卫仅作用于 gross_top。
+    assert res["gross_spread"] == 0.0
+    # 净额亦为中性：做多口径 = 0 − 买入成本率（负），多空口径 = 0 − 往返成本率（负）。
+    assert res["net_long_only"] < 0.0
+    assert res["net_long_short"] < 0.0
 
 
 def test_quantile_analyzer_survives_constant_factor_per_date():
