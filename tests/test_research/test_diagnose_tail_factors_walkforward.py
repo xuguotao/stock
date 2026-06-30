@@ -1,0 +1,278 @@
+import math
+
+import pandas as pd
+import numpy as np
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.diagnose_tail_factors_walkforward import (
+    walk_forward_folds,
+    diagnose_fold,
+    walk_forward_stability,
+    autocorrelation_probe,
+    net_edge,
+    run_walkforward,
+)
+from scripts.diagnose_tail_factors import compute_overnight_forward_return
+from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
+
+
+def _fake_bars_long(n_days=120, n_symbols=8):
+    """n_days 交易日 × n_symbols，够分 60/10 出多折。"""
+    dates = pd.bdate_range("2025-01-01", periods=n_days)
+    syms = [f"00000{i}.SZ" for i in range(n_symbols)]
+    idx = pd.MultiIndex.from_product([dates, syms], names=["date", "symbol"])
+    rng = np.random.default_rng(42)
+    rows = len(idx)
+    df = pd.DataFrame({
+        "open": 10 + rng.normal(0, 0.5, rows),
+        "close": 10 + rng.normal(0, 0.5, rows),
+        "high": 11 + rng.normal(0, 0.5, rows),
+        "low": 9 + rng.normal(0, 0.5, rows),
+        "volume": 1000 + rng.integers(0, 500, rows),
+        "amount": 1e6 + rng.integers(0, 500000, rows),
+    }, index=idx)
+    return df
+
+
+def test_walk_forward_folds_are_rolling_fixed_windows():
+    """rolling 固定窗:每折 60 天、步进 10。120 交易日 → 7 折。"""
+    bars = _fake_bars_long()
+    folds = walk_forward_folds(bars, train_days=60, step_days=10)
+    # 120 交易日: i*10+60<=120 → i<=6 → i=0..6 → 7 折
+    assert len(folds) == 7
+    dates = bars.index.get_level_values("date").unique().sort_values()
+    # 每折训练窗长度=60,且相邻折起点后移
+    for i, (start, end) in enumerate(folds):
+        fold_dates = dates[(dates >= start) & (dates <= end)]
+        assert len(fold_dates) == 60, f"fold {i} has {len(fold_dates)} days, expected 60"
+        if i > 0:
+            assert start > folds[i - 1][0]  # 起点后移
+
+
+def test_diagnose_fold_subsets_by_fold_dates():
+    """fold_dates 必须真正限制 IC/分层的计算日期子集。
+
+    若 diagnose_fold 内部的 .isin(date_set) 过滤变成 no-op（在全部 120 日上算 IC），
+    仅靠键存在性断言无法发现。这里用两个不同大小的子集分别调用 diagnose_fold，
+    断言其 IC 不同，从而证明 fold_dates 子集被真正应用。当 .isin() 失效时两次调用
+    会在相同的全量数据上聚合，ic_mean 必然相等，断言失败。
+    """
+    bars = _fake_bars_long()
+    fr = compute_overnight_forward_return(bars)
+    fv = OvernightMomentumFactor(smoothing_window=1).compute(bars)
+    dates = bars.index.get_level_values("date").unique().sort_values()
+
+    # 小子集（前 20 交易日）vs 大子集（前 60 交易日）。8 symbols/日，远超
+    # ICAnalyzer 的 ≥3 obs/日 与 QuantileAnalyzer 的 ≥n_quantiles 要求。
+    factor = OvernightMomentumFactor(smoothing_window=1)
+    result_small = diagnose_fold(fv, fr, dates[0:20], factor, n_quantiles=3)
+    result_large = diagnose_fold(fv, fr, dates[0:60], factor, n_quantiles=3)
+
+    # 键存在性仍成立。
+    assert result_large["factor"] == "overnight_momentum"
+    assert "ic_mean" in result_large["ic"] and "icir" in result_large["ic"]
+    assert "spread_return" in result_large["quantile"]
+
+    # 子集必须生效：不同 fold_dates → 不同 IC。若 .isin() 过滤为 no-op，两次调用都在
+    # 全部 120 日上聚合，两个 ic_mean 必然相等 → 断言失败。1e-6 容差远低于实际差异
+    # （约 0.006），又远高于浮点噪声，确保对退化全量相等情形依然失败。
+    ic_small = result_small["ic"]["ic_mean"]
+    ic_large = result_large["ic"]["ic_mean"]
+    assert abs(ic_small - ic_large) > 1e-6, (
+        f"small(20d) 与 large(60d) 子集 ic_mean 相同 ({ic_small} == {ic_large})，"
+        "fold_dates 子集未被应用"
+    )
+
+
+def test_walk_forward_stability_summarizes_across_folds():
+    bars = _fake_bars_long()
+    result = walk_forward_stability(
+        bars, OvernightMomentumFactor(smoothing_window=1), train_days=60, step_days=10, n_quantiles=3
+    )
+    assert result["factor"] == "overnight_momentum"
+    assert result["fold_count"] > 0
+    assert "icir_mean" in result and "icir_std" in result
+    assert "icir_positive_fold_ratio" in result and "worst_fold_icir" in result
+    assert 0.0 <= result["icir_positive_fold_ratio"] <= 1.0
+    assert len(result["folds"]) == result["fold_count"]
+
+
+def test_autocorrelation_probe_returns_three_signals():
+    bars = _fake_bars_long()
+    result = autocorrelation_probe(bars, OvernightMomentumFactor(smoothing_window=1), horizons=[1, 2, 3])
+    assert result["factor"] == "overnight_momentum"
+    assert set(result["decay_icir_by_horizon"].keys()) == {1, 2, 3}
+    # decay_ic_mean_by_horizon 与 decay_icir_by_horizon 同 horizon 集合（Task 3 review 的 Important：
+    # 让 factor mean IC@h1 与 lagged_baseline_corr 同单位可直比）。每个值是有界实数。
+    assert set(result["decay_ic_mean_by_horizon"].keys()) == {1, 2, 3}
+    for h in (1, 2, 3):
+        assert isinstance(result["decay_ic_mean_by_horizon"][h], float)
+    assert result["lagged_baseline_corr"] is not None
+    assert 0.0 <= result["turnover_proxy"] <= 1.0
+
+
+def test_lagged_baseline_uses_prior_day_overnight():
+    """滞后基线：因子替换成前一日隔夜，forward return 不变。"""
+    bars = _fake_bars_long(n_days=80)
+    result = autocorrelation_probe(bars, OvernightMomentumFactor(smoothing_window=1), horizons=[1])
+    # 应产出一个有限数值（即便数据噪声大，也不会 None）
+    assert result["lagged_baseline_corr"] is not None
+    assert math.isfinite(result["lagged_baseline_corr"])
+
+
+def test_lagged_baseline_is_autocorrelation_floor_not_self_correlation():
+    """滞后基线必须是"昨日隔夜预测今日隔夜"的 IC（自相关地板），而非 corr(因子, 因子)=1.0。
+
+    对 overnight_momentum（smoothing_window=1），factor==fr1.shift(1) 严格相等；
+    若实现误把"因子本身"当作滞后期与因子做相关（brief 草稿的 corr(fv, lagged_overnight)），
+    会得到退化的 1.0。正确实现用 compute_ic(lagged_overnight, fr1) 给出有意义的自相关地板
+    （对随机数据 ~0.01），远小于 1.0。
+    """
+    bars = _fake_bars_long()
+    result = autocorrelation_probe(bars, OvernightMomentumFactor(smoothing_window=1), horizons=[1])
+    assert result["lagged_baseline_corr"] is not None
+    # 退化自相关 corr(factor, factor)≈1.0 必须被拒绝；真实地板远低于 1.0。
+    assert abs(result["lagged_baseline_corr"] - 1.0) > 0.05
+
+
+def test_net_edge_subtracts_real_costs_both_calibers():
+    bars = _fake_bars_long()
+    result = net_edge(bars, OvernightMomentumFactor(smoothing_window=1), trade_capital=100000, top_n=5, n_quantiles=3)
+    assert result["factor"] == "overnight_momentum"
+
+    # 卖出端独立交叉校验：cost_*_rate 必须与 FeeCalculator 独立重算一致，
+    # 且 roundtrip = buy + sell（若 net_edge 漏算 sell 端则 roundtrip != buy+sell）。
+    from src.core.broker_base import FeeCalculator
+    fees = FeeCalculator.from_settings()
+    amount = 100000 / 5  # 20000/笔，恰处 min_commission 拐点（20000*0.00025=5.0）
+    buy_rate = fees.calc_commission(amount, "buy") / amount
+    sell_rate = fees.calc_commission(amount, "sell") / amount
+    assert abs(result["cost_buy_rate"] - buy_rate) < 1e-9
+    assert abs(result["cost_sell_rate"] - sell_rate) < 1e-9
+    assert abs(result["cost_roundtrip_rate"] - (buy_rate + sell_rate)) < 1e-9
+
+    # sell = buy + 印花税（仅 sell 收），严格大于。若 FeeCalculator 漏印花税则 sell==buy → 失败。
+    # （原断言 roundtrip > buy 近恒真，sell_rate>0 即成立，抓不到漏印花税。）
+    assert result["cost_sell_rate"] > result["cost_buy_rate"]
+    assert result["cost_buy_rate"] > 0
+
+    # 净 edge = 毛 - 成本
+    assert abs(result["net_long_only"] - (result["gross_top_quantile_return"] - result["cost_buy_rate"])) < 1e-9
+    assert abs(result["net_long_short"] - (result["gross_spread"] - result["cost_roundtrip_rate"])) < 1e-9
+
+
+def test_cost_rate_from_fee_calculator_matches_settings():
+    """成本率来源 FeeCalculator.from_settings()，非手写魔数，且与金额相关。
+
+    min_commission=5 下限使金额 ≥ 5/0.00025=20000 时佣金部分 max(amount*0.00025, 5)
+    退化为与金额无关的常数 0.0003087（= commission_rate + 过户 0.00001 + 证管 0.0000487）。
+    在此金额下，即便 net_edge 把 cost_buy_rate 硬编码为该常数、或把 amount 误算成
+    trade_capital/n_quantiles，rate 仍不变，断言照过——无法证明"非硬编码"。
+
+    故额外用一个 floor 之下的金额（trade_capital=10000, top_n=5 → 2000/笔）交叉校验：
+    floor 之下 cost_buy_rate = 5/amount + 0.0000587 与金额相关，两个不同金额给出两个
+    不同的 rate（20000→0.0003087，2000→0.0025587），硬编码常量无法同时匹配。
+    """
+    from src.core.broker_base import FeeCalculator
+    fees = FeeCalculator.from_settings()
+    bars = _fake_bars_long()
+    factor = OvernightMomentumFactor(smoothing_window=1)
+
+    for trade_capital, top_n in [(100000, 5), (10000, 5)]:
+        amount = trade_capital / top_n
+        result = net_edge(bars, factor, trade_capital=trade_capital, top_n=top_n, n_quantiles=3)
+        # amount 必须按 trade_capital/top_n 计算（非 n_quantiles），直接抓 top_n/n_quantiles 混淆。
+        assert result["trade_amount_per_leg"] == amount
+        # 独立重算并断言等值：硬编码常量无法同时匹配两个不同 rate。
+        buy_rate = fees.calc_commission(amount, "buy") / amount
+        assert abs(result["cost_buy_rate"] - buy_rate) < 1e-9, (
+            f"amount={amount}: cost_buy_rate {result['cost_buy_rate']} != {buy_rate}"
+        )
+
+
+def test_run_walkforward_combines_stability_autocorr_edge():
+    bars = _fake_bars_long()
+    result = run_walkforward(bars, train_days=60, step_days=10, horizons=[1, 2], trade_capital=100000, top_n=5, n_quantiles=3)
+    assert set(r["factor"] for r in result["factors"]) == {"tail_session", "overnight_momentum"}
+    for f in result["factors"]:
+        assert "walk_forward" in f and "autocorrelation" in f and "net_edge" in f
+        assert f["walk_forward"]["fold_count"] > 0
+
+
+def test_main_writes_strict_valid_json(tmp_path, monkeypatch):
+    bars = _fake_bars_long()
+    out = tmp_path / "wf.json"
+    # 桩 _load_bars 返回 fake bars，避免读 cache/网络
+    import scripts.diagnose_tail_factors_walkforward as mod
+    monkeypatch.setattr(mod, "_load_bars", lambda args: bars, raising=False)
+    monkeypatch.setattr("sys.argv", ["x", "--offline-cache", "--out", str(out), "--train-days", "60", "--step-days", "20"])
+    mod.main()
+    import json as _json
+    # 真严格：默认 json.loads 接受 NaN/Infinity token，parse_constant 让其抛 ValueError，
+    # 从而真正校验输出不含非标准 JSON 常量。
+    payload = _json.loads(
+        out.read_text(),
+        parse_constant=lambda x: (_ for _ in ()).throw(ValueError(x)),
+    )
+    assert "factors" in payload
+
+
+def test_net_edge_survives_degenerate_factor():
+    """回归：quantile_returns 为 0 列时 net_edge 不得崩。
+
+    与 QuantileAnalyzer 的 0 列守卫同源：每日期因子值恒定 → pd.qcut(duplicates="drop")
+    全 NaN → qr 0 列 → QuantileAnalyzer 返回退化结果（spread=0.0、0 列 DataFrame）。
+    原 net_edge 的 top_col = qr.columns[-1] 在此抛 IndexError。本断言退化输入下
+    net_edge 不崩、gross_top=0.0，且 gross_spread 走 qresult.spread 不受影响。
+    """
+    bars = _fake_bars_long()
+
+    class _ConstPerDateFactor:
+        name = "const_per_date"
+
+        def compute(self, bars):
+            # 每日期恒定 0.5：有区分度退化但 index 与 bars 对齐。
+            return pd.DataFrame({"f": 0.5}, index=bars.index)
+
+    res = net_edge(bars, _ConstPerDateFactor(), n_quantiles=5)
+    assert res["factor"] == "const_per_date"
+    assert res["gross_top_quantile_return"] == 0.0
+    # gross_spread 走 qresult.spread（0 列时为 0.0），守卫仅作用于 gross_top。
+    assert res["gross_spread"] == 0.0
+    # 净额亦为中性：做多口径 = 0 − 买入成本率（负），多空口径 = 0 − 往返成本率（负）。
+    assert res["net_long_only"] < 0.0
+    assert res["net_long_short"] < 0.0
+
+
+def test_quantile_analyzer_survives_constant_factor_per_date():
+    """回归：每日期因子值恒定时 QuantileAnalyzer.analyze 不得崩溃。
+
+    根因：pd.qcut(..., duplicates="drop") 对每日期恒定的因子值返回全 NaN（不抛
+    ValueError），使每个 q_ret 为空、qr 最终 0 列，原代码 qr.iloc[:, -1] 抛
+    IndexError。此场景由真实 cache 上的 TailSessionFactor（窄 20 日窗、每日期因子值
+    退化）触发——Task 1-4 的合成 OvernightMomentumFactor 测试从未覆盖。
+
+    修复：qr.shape[1]==0 时返回退化 QuantileResult（spread=0.0），与空列表早退出口径
+    一致。本断言退化输入不崩、给出中性结果，且正常输入仍出非零 spread（守卫不影响
+    正常路径）。
+    """
+    from src.research.factor_analysis.quantile import QuantileAnalyzer
+
+    # 退化输入：每日期因子值恒定（全 0.5），forward return 有变化但因子无区分度。
+    dates = pd.bdate_range("2025-01-01", periods=10)
+    syms = [f"00000{i}.SZ" for i in range(8)]
+    idx = pd.MultiIndex.from_product([dates, syms], names=["date", "symbol"])
+    fv_deg = pd.DataFrame({"f": 0.5}, index=idx)
+    rng = np.random.default_rng(1)
+    fr_deg = pd.DataFrame({"return": rng.normal(0, 0.01, len(idx))}, index=idx)
+    res_deg = QuantileAnalyzer(n_quantiles=5).analyze(fv_deg, fr_deg)
+    assert res_deg.spread == 0.0
+    assert res_deg.quantile_returns.shape[1] == 0  # 退化结果，无分位列
+
+    # 正常输入仍出非零 spread（守卫不影响正常路径）。
+    fv_ok = pd.DataFrame({"f": rng.normal(0, 1, len(idx))}, index=idx)
+    res_ok = QuantileAnalyzer(n_quantiles=5).analyze(fv_ok, fr_deg)
+    assert res_ok.quantile_returns.shape[1] > 0
