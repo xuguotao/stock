@@ -96,6 +96,17 @@ class QuantileAnalyzer:
             )
 
         qr = pd.DataFrame(quantile_returns)
+        # Symmetric guard: per-date qcut can return all-NaN (e.g. constant factor
+        # values per date with duplicates="drop"), leaving every q_ret empty and
+        # qr with 0 columns. Return the degenerate result rather than crashing on
+        # qr.iloc[:, -1] / .corr — same outcome as the empty-list early-exit above.
+        if qr.shape[1] == 0:
+            return QuantileResult(
+                quantile_returns=pd.DataFrame(),
+                cumulative_returns=pd.DataFrame(),
+                spread=0.0,
+                monotonicity=0.0,
+            )
         qr.columns = [f"Q{i+1}" for i in range(len(qr.columns))]
 
         # Cumulative returns

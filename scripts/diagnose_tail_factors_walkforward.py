@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.diagnose_tail_factors import (
     compute_overnight_forward_return,
+    _load_bars,
     _sanitize_for_json,
 )
 from src.core.broker_base import FeeCalculator
@@ -134,15 +135,19 @@ def autocorrelation_probe(bars, factor, horizons=(1, 2, 3, 5)) -> dict:
     fr1 = compute_overnight_forward_return(bars)  # horizon=1
     fv = factor.compute(bars)
 
-    # 1) 衰减：各 horizon 的 ICIR（隔夜 open/close 口径，非 ICAnalyzer.compute_forward_returns 收盘-收盘）
-    decay = {}
+    # 1) 衰减：各 horizon 的 ICIR + mean IC（隔夜 open/close 口径，非 ICAnalyzer.compute_forward_returns 收盘-收盘）。
+    #    decay_ic_mean_by_horizon 与 lagged_baseline_corr 同为 mean IC（ICIR 是 mean/std，单位不同不可直比），
+    #    让 Task 6 能像对像对比：factor mean IC@h1 ≈ lagged_baseline_corr → 自相关；≫ 则真 edge。
+    decay_icir = {}
+    decay_ic_mean = {}
     for h in horizons:
         fr_h = _overnight_forward_return_horizon(bars, h)
         ic = ICAnalyzer(forward_period=h)
         ic_series = ic.compute_ic(fv, fr_h)
         rank_ic = ic.compute_rank_ic(fv, fr_h)
         summary = ic.ic_summary(ic_series, rank_ic)
-        decay[h] = summary.icir
+        decay_icir[h] = summary.icir
+        decay_ic_mean[h] = summary.ic_mean
 
     # 2) 滞后基线：因子替换成"前一日隔夜收益"（按 symbol shift），forward return 不变（1 日）。
     #    按 symbol shift（groupby(level="symbol").shift(1)）避免跨 symbol 边界串味；
@@ -181,7 +186,8 @@ def autocorrelation_probe(bars, factor, horizons=(1, 2, 3, 5)) -> dict:
 
     return {
         "factor": factor.name,
-        "decay_icir_by_horizon": {int(h): v for h, v in decay.items()},
+        "decay_icir_by_horizon": {int(h): v for h, v in decay_icir.items()},
+        "decay_ic_mean_by_horizon": {int(h): v for h, v in decay_ic_mean.items()},
         "lagged_baseline_corr": lagged_baseline_corr,
         "turnover_proxy": turnover_proxy,
     }
@@ -229,3 +235,55 @@ def net_edge(bars, factor, trade_capital=100000, top_n=5, n_quantiles=5) -> dict
         "net_long_only": float(gross_top - cost_buy_rate),        # 口径 A
         "net_long_short": float(gross_spread - cost_roundtrip_rate),  # 口径 B
     }
+
+
+def run_walkforward(bars, train_days=60, step_days=10, horizons=(1, 2, 3, 5), trade_capital=100000, top_n=5, n_quantiles=5) -> dict:
+    factors = [
+        TailSessionFactor(breakout_window=20, trend_window=5, volume_ratio_threshold=1.2),
+        OvernightMomentumFactor(smoothing_window=1),
+    ]
+    out_factors = []
+    for f in factors:
+        out_factors.append({
+            "factor": f.name,
+            "walk_forward": walk_forward_stability(bars, f, train_days, step_days, n_quantiles),
+            "autocorrelation": autocorrelation_probe(bars, f, horizons=horizons),
+            "net_edge": net_edge(bars, f, trade_capital=trade_capital, top_n=top_n, n_quantiles=n_quantiles),
+        })
+    return {
+        "forward_return": "overnight_open/close-1",
+        "window": {"train_days": train_days, "step_days": step_days, "horizons": list(horizons)},
+        "factors": out_factors,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Walk-forward IC validation for tail factors.")
+    parser.add_argument("--bars-dataset")
+    parser.add_argument("--offline-cache", action="store_true")
+    parser.add_argument("--bars-cache-dir", default="data/cache/bars")
+    parser.add_argument("--start", default="2025-01-01")
+    parser.add_argument("--end", default="2026-06-01")
+    parser.add_argument("--train-days", type=int, default=60)
+    parser.add_argument("--step-days", type=int, default=10)
+    parser.add_argument("--n-quantiles", type=int, default=5)
+    parser.add_argument("--top-n", type=int, default=5)
+    parser.add_argument("--trade-capital", type=float, default=100000)
+    parser.add_argument("--horizons", type=int, nargs="+", default=[1, 2, 3, 5])
+    parser.add_argument("--out", default="reports/tail_session/factor_diagnosis_walkforward.json")
+    args = parser.parse_args()
+
+    bars = _load_bars(args)
+    result = run_walkforward(
+        bars, train_days=args.train_days, step_days=args.step_days,
+        horizons=tuple(args.horizons), trade_capital=args.trade_capital,
+        top_n=args.top_n, n_quantiles=args.n_quantiles,
+    )
+    result = _sanitize_for_json(result)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

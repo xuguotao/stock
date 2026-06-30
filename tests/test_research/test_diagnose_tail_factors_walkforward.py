@@ -13,6 +13,7 @@ from scripts.diagnose_tail_factors_walkforward import (
     walk_forward_stability,
     autocorrelation_probe,
     net_edge,
+    run_walkforward,
 )
 from scripts.diagnose_tail_factors import compute_overnight_forward_return
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
@@ -104,6 +105,11 @@ def test_autocorrelation_probe_returns_three_signals():
     result = autocorrelation_probe(bars, OvernightMomentumFactor(smoothing_window=1), horizons=[1, 2, 3])
     assert result["factor"] == "overnight_momentum"
     assert set(result["decay_icir_by_horizon"].keys()) == {1, 2, 3}
+    # decay_ic_mean_by_horizon 与 decay_icir_by_horizon 同 horizon 集合（Task 3 review 的 Important：
+    # 让 factor mean IC@h1 与 lagged_baseline_corr 同单位可直比）。每个值是有界实数。
+    assert set(result["decay_ic_mean_by_horizon"].keys()) == {1, 2, 3}
+    for h in (1, 2, 3):
+        assert isinstance(result["decay_ic_mean_by_horizon"][h], float)
     assert result["lagged_baseline_corr"] is not None
     assert 0.0 <= result["turnover_proxy"] <= 1.0
 
@@ -185,3 +191,56 @@ def test_cost_rate_from_fee_calculator_matches_settings():
         assert abs(result["cost_buy_rate"] - buy_rate) < 1e-9, (
             f"amount={amount}: cost_buy_rate {result['cost_buy_rate']} != {buy_rate}"
         )
+
+
+def test_run_walkforward_combines_stability_autocorr_edge():
+    bars = _fake_bars_long()
+    result = run_walkforward(bars, train_days=60, step_days=10, horizons=[1, 2], trade_capital=100000, top_n=5, n_quantiles=3)
+    assert set(r["factor"] for r in result["factors"]) == {"tail_session", "overnight_momentum"}
+    for f in result["factors"]:
+        assert "walk_forward" in f and "autocorrelation" in f and "net_edge" in f
+        assert f["walk_forward"]["fold_count"] > 0
+
+
+def test_main_writes_strict_valid_json(tmp_path, monkeypatch):
+    bars = _fake_bars_long()
+    out = tmp_path / "wf.json"
+    # 桩 _load_bars 返回 fake bars，避免读 cache/网络
+    import scripts.diagnose_tail_factors_walkforward as mod
+    monkeypatch.setattr(mod, "_load_bars", lambda args: bars, raising=False)
+    monkeypatch.setattr("sys.argv", ["x", "--offline-cache", "--out", str(out), "--train-days", "60", "--step-days", "20"])
+    mod.main()
+    import json as _json
+    payload = _json.loads(out.read_text())  # strict parse
+    assert "factors" in payload
+
+
+def test_quantile_analyzer_survives_constant_factor_per_date():
+    """回归：每日期因子值恒定时 QuantileAnalyzer.analyze 不得崩溃。
+
+    根因：pd.qcut(..., duplicates="drop") 对每日期恒定的因子值返回全 NaN（不抛
+    ValueError），使每个 q_ret 为空、qr 最终 0 列，原代码 qr.iloc[:, -1] 抛
+    IndexError。此场景由真实 cache 上的 TailSessionFactor（窄 20 日窗、每日期因子值
+    退化）触发——Task 1-4 的合成 OvernightMomentumFactor 测试从未覆盖。
+
+    修复：qr.shape[1]==0 时返回退化 QuantileResult（spread=0.0），与空列表早退出口径
+    一致。本断言退化输入不崩、给出中性结果，且正常输入仍出非零 spread（守卫不影响
+    正常路径）。
+    """
+    from src.research.factor_analysis.quantile import QuantileAnalyzer
+
+    # 退化输入：每日期因子值恒定（全 0.5），forward return 有变化但因子无区分度。
+    dates = pd.bdate_range("2025-01-01", periods=10)
+    syms = [f"00000{i}.SZ" for i in range(8)]
+    idx = pd.MultiIndex.from_product([dates, syms], names=["date", "symbol"])
+    fv_deg = pd.DataFrame({"f": 0.5}, index=idx)
+    rng = np.random.default_rng(1)
+    fr_deg = pd.DataFrame({"return": rng.normal(0, 0.01, len(idx))}, index=idx)
+    res_deg = QuantileAnalyzer(n_quantiles=5).analyze(fv_deg, fr_deg)
+    assert res_deg.spread == 0.0
+    assert res_deg.quantile_returns.shape[1] == 0  # 退化结果，无分位列
+
+    # 正常输入仍出非零 spread（守卫不影响正常路径）。
+    fv_ok = pd.DataFrame({"f": rng.normal(0, 1, len(idx))}, index=idx)
+    res_ok = QuantileAnalyzer(n_quantiles=5).analyze(fv_ok, fr_deg)
+    assert res_ok.quantile_returns.shape[1] > 0
