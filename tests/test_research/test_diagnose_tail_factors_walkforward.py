@@ -136,21 +136,52 @@ def test_net_edge_subtracts_real_costs_both_calibers():
     bars = _fake_bars_long()
     result = net_edge(bars, OvernightMomentumFactor(smoothing_window=1), trade_capital=100000, top_n=5, n_quantiles=3)
     assert result["factor"] == "overnight_momentum"
-    # 真实费率：买入 ≈ 0.00025+0.00001+0.0000487 ≈ 0.000309（2万/笔 > min_commission 5）
+
+    # 卖出端独立交叉校验：cost_*_rate 必须与 FeeCalculator 独立重算一致，
+    # 且 roundtrip = buy + sell（若 net_edge 漏算 sell 端则 roundtrip != buy+sell）。
+    from src.core.broker_base import FeeCalculator
+    fees = FeeCalculator.from_settings()
+    amount = 100000 / 5  # 20000/笔，恰处 min_commission 拐点（20000*0.00025=5.0）
+    buy_rate = fees.calc_commission(amount, "buy") / amount
+    sell_rate = fees.calc_commission(amount, "sell") / amount
+    assert abs(result["cost_buy_rate"] - buy_rate) < 1e-9
+    assert abs(result["cost_sell_rate"] - sell_rate) < 1e-9
+    assert abs(result["cost_roundtrip_rate"] - (buy_rate + sell_rate)) < 1e-9
+
+    # sell = buy + 印花税（仅 sell 收），严格大于。若 FeeCalculator 漏印花税则 sell==buy → 失败。
+    # （原断言 roundtrip > buy 近恒真，sell_rate>0 即成立，抓不到漏印花税。）
+    assert result["cost_sell_rate"] > result["cost_buy_rate"]
     assert result["cost_buy_rate"] > 0
-    assert result["cost_roundtrip_rate"] > result["cost_buy_rate"]  # 往返含卖出印花税
+
     # 净 edge = 毛 - 成本
     assert abs(result["net_long_only"] - (result["gross_top_quantile_return"] - result["cost_buy_rate"])) < 1e-9
     assert abs(result["net_long_short"] - (result["gross_spread"] - result["cost_roundtrip_rate"])) < 1e-9
 
 
 def test_cost_rate_from_fee_calculator_matches_settings():
-    """成本率来源 FeeCalculator.from_settings()，非手写魔数。"""
+    """成本率来源 FeeCalculator.from_settings()，非手写魔数，且与金额相关。
+
+    min_commission=5 下限使金额 ≥ 5/0.00025=20000 时佣金部分 max(amount*0.00025, 5)
+    退化为与金额无关的常数 0.0003087（= commission_rate + 过户 0.00001 + 证管 0.0000487）。
+    在此金额下，即便 net_edge 把 cost_buy_rate 硬编码为该常数、或把 amount 误算成
+    trade_capital/n_quantiles，rate 仍不变，断言照过——无法证明"非硬编码"。
+
+    故额外用一个 floor 之下的金额（trade_capital=10000, top_n=5 → 2000/笔）交叉校验：
+    floor 之下 cost_buy_rate = 5/amount + 0.0000587 与金额相关，两个不同金额给出两个
+    不同的 rate（20000→0.0003087，2000→0.0025587），硬编码常量无法同时匹配。
+    """
     from src.core.broker_base import FeeCalculator
     fees = FeeCalculator.from_settings()
-    amount = 20000  # 10万/5
-    buy_rate = fees.calc_commission(amount, "buy") / amount
-    sell_rate = fees.calc_commission(amount, "sell") / amount
     bars = _fake_bars_long()
-    result = net_edge(bars, OvernightMomentumFactor(smoothing_window=1), trade_capital=100000, top_n=5, n_quantiles=3)
-    assert abs(result["cost_buy_rate"] - buy_rate) < 1e-9
+    factor = OvernightMomentumFactor(smoothing_window=1)
+
+    for trade_capital, top_n in [(100000, 5), (10000, 5)]:
+        amount = trade_capital / top_n
+        result = net_edge(bars, factor, trade_capital=trade_capital, top_n=top_n, n_quantiles=3)
+        # amount 必须按 trade_capital/top_n 计算（非 n_quantiles），直接抓 top_n/n_quantiles 混淆。
+        assert result["trade_amount_per_leg"] == amount
+        # 独立重算并断言等值：硬编码常量无法同时匹配两个不同 rate。
+        buy_rate = fees.calc_commission(amount, "buy") / amount
+        assert abs(result["cost_buy_rate"] - buy_rate) < 1e-9, (
+            f"amount={amount}: cost_buy_rate {result['cost_buy_rate']} != {buy_rate}"
+        )

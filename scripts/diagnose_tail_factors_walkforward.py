@@ -208,7 +208,6 @@ def net_edge(bars, factor, trade_capital=100000, top_n=5, n_quantiles=5) -> dict
     # 分位组日度平均收益
     qr = qresult.quantile_returns
     top_col = qr.columns[-1]
-    bottom_col = qr.columns[0]
     gross_top = float(qr[top_col].mean()) if len(qr) else 0.0
     gross_spread = float(qresult.spread) if qresult.spread is not None else 0.0
 
