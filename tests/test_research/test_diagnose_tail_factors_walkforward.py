@@ -12,6 +12,7 @@ from scripts.diagnose_tail_factors_walkforward import (
     diagnose_fold,
     walk_forward_stability,
     autocorrelation_probe,
+    net_edge,
 )
 from scripts.diagnose_tail_factors import compute_overnight_forward_return
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
@@ -129,3 +130,27 @@ def test_lagged_baseline_is_autocorrelation_floor_not_self_correlation():
     assert result["lagged_baseline_corr"] is not None
     # 退化自相关 corr(factor, factor)≈1.0 必须被拒绝；真实地板远低于 1.0。
     assert abs(result["lagged_baseline_corr"] - 1.0) > 0.05
+
+
+def test_net_edge_subtracts_real_costs_both_calibers():
+    bars = _fake_bars_long()
+    result = net_edge(bars, OvernightMomentumFactor(smoothing_window=1), trade_capital=100000, top_n=5, n_quantiles=3)
+    assert result["factor"] == "overnight_momentum"
+    # 真实费率：买入 ≈ 0.00025+0.00001+0.0000487 ≈ 0.000309（2万/笔 > min_commission 5）
+    assert result["cost_buy_rate"] > 0
+    assert result["cost_roundtrip_rate"] > result["cost_buy_rate"]  # 往返含卖出印花税
+    # 净 edge = 毛 - 成本
+    assert abs(result["net_long_only"] - (result["gross_top_quantile_return"] - result["cost_buy_rate"])) < 1e-9
+    assert abs(result["net_long_short"] - (result["gross_spread"] - result["cost_roundtrip_rate"])) < 1e-9
+
+
+def test_cost_rate_from_fee_calculator_matches_settings():
+    """成本率来源 FeeCalculator.from_settings()，非手写魔数。"""
+    from src.core.broker_base import FeeCalculator
+    fees = FeeCalculator.from_settings()
+    amount = 20000  # 10万/5
+    buy_rate = fees.calc_commission(amount, "buy") / amount
+    sell_rate = fees.calc_commission(amount, "sell") / amount
+    bars = _fake_bars_long()
+    result = net_edge(bars, OvernightMomentumFactor(smoothing_window=1), trade_capital=100000, top_n=5, n_quantiles=3)
+    assert abs(result["cost_buy_rate"] - buy_rate) < 1e-9

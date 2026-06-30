@@ -15,6 +15,7 @@ from scripts.diagnose_tail_factors import (
     compute_overnight_forward_return,
     _sanitize_for_json,
 )
+from src.core.broker_base import FeeCalculator
 from src.research.factor_analysis.ic_analysis import ICAnalyzer
 from src.research.factor_analysis.quantile import QuantileAnalyzer
 from src.strategy.factors.overnight_momentum import OvernightMomentumFactor
@@ -183,4 +184,49 @@ def autocorrelation_probe(bars, factor, horizons=(1, 2, 3, 5)) -> dict:
         "decay_icir_by_horizon": {int(h): v for h, v in decay.items()},
         "lagged_baseline_corr": lagged_baseline_corr,
         "turnover_proxy": turnover_proxy,
+    }
+
+
+def net_edge(bars, factor, trade_capital=100000, top_n=5, n_quantiles=5) -> dict:
+    """扣成本净 edge：口径 A 做多单边 + 口径 B 多空价差。
+
+    成本复用 FeeCalculator.from_settings()（真实费率，与回测引擎一致）。成本率依赖
+    金额（min_commission=5 下限），故用典型交易额建模：单笔金额 = trade_capital /
+    top_n（如 10 万 / 5 = 2 万/笔），让 min_commission 真实生效。
+
+    - 口径 A 做多单边：top 分位组平均隔夜收益 − 买入成本率（贴实盘，S01 只做多）。
+    - 口径 B 多空价差：top−bottom 价差 − 往返成本率（纯因子信号，S01 不做空，
+      价差高估实际可赚）。
+
+    收益率为日度平均（未年化，与 horizon=1 一致）。
+    """
+    fr = compute_overnight_forward_return(bars)
+    fv = factor.compute(bars)
+    qa = QuantileAnalyzer(n_quantiles=n_quantiles)
+    qresult = qa.analyze(fv, fr)
+
+    # 分位组日度平均收益
+    qr = qresult.quantile_returns
+    top_col = qr.columns[-1]
+    bottom_col = qr.columns[0]
+    gross_top = float(qr[top_col].mean()) if len(qr) else 0.0
+    gross_spread = float(qresult.spread) if qresult.spread is not None else 0.0
+
+    # 成本率（典型交易额 = trade_capital / top_n）
+    fees = FeeCalculator.from_settings()
+    amount = trade_capital / top_n
+    cost_buy_rate = fees.calc_commission(amount, "buy") / amount
+    cost_sell_rate = fees.calc_commission(amount, "sell") / amount
+    cost_roundtrip_rate = cost_buy_rate + cost_sell_rate
+
+    return {
+        "factor": factor.name,
+        "gross_top_quantile_return": gross_top,
+        "gross_spread": gross_spread,
+        "trade_amount_per_leg": float(amount),
+        "cost_buy_rate": float(cost_buy_rate),
+        "cost_sell_rate": float(cost_sell_rate),
+        "cost_roundtrip_rate": float(cost_roundtrip_rate),
+        "net_long_only": float(gross_top - cost_buy_rate),        # 口径 A
+        "net_long_short": float(gross_spread - cost_roundtrip_rate),  # 口径 B
     }
