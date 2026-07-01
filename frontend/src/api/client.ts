@@ -313,6 +313,53 @@ export interface DataReliabilityReport {
   repair_plan: DataHealthRepairPlan
 }
 
+export interface DataQualityCalendarSource {
+  key: string
+  name: string
+  table: string
+  expected_cadence: string
+  repairability: string
+}
+
+export interface DataQualityCalendarCell {
+  source_key: string
+  source_name: string
+  status: string
+  latest_time: string | null
+  expected_symbols: number
+  covered_symbols: number
+  coverage_ratio: number
+  expected_buckets: number
+  observed_buckets: number
+  missing_buckets: number
+  duplicate_rows: number
+  max_gap_seconds: number
+  repairability: string
+  summary: string
+  details: Record<string, unknown>
+  checked_at: string | null
+}
+
+export interface DataQualityCalendarDateRow {
+  trade_date: string
+  overall_status: string
+  checked_at: string | null
+  sources: DataQualityCalendarCell[]
+}
+
+export interface DataQualityCalendarResponse {
+  range: { start: string; end: string }
+  source_keys: string[]
+  sources: DataQualityCalendarSource[]
+  dates: DataQualityCalendarDateRow[]
+}
+
+export interface DataQualityCalendarGeneratePayload {
+  start: string
+  end: string
+  source_keys?: string[] | null
+}
+
 export interface TailMlAuditResponse {
   status: string
   as_of: string
@@ -1063,6 +1110,17 @@ export const api = {
   },
   getDataReliability() {
     return request<DataReliabilityReport>('/api/data/reliability')
+  },
+  getDataQualityCalendar(start: string, end: string, sourceKeys?: string[]) {
+    const params = new URLSearchParams({ start, end })
+    if (sourceKeys?.length) params.set('source_keys', sourceKeys.join(','))
+    return request<DataQualityCalendarResponse>(`/api/data/quality-calendar?${params.toString()}`)
+  },
+  generateDataQualityCalendar(payload: DataQualityCalendarGeneratePayload) {
+    return request<{ generated_dates: number; rows: number }>('/api/data/quality-calendar/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
   },
   repairDataHealth(payload: DataHealthRepairPayload = {}) {
     return request<BacktestSubmitResponse>('/api/data/health-repair', {
