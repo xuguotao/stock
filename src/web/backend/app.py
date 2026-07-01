@@ -35,6 +35,7 @@ from src.web.backend.data_ops_scheduler import DataOpsScheduler, DataOpsSchedule
 from src.data_ops.models import DataOpsTaskConfig
 from src.data_ops.repository import ClickHouseDataOpsRepository
 from src.web.backend.data_status import (
+    fetch_stock_list,
     inspect_clickhouse_database,
     inspect_stock_database,
     persist_clickhouse_quality_snapshot,
@@ -191,6 +192,7 @@ def create_app(
     auto_start_quote_snapshot_monitor: bool = False,
     quote_snapshot_interval_seconds: int = 10,
     data_status_runner=inspect_clickhouse_database,
+    stock_list_runner=fetch_stock_list,
     daily_repair_runner=sync_clickhouse_daily_from_minute5,
     index_daily_sync_runner=sync_clickhouse_index_daily,
     quality_snapshot_writer=persist_clickhouse_quality_snapshot,
@@ -283,6 +285,7 @@ def create_app(
     app.state.minute5_sync_runner = minute5_sync_runner
     app.state.quote_snapshot_sync_runner = quote_snapshot_sync_runner
     app.state.data_status_runner = data_status_runner
+    app.state.stock_list_runner = stock_list_runner
     app.state.daily_repair_runner = daily_repair_runner
     app.state.index_daily_sync_runner = index_daily_sync_runner
     app.state.quality_snapshot_writer = quality_snapshot_writer
@@ -396,6 +399,10 @@ def create_app(
     @app.get("/api/data/status")
     def get_data_status() -> dict[str, Any]:
         return app.state.data_status_runner()
+
+    @app.get("/api/stocks")
+    def list_stocks() -> dict[str, Any]:
+        return app.state.stock_list_runner()
 
     @app.get("/api/data/health-repair-plan")
     def get_data_health_repair_plan() -> dict[str, Any]:

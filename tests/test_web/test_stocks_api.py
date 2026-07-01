@@ -62,3 +62,56 @@ def test_fetch_stock_list_keeps_stocks_without_daily_via_left_join() -> None:
     assert result["total"] == 2
     no_daily = next(item for item in result["items"] if item["symbol"] == "000005.SZ")
     assert no_daily["last_daily_date"] is None
+
+
+from fastapi.testclient import TestClient
+
+from src.web.backend.app import create_app
+
+
+def test_stocks_api_returns_items(tmp_path) -> None:
+    def _runner() -> dict:
+        return {
+            "items": [
+                {
+                    "symbol": "000001.SZ",
+                    "name": "平安银行",
+                    "industry": "银行",
+                    "market": "SZ",
+                    "list_date": "1991-04-03",
+                    "last_daily_date": "2026-06-30",
+                    "is_st": False,
+                }
+            ],
+            "total": 1,
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=tmp_path / "stock.db",
+        stock_list_runner=_runner,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/stocks")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["symbol"] == "000001.SZ"
+
+
+def test_stocks_api_returns_500_when_clickhouse_unavailable(tmp_path) -> None:
+    def _runner() -> dict:
+        raise RuntimeError("ClickHouse 未配置")
+
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=tmp_path / "stock.db",
+        stock_list_runner=_runner,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/api/stocks")
+
+    assert response.status_code == 500
