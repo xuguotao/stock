@@ -242,9 +242,14 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
     assert datasets["daily_kline"]["name"] == "股票日线"
     assert datasets["daily_kline"]["update_mechanism"] == "日常维护补齐；当分钟线先到位时可由 5m 聚合修复最新交易日。"
     assert datasets["daily_kline"]["consumer"] == "尾盘选股、个股趋势、策略复盘、回测、因子计算"
+    assert datasets["daily_kline"]["quality_rules"] == ["最新交易日覆盖率", "重复日线主键", "OHLC 合法性", "日线新鲜度"]
+    assert datasets["daily_kline"]["repair_action_keys"] == ["daily_from_minute5", "daily_history_backfill", "daily_historical_invalid_prices"]
     assert datasets["daily_kline"]["coverage_ratio"] == 1.0
     assert datasets["minute5_kline"]["status"] == "warning"
+    assert datasets["minute5_kline"]["repair_action_keys"] == ["minute5_sync"]
     assert datasets["stock_quote_snapshots_5m"]["consumer"] == "尾盘选股 5m 兜底、个股趋势、盘中验证"
+    assert datasets["stock_quote_snapshots"]["quality_rules"] == ["最新快照覆盖率", "10 秒采集节拍", "原始快照缺失轮次"]
+    assert datasets["stock_quote_snapshots"]["repair_action_keys"] == ["quote_snapshot_sync"]
     assert datasets["stock_quote_snapshots"]["status"] == "ok"
     assert datasets["stock_quote_snapshots"]["issues"] == []
     assert datasets["stock_quote_snapshots_1m"]["status"] == "warning"
@@ -586,6 +591,21 @@ def test_inspect_clickhouse_database_excludes_no_trade_symbols_from_minute5_miss
     assert payload["quality"]["minute5"]["expected_symbols"] == 1
     assert payload["quality"]["minute5"]["missing_symbols"] == 0
     assert "missing_samples" not in payload["quality"]["minute5"]
+
+
+def test_inspect_clickhouse_database_uses_precise_st_name_filter() -> None:
+    client = FakeClickHouseClient()
+
+    inspect_clickhouse_database(client=client)
+
+    stock_join_queries = [
+        query
+        for query, _params in client.commands
+        if "inner join stocks s" in query.lower() or "from stocks s" in query.lower()
+    ]
+    assert stock_join_queries
+    assert not any("upper(s.name) not like '%%ST%%'" in query for query in stock_join_queries)
+    assert any("not match(upper(s.name)" in query for query in stock_join_queries)
 
 
 def test_inspect_clickhouse_database_uses_strategy_tradable_pool_when_intraday_ahead_of_daily() -> None:

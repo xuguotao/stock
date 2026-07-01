@@ -227,6 +227,9 @@ function tooltipText(params: unknown) {
   const candle = params.find((item) => item?.seriesName === 'K线')
   const date = candle?.axisValueLabel ?? ''
   const values = candle?.data ?? []
+  const rowIndex = typeof candle?.dataIndex === 'number' ? candle.dataIndex : -1
+  const rows = chartMode.value === 'intraday' ? (trend.value?.intraday ?? []) : (trend.value?.daily ?? [])
+  const row = rowIndex >= 0 ? rows[rowIndex] : null
   const maText = params
     .filter((item) => typeof item?.seriesName === 'string' && item.seriesName.startsWith('MA'))
     .map((item) => `${item.marker}${item.seriesName}: ${formatPrice(item.data)}`)
@@ -237,6 +240,8 @@ function tooltipText(params: unknown) {
     `收: ${formatPrice(values[2])}`,
     `低: ${formatPrice(values[3])}`,
     `高: ${formatPrice(values[4])}`,
+    `成交量: ${formatVolume(typeof row?.volume === 'number' ? row.volume : null)}`,
+    `K线成交额: ${formatMoney(typeof row?.amount === 'number' ? row.amount : null)}`,
     maText
   ].filter(Boolean).join('<br/>')
 }

@@ -95,7 +95,7 @@ def parse_tencent_kline_json(payload: dict[str, Any], symbol: str, frequency: st
             "low": _float_at(raw, 4),
             "close": _float_at(raw, 2),
             "volume": _float_at(raw, 5),
-            "amount": _float_at(raw, 7),
+            "amount": _float_at(raw, 2) * _float_at(raw, 5) * 100,
         })
     if not rows:
         return pd.DataFrame()

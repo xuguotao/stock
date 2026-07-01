@@ -144,6 +144,7 @@ def test_parse_tencent_kline_json_outputs_5m_intraday_bars() -> None:
     assert result["low"].tolist() == [10.78, 10.81]
     assert result["close"].tolist() == [10.82, 10.88]
     assert result["volume"].tolist() == [1200.0, 1500.0]
+    assert result["amount"].tolist() == [10.82 * 1200 * 100, 10.88 * 1500 * 100]
 
 
 def test_tencent_quote_source_fetches_5m_intraday_bars_for_trade_date() -> None:

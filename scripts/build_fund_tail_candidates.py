@@ -34,6 +34,11 @@ EXCLUDED_TYPE_KEYWORDS = ("债券", "货币", "商品", "REIT", "FOF")
 UNMAPPED_ASSET_KEYWORDS = ("恒生", "港股", "黄金", "白银", "原油", "油气", "房地产")
 
 PROXY_RULES = [
+    ("半导体芯片", "sector", "cni", "980017"),
+    ("国证半导体", "sector", "cni", "980017"),
+    ("国证芯片", "sector", "cni", "980017"),
+    ("芯片", "sector", "cni", "980017"),
+    ("半导体", "sector", "cni", "980017"),
     ("新能源汽车", "sector", "csindex", "399976"),
     ("新能源车", "sector", "csindex", "399976"),
     ("医疗", "medical", "csindex", "399989"),

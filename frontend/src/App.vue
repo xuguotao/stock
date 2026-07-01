@@ -5,6 +5,7 @@
       <el-menu :default-active="activePage" @select="openPage">
         <el-menu-item index="dashboard">总览</el-menu-item>
         <el-menu-item index="data">数据中心</el-menu-item>
+        <el-menu-item index="stock-list">股票列表</el-menu-item>
         <el-menu-item index="tail-live">今日尾盘选股</el-menu-item>
         <el-menu-item index="watchlist-monitor">观察池监控</el-menu-item>
         <el-menu-item index="stock-trend">个股趋势</el-menu-item>
@@ -26,6 +27,10 @@
       <el-main class="content">
         <Dashboard v-if="activePage === 'dashboard'" @open-backtest="openPage('backtest')" />
         <DataCenter v-else-if="activePage === 'data'" />
+        <StockList
+          v-else-if="activePage === 'stock-list'"
+          @open-trend="openTrend"
+        />
         <TailLiveSelection v-else-if="activePage === 'tail-live'" :job-id="targetJobId" />
         <WatchlistMonitor v-else-if="activePage === 'watchlist-monitor'" />
         <StockTrend v-else-if="activePage === 'stock-trend'" :symbol="targetSymbol" />
@@ -51,6 +56,7 @@ import Jobs from './pages/Jobs.vue'
 import OptionsStrategy from './pages/OptionsStrategy.vue'
 import ReitsChannel from './pages/ReitsChannel.vue'
 import SignalReview from './pages/SignalReview.vue'
+import StockList from './pages/StockList.vue'
 import StockTrend from './pages/StockTrend.vue'
 import TailBacktest from './pages/TailBacktest.vue'
 import TailLiveSelection from './pages/TailLiveSelection.vue'
@@ -70,6 +76,11 @@ function openPage(page: string) {
   targetJobId.value = ''
   if (page !== 'stock-trend') targetSymbol.value = ''
   activePage.value = page
+}
+
+function openTrend(symbol: string) {
+  targetSymbol.value = symbol
+  activePage.value = 'stock-trend'
 }
 
 function openResult(payload: { page: string; jobId: string }) {

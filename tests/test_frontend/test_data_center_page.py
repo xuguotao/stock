@@ -78,6 +78,44 @@ def test_data_center_page_shows_data_ops_scheduler() -> None:
     assert "ops-scheduler" in client
 
 
+def test_data_center_page_shows_persisted_data_ops_tasks_after_health_matrix() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert source.index("数据健康矩阵") < source.index("更新任务状态") < source.index("高级诊断")
+    assert "dataOpsTaskRows" in source
+    assert "getDataOpsTasks" in source
+    assert "updateDataOpsTaskConfig" in source
+    assert "runDataOpsTaskOnce" in source
+    assert "手动运行一次" in source
+    assert "progress_percent" in source
+    assert "progress_message" in source
+    assert "dataOpsTaskProgressStatus" in source
+    assert "调度配置" in source
+    assert "dataOpsTaskScheduleValue" in source
+    assert "saveDataOpsTaskSchedule" in source
+    assert "执行时间" in source
+    assert "间隔秒数" in source
+    assert 'type="expand"' in source
+    assert 'row-key="task_key"' in source
+    assert "expandedDataOpsTaskKeys" in source
+    assert "@expand-change=\"onDataOpsTaskExpandChange\"" in source
+    assert "dataOpsTaskDetail" in source
+    assert "任务逻辑" in source
+    assert "触发规则" in source
+    assert "读写数据" in source
+    assert "检查方式" in source
+    assert "runner 可独立部署到其他服务器" in source
+    assert "最近 7 天优先腾讯行情" in source
+    assert "历史日期优先新浪" in source
+    assert "minute5_kline 未达到当前目标时间" in source
+    assert "腾讯 ifzq.gtimg.cn" in source
+    assert "DataOpsTaskStatus" in client
+    assert "DataOpsTasksResponse" in client
+    assert "DataOpsTaskConfigPayload" in client
+    assert "/api/data/ops-tasks" in client
+
+
 def test_data_center_page_shows_quote_snapshot_pipeline_health() -> None:
     source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
@@ -189,11 +227,50 @@ def test_data_center_page_exposes_health_repair_plan_actions() -> None:
     assert "repairDataHealth" in client
 
 
+def test_data_center_health_matrix_prioritizes_source_completeness_and_repair() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert source.index("数据健康矩阵") < source.index("高级诊断")
+    assert source.index("数据健康矩阵") < source.index("今日尾盘策略可用性")
+    assert "状态/完整度" in source
+    assert "datasetHealthStatusSummary" in source
+    assert "repairDatasetHealth" in source
+    assert "数据修复" in source
+    assert "更新机制" in source
+    assert "数据来源" in source
+    assert "系统使用" in source
+    assert "质量规则" in source
+    assert "quality_rules" in client
+    assert "repair_action_keys" in client
+    assert "advancedSections" in source
+    assert '<el-collapse v-model="advancedSections" class="advanced-diagnostics">' in source
+    assert 'v-loading="loading"' in source
+    assert 'empty-text="数据源健康信息加载中或暂无返回"' in source
+    assert "datasetQualityRules(row)" in source
+    assert "datasetRepairActionKeys(row)" in source
+    assert "datasetActionableRepairKeys(row)" in source
+    assert "row.quality_rules.length" not in source
+    assert "row.repair_action_keys.length" not in source
+    assert ':disabled="!datasetActionableRepairKeys(row).length"' in source
+
+
+def test_data_center_falls_back_to_data_status_when_reliability_load_fails() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+    load_data_body = source.split("async function loadData()", 1)[1].split("async function loadRepairPlan()", 1)[0]
+    refresh_body = source.split("async function refreshDataStatus()", 1)[1].split("async function loadMinute5Monitor()", 1)[0]
+
+    assert "await loadDataStatusFallback()" in load_data_body
+    assert "await loadDataStatusFallback()" in refresh_body
+    assert "async function loadDataStatusFallback()" in source
+    assert "dataStatus.value = await api.getDataStatus()" in source
+
+
 def test_data_center_page_uses_combined_reliability_status_endpoint() -> None:
     source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
     load_data_body = source.split("async function loadData()", 1)[1].split("async function loadRepairPlan()", 1)[0]
-    refresh_body = source.split("async function refreshDataStatus()", 1)[1].split("async function loadMinute5Monitor()", 1)[0]
+    refresh_body = source.split("async function refreshDataStatus()", 1)[1].split("async function loadDataStatusFallback()", 1)[0]
 
     assert "getDataReliability" in client
     assert "DataReliabilityReport" in client

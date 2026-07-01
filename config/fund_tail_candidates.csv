@@ -1,6 +1,7 @@
 fund_code,fund_name,fund_type,candidate_tier,proxy_provider,proxy_code,fee_tag,min_holding_days,enabled,tail_strategy_eligible,exclude_reason
 001632,天弘中证食品饮料ETF联接C,consumer,preferred,cni,399396,低费率,7,true,true,
 017437,华宝纳斯达克精选股票(QDII)C,overseas,preferred,us_sina,QQQ,普通费率,7,true,true,
+008888,华夏国证半导体芯片ETF联接C,sector,preferred,cni,980017,低费率,7,true,true,
 007995,华夏中证500指数增强C,broad_index,preferred,csindex,000905,低费率,7,true,true,
 161604,融通深证100指数A,broad_index,preferred,cni,399330,低费率,7,true,true,
 161005,富国天惠成长混合(LOF)A,active_mixed,preferred,csindex,000300,普通费率,7,true,true,

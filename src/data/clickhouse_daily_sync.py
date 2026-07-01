@@ -58,7 +58,7 @@ def sync_clickhouse_daily_from_minute5(
                 min(bars.low) as low,
                 argMax(bars.close, bars.datetime) as close,
                 sum(bars.volume) as volume,
-                sum(bars.amount) as amount,
+                sum(bars.close * bars.volume * 100) as amount,
                 if(prev.prev_close > 0, (max(bars.high) - min(bars.low)) / prev.prev_close * 100, null) as amplitude,
                 if(prev.prev_close > 0, (argMax(bars.close, bars.datetime) - prev.prev_close) / prev.prev_close * 100, null) as pct_change,
                 if(prev.prev_close > 0, argMax(bars.close, bars.datetime) - prev.prev_close, null) as change,

@@ -2,9 +2,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOST="${HOST:-127.0.0.1}"
+
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
+HOST="${HOST:-0.0.0.0}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+BACKEND_PROXY_HOST="${BACKEND_PROXY_HOST:-127.0.0.1}"
 LOG_DIR="${LOG_DIR:-$ROOT_DIR/reports/runtime}"
 PID_DIR="${PID_DIR:-$ROOT_DIR/.runtime}"
 BACKEND_SESSION="${BACKEND_SESSION:-stock-web-backend}"
@@ -59,6 +68,36 @@ wait_port() {
   return 1
 }
 
+detect_lan_host() {
+  if [[ -n "${PUBLIC_HOST:-}" ]]; then
+    echo "$PUBLIC_HOST"
+    return 0
+  fi
+
+  if command -v ipconfig >/dev/null 2>&1; then
+    local service
+    for service in en0 en1; do
+      local address
+      address="$(ipconfig getifaddr "$service" 2>/dev/null || true)"
+      if [[ -n "$address" ]]; then
+        echo "$address"
+        return 0
+      fi
+    done
+  fi
+
+  if command -v hostname >/dev/null 2>&1; then
+    local address
+    address="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+    if [[ -n "$address" ]]; then
+      echo "$address"
+      return 0
+    fi
+  fi
+
+  echo "$HOST"
+}
+
 echo "Restarting stock web app..."
 echo "Root: $ROOT_DIR"
 
@@ -79,7 +118,7 @@ else
 fi
 
 echo "Starting frontend..."
-frontend_cmd="cd $(shell_quote "$ROOT_DIR/frontend") && if [[ ! -d node_modules ]]; then npm install; fi && exec npm run dev -- --host $(shell_quote "$HOST") --port $(shell_quote "$FRONTEND_PORT") >> $(shell_quote "$LOG_DIR/frontend.log") 2>&1"
+frontend_cmd="cd $(shell_quote "$ROOT_DIR/frontend") && if [[ ! -d node_modules ]]; then npm install; fi && BACKEND_HOST=$(shell_quote "$BACKEND_PROXY_HOST") BACKEND_PORT=$(shell_quote "$BACKEND_PORT") exec npm run dev -- --host $(shell_quote "$HOST") --port $(shell_quote "$FRONTEND_PORT") >> $(shell_quote "$LOG_DIR/frontend.log") 2>&1"
 : > "$LOG_DIR/frontend.log"
 if command -v screen >/dev/null 2>&1; then
   screen -dmS "$FRONTEND_SESSION" bash -lc "$frontend_cmd"
@@ -92,10 +131,13 @@ fi
 wait_port "$BACKEND_PORT" "Backend"
 wait_port "$FRONTEND_PORT" "Frontend"
 
+LAN_HOST="$(detect_lan_host)"
+
 echo
 echo "Ready:"
-echo "  Frontend: http://$HOST:$FRONTEND_PORT"
-echo "  Backend:  http://$HOST:$BACKEND_PORT"
+echo "  Frontend: http://$LAN_HOST:$FRONTEND_PORT"
+echo "  Backend:  http://$LAN_HOST:$BACKEND_PORT"
+echo "  Bind:     $HOST"
 echo "  Logs:     $LOG_DIR"
 if command -v screen >/dev/null 2>&1; then
   echo "  Sessions: $BACKEND_SESSION, $FRONTEND_SESSION"
