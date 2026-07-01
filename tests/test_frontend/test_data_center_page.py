@@ -305,3 +305,14 @@ def test_data_center_page_does_not_let_tail_ml_audit_failure_blank_core_data() -
     assert "tailMlAuditResult" in load_data_body
     assert "reliabilityReport.value = reliabilityResponse" in load_data_body
     assert "tailMlAudit.value = null" in load_data_body
+
+
+def test_data_center_client_exposes_quality_calendar_api() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "DataQualityCalendarResponse" in client
+    assert "DataQualityCalendarGeneratePayload" in client
+    assert "getDataQualityCalendar" in client
+    assert "generateDataQualityCalendar" in client
+    assert "/api/data/quality-calendar" in client
+    assert "/api/data/quality-calendar/generate" in client
