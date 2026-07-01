@@ -1689,3 +1689,54 @@ def _format_status_value(value: Any) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     return str(value)
+
+
+def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
+    """Return all stocks with their latest daily bar date.
+
+    数据源为 ClickHouse `stock` 库。`is_st` 由 `is_st(name)` 推导(stocks 表无此列)。
+    LEFT JOIN 保留有 stocks 记录但无任何日线的股票,其 `last_daily_date` 为 None。
+    """
+    if client is None:
+        source = ClickHouseStockDataSource.from_env()
+        if source is None:
+            raise RuntimeError(
+                "ClickHouse 未配置(STOCK_CLICKHOUSE_HOST 未设置),无法读取股票列表"
+            )
+        client = source._client_instance()
+
+    rows = client.execute(
+        """
+        select
+            s.symbol,
+            s.name,
+            s.industry,
+            s.market,
+            s.list_date,
+            max(d.date) as last_daily_date
+        from stocks s
+        left join daily_kline d on d.symbol = s.symbol
+        group by s.symbol, s.name, s.industry, s.market, s.list_date
+        order by s.symbol
+        """
+    )
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        values = tuple(row)
+        name = str(values[1] or "") if len(values) > 1 else ""
+        list_date = values[4] if len(values) > 4 else None
+        last_daily = values[5] if len(values) > 5 else None
+        items.append(
+            {
+                "symbol": str(values[0] or ""),
+                "name": name,
+                "industry": str(values[2] or "") if len(values) > 2 else "",
+                "market": str(values[3] or "") if len(values) > 3 else "",
+                "list_date": str(list_date) if list_date is not None else None,
+                "last_daily_date": str(last_daily) if last_daily is not None else None,
+                "is_st": is_st(name),
+            }
+        )
+
+    return {"items": items, "total": len(items)}
