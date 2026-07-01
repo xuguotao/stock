@@ -902,6 +902,21 @@ export interface StockTrendResponse {
   intraday: Array<Record<string, number | string | null>>
 }
 
+export interface StockListItem {
+  symbol: string
+  name: string
+  industry: string
+  market: string
+  list_date: string | null
+  last_daily_date: string | null
+  is_st: boolean
+}
+
+export interface StockListResponse {
+  items: StockListItem[]
+  total: number
+}
+
 export type WatchlistStatus =
   | 'hot_wait'
   | 'watch_pullback'
@@ -989,6 +1004,9 @@ export const api = {
     if (tradeDate) params.set('trade_date', tradeDate)
     params.set('granularity', granularity)
     return request<StockTrendResponse>(`/api/stocks/${encodeURIComponent(symbol)}/trend?${params.toString()}`)
+  },
+  listStocks() {
+    return request<StockListResponse>('/api/stocks')
   },
   getWatchlistMonitorReport(tradeDate?: string) {
     const params = new URLSearchParams()
