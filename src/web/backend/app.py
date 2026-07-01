@@ -34,6 +34,7 @@ from src.web.backend.data_sync import DEFAULT_REMOTE_STOCK_DB, sync_stock_databa
 from src.web.backend.data_ops_scheduler import DataOpsScheduler, DataOpsSchedulerConfig
 from src.data_ops.models import DataOpsTaskConfig
 from src.data_ops.repository import ClickHouseDataOpsRepository
+from src.web.backend.data_quality_calendar import DataQualityCalendarService
 from src.web.backend.data_status import (
     fetch_stock_list,
     inspect_clickhouse_database,
@@ -124,6 +125,12 @@ class DataOpsTaskConfigRequest(BaseModel):
     stale_after_seconds: int = Field(default=300, ge=1)
 
 
+class DataQualityCalendarGenerateRequest(BaseModel):
+    start: date
+    end: date
+    source_keys: list[str] | None = None
+
+
 class Minute5MonitorRequest(BaseModel):
     trade_date: date | None = None
     interval_seconds: int = Field(default=60, ge=30, le=3600)
@@ -201,6 +208,7 @@ def create_app(
     data_ops_interval_seconds: int = 60,
     data_ops_maintenance_runner=None,
     data_ops_repository=None,
+    data_quality_calendar_service=None,
     clickhouse_dataset_builder=build_clickhouse_research_dataset,
     tail_signal_repository=None,
     tail_ml_audit_runner=audit_tail_ml_data,
@@ -314,6 +322,7 @@ def create_app(
     app.state.quote_snapshot_interval_seconds = quote_snapshot_interval_seconds
     app.state.auto_start_data_ops_scheduler = auto_start_data_ops_scheduler
     app.state.data_ops_repository = data_ops_repository or ClickHouseDataOpsRepository()
+    app.state.data_quality_calendar = data_quality_calendar_service or DataQualityCalendarService()
 
     def _auto_data_maintenance() -> dict[str, Any]:
         payload = DailyMaintenanceRequest(run_strategy_review=False)
@@ -399,6 +408,19 @@ def create_app(
     @app.get("/api/data/status")
     def get_data_status() -> dict[str, Any]:
         return app.state.data_status_runner()
+
+    @app.get("/api/data/quality-calendar")
+    def get_data_quality_calendar(start: date, end: date, source_keys: str | None = None) -> dict[str, Any]:
+        selected = [key for key in source_keys.split(",") if key] if source_keys else None
+        return app.state.data_quality_calendar.list(start=start, end=end, source_keys=selected)
+
+    @app.post("/api/data/quality-calendar/generate")
+    def generate_data_quality_calendar(payload: DataQualityCalendarGenerateRequest) -> dict[str, Any]:
+        return app.state.data_quality_calendar.generate(
+            start=payload.start,
+            end=payload.end,
+            source_keys=payload.source_keys,
+        )
 
     @app.get("/api/stocks")
     def list_stocks() -> dict[str, Any]:
