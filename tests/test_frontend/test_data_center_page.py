@@ -316,3 +316,18 @@ def test_data_center_client_exposes_quality_calendar_api() -> None:
     assert "generateDataQualityCalendar" in client
     assert "/api/data/quality-calendar" in client
     assert "/api/data/quality-calendar/generate" in client
+
+
+def test_data_center_page_shows_quality_calendar_between_health_and_tasks() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+
+    assert source.index("数据健康矩阵") < source.index("数据日历") < source.index("更新任务状态")
+    assert "qualityCalendarRange" in source
+    assert "qualityCalendarSourceKeys" in source
+    assert "loadQualityCalendar" in source
+    assert "generateQualityCalendar" in source
+    assert "qualityCalendarRows" in source
+    assert "qualityCalendarCellClass" in source
+    assert "qualityCalendarCellDetail" in source
+    assert "未检查" in source
+    assert "生成质量统计" in source

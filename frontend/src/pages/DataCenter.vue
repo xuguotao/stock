@@ -96,6 +96,90 @@
       </el-table>
     </div>
 
+    <div class="panel data-quality-calendar-panel">
+      <div class="section-header no-top-margin">
+        <div>
+          <h2 class="page-title">数据日历</h2>
+          <p class="section-subtitle">按交易日 × 数据源查看已沉淀的数据质量统计</p>
+        </div>
+        <div class="toolbar compact-toolbar">
+          <el-date-picker
+            v-model="qualityCalendarRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+          />
+          <el-select
+            v-model="qualityCalendarSourceKeys"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="数据源"
+            style="width: 220px"
+          >
+            <el-option
+              v-for="source in qualityCalendarSources"
+              :key="source.key"
+              :label="source.name"
+              :value="source.key"
+            />
+          </el-select>
+          <el-button :loading="qualityCalendarLoading" @click="loadQualityCalendar">刷新</el-button>
+          <el-button type="primary" plain :loading="qualityCalendarGenerating" @click="generateQualityCalendar">
+            生成质量统计
+          </el-button>
+        </div>
+      </div>
+      <el-table
+        :data="qualityCalendarRows"
+        v-loading="qualityCalendarLoading"
+        row-key="trade_date"
+        empty-text="暂无数据日历统计"
+      >
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div class="dataset-health-detail data-quality-calendar-detail">
+              <div v-for="cell in row.sources" :key="cell.source_key">
+                <strong>{{ cell.source_name }}</strong>
+                <span>{{ qualityCalendarCellDetail(cell) }}</span>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="trade_date" label="交易日" width="130" />
+        <el-table-column label="总体状态" width="120">
+          <template #default="{ row }">
+            <el-tag :type="qualityTagType(row.overall_status)" effect="plain">
+              {{ qualityCalendarStatusText(row.overall_status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-for="source in qualityCalendarSources"
+          :key="source.key"
+          :label="source.name"
+          min-width="150"
+        >
+          <template #default="{ row }">
+            <button
+              class="quality-calendar-cell"
+              :class="qualityCalendarCellClass(qualityCalendarCell(row, source.key)?.status)"
+              type="button"
+              @click="selectedQualityCalendarCell = qualityCalendarCell(row, source.key)"
+            >
+              <strong>{{ qualityCalendarStatusText(qualityCalendarCell(row, source.key)?.status ?? 'unchecked') }}</strong>
+              <small>{{ qualityCalendarCell(row, source.key)?.summary ?? '未检查' }}</small>
+            </button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="selectedQualityCalendarCell" class="quality-calendar-selected">
+        <strong>{{ selectedQualityCalendarCell.source_name }}</strong>
+        <span>{{ qualityCalendarCellDetail(selectedQualityCalendarCell) }}</span>
+      </div>
+    </div>
+
     <div class="panel data-ops-task-panel">
       <div class="section-header no-top-margin">
         <div>
@@ -691,7 +775,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataOpsTaskStatus, type DataReliabilityReport, type DataStatusResponse, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus, type TailMlAuditResponse } from '../api/client'
+import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataOpsTaskStatus, type DataQualityCalendarCell, type DataQualityCalendarDateRow, type DataQualityCalendarResponse, type DataReliabilityReport, type DataStatusResponse, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus, type TailMlAuditResponse } from '../api/client'
 
 const dataStatus = ref<DataStatusResponse | null>(null)
 const loading = ref(false)
@@ -713,6 +797,12 @@ const expandedDataOpsTaskKeys = ref<string[]>([])
 const dataOpsTaskChanging = ref<string | null>(null)
 const repairPlan = ref<DataHealthRepairPlan | null>(null)
 const reliabilityReport = ref<DataReliabilityReport | null>(null)
+const qualityCalendarRange = ref<[string, string]>(defaultQualityCalendarRange())
+const qualityCalendarSourceKeys = ref<string[]>([])
+const qualityCalendarLoading = ref(false)
+const qualityCalendarGenerating = ref(false)
+const qualityCalendarReport = ref<DataQualityCalendarResponse | null>(null)
+const selectedQualityCalendarCell = ref<DataQualityCalendarCell | null>(null)
 const tailMlAudit = ref<TailMlAuditResponse | null>(null)
 const minute5TradeDate = ref(todayLabel())
 const advancedSections = ref<string[]>([])
@@ -724,6 +814,8 @@ const tableRows = computed(() => Object.entries(dataStatus.value?.tables ?? {}).
   ...table
 })))
 const datasetHealthRows = computed(() => dataStatus.value?.datasets_health ?? [])
+const qualityCalendarSources = computed(() => qualityCalendarReport.value?.sources ?? [])
+const qualityCalendarRows = computed(() => qualityCalendarReport.value?.dates ?? [])
 const quoteSnapshotQuality = computed(() => dataStatus.value?.quality?.quote_snapshots)
 const scheduledQuality = computed(() => dataStatus.value?.quality?.scheduled_checks)
 const strategyTradableCount = computed(() => dataStatus.value?.quality?.expected_strategy_tradable_symbols ?? dataStatus.value?.stock_summary.non_st_stock_count ?? 0)
@@ -1095,13 +1187,14 @@ const dataOpsSchedulerText = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const [reliabilityResult, monitorResult, quoteSnapshotMonitorResult, dataOpsSchedulerResult, dataOpsTasksResult, tailMlAuditResult] = await Promise.allSettled([
+    const [reliabilityResult, monitorResult, quoteSnapshotMonitorResult, dataOpsSchedulerResult, dataOpsTasksResult, tailMlAuditResult, qualityCalendarResult] = await Promise.allSettled([
       api.getDataReliability(),
       api.getMinute5Monitor(),
       api.getQuoteSnapshotMonitor(),
       api.getDataOpsScheduler(),
       api.getDataOpsTasks(),
-      api.getTailMlAudit()
+      api.getTailMlAudit(),
+      loadQualityCalendar()
     ])
     if (reliabilityResult.status !== 'fulfilled') throw reliabilityResult.reason
     const reliabilityResponse = reliabilityResult.value
@@ -1117,6 +1210,7 @@ async function loadData() {
     } else {
       tailMlAudit.value = null
     }
+    if (qualityCalendarResult.status === 'rejected') qualityCalendarReport.value = null
   } catch (error) {
     await loadDataStatusFallback()
     ElMessage.error(error instanceof Error ? error.message : '加载数据中心失败')
@@ -1209,12 +1303,43 @@ async function runDataOpsTaskOnce(taskKey: string) {
 
 async function refreshDataStatus() {
   try {
-    const reliabilityResponse = await api.getDataReliability()
+    const [reliabilityResponse] = await Promise.all([
+      api.getDataReliability(),
+      loadQualityCalendar()
+    ])
     reliabilityReport.value = reliabilityResponse
     dataStatus.value = reliabilityResponse.data_status
     repairPlan.value = reliabilityResponse.repair_plan
   } catch {
     await loadDataStatusFallback()
+  }
+}
+
+async function loadQualityCalendar() {
+  qualityCalendarLoading.value = true
+  try {
+    const [start, end] = qualityCalendarRange.value
+    qualityCalendarReport.value = await api.getDataQualityCalendar(start, end, qualityCalendarSourceKeys.value)
+  } finally {
+    qualityCalendarLoading.value = false
+  }
+}
+
+async function generateQualityCalendar() {
+  qualityCalendarGenerating.value = true
+  try {
+    const [start, end] = qualityCalendarRange.value
+    const result = await api.generateDataQualityCalendar({
+      start,
+      end,
+      source_keys: qualityCalendarSourceKeys.value.length ? qualityCalendarSourceKeys.value : null
+    })
+    ElMessage.success(`已生成 ${result.generated_dates} 个交易日、${result.rows} 条质量统计`)
+    await loadQualityCalendar()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '生成质量统计失败')
+  } finally {
+    qualityCalendarGenerating.value = false
   }
 }
 
@@ -1469,6 +1594,17 @@ function todayLabel() {
   return new Date().toLocaleDateString('en-CA')
 }
 
+function defaultQualityCalendarRange(): [string, string] {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - 30)
+  return [formatDateInput(start), formatDateInput(end)]
+}
+
+function formatDateInput(value: Date): string {
+  return value.toLocaleDateString('en-CA')
+}
+
 function jobStatusType(status: JobStatus) {
   if (status === 'success') return 'success'
   if (status === 'failed') return 'danger'
@@ -1563,6 +1699,36 @@ function dataOpsTaskProgressStatus(row: DataOpsTaskStatus) {
   if (row.status === 'failed' || row.status === 'stale') return 'exception'
   if (row.status === 'success') return 'success'
   return undefined
+}
+
+function qualityCalendarCell(row: DataQualityCalendarDateRow, sourceKey: string) {
+  return row.sources.find((cell) => cell.source_key === sourceKey) ?? null
+}
+
+function qualityCalendarStatusText(status: string) {
+  if (status === 'ok') return '正常'
+  if (status === 'warning') return '告警'
+  if (status === 'failed') return '失败'
+  if (status === 'catching_up') return '追赶中'
+  if (status === 'unchecked') return '未检查'
+  return status || '-'
+}
+
+function qualityCalendarCellClass(status?: string) {
+  return status ?? 'unchecked'
+}
+
+function qualityCalendarCellDetail(cell: DataQualityCalendarCell) {
+  const parts = [
+    `状态 ${qualityCalendarStatusText(cell.status)}`,
+    `覆盖 ${formatNumber(cell.covered_symbols)}/${formatNumber(cell.expected_symbols)}`,
+    `缺桶 ${formatNumber(cell.missing_buckets)}`,
+    `重复 ${formatNumber(cell.duplicate_rows)}`,
+    `最大断档 ${formatOptionalSeconds(cell.max_gap_seconds)}`,
+    `可修复性 ${cell.repairability}`
+  ]
+  if (cell.latest_time) parts.push(`最新 ${cell.latest_time}`)
+  return parts.join('，')
 }
 
 function dataOpsTaskScheduleValue(row: DataOpsTaskStatus) {
@@ -1856,6 +2022,71 @@ onBeforeUnmount(stopAutoRefresh)
   color: #303133;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.data-quality-calendar-detail {
+  grid-template-columns: 1fr;
+}
+
+.quality-calendar-cell {
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  color: var(--el-text-color-primary);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: center;
+  min-height: 54px;
+  padding: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.quality-calendar-cell small {
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quality-calendar-cell.ok {
+  background: var(--el-color-success-light-9);
+  border-color: var(--el-color-success-light-5);
+}
+
+.quality-calendar-cell.warning,
+.quality-calendar-cell.catching_up {
+  background: var(--el-color-warning-light-9);
+  border-color: var(--el-color-warning-light-5);
+}
+
+.quality-calendar-cell.failed {
+  background: var(--el-color-danger-light-9);
+  border-color: var(--el-color-danger-light-5);
+}
+
+.quality-calendar-cell.unchecked {
+  background: #f8fafc;
+  border-style: dashed;
+}
+
+.quality-calendar-selected {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  color: #606266;
+  display: flex;
+  font-size: 13px;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+}
+
+.quality-calendar-selected strong {
+  color: #303133;
 }
 
 .inline-control {
