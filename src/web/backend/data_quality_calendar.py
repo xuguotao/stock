@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -82,6 +83,7 @@ class DataQualityCalendarService:
     ) -> None:
         self._source = None if client is not None else ClickHouseStockDataSource(host=host, user=user, password=password, database=database)
         self._client = client
+        self._lock = threading.Lock()
 
     @property
     def client(self) -> Any:
@@ -89,8 +91,12 @@ class DataQualityCalendarService:
             self._client = self._source._client_instance()
         return self._client
 
+    def _execute(self, query: str, params: Any = None):
+        with self._lock:
+            return self.client.execute(query, params)
+
     def ensure_table(self) -> None:
-        self.client.execute(
+        self._execute(
             """
             create table if not exists data_quality_calendar (
                 trade_date Date,
@@ -134,7 +140,7 @@ class DataQualityCalendarService:
             for source_key in selected
         ]
         if rows:
-            self.client.execute(
+            self._execute(
                 """
                 insert into data_quality_calendar
                     (trade_date, source_key, source_name, status, latest_time, expected_symbols,
@@ -158,7 +164,7 @@ class DataQualityCalendarService:
         self.ensure_table()
         selected = _selected_source_keys(source_keys)
         trade_dates = self._trade_dates(start=start, end=end)
-        rows = self.client.execute(
+        rows = self._execute(
             """
             select trade_date, source_key, source_name, status, latest_time,
                    expected_symbols, covered_symbols, coverage_ratio, expected_buckets,
@@ -201,7 +207,7 @@ class DataQualityCalendarService:
 
     def _trade_dates(self, *, start: date, end: date) -> list[date]:
         try:
-            rows = self.client.execute(
+            rows = self._execute(
                 """
                 select date
                 from trade_calendar
@@ -211,7 +217,7 @@ class DataQualityCalendarService:
                 {"start": start, "end": end},
             )
         except Exception:
-            rows = self.client.execute(
+            rows = self._execute(
                 """
                 select date
                 from trade_calendar
@@ -223,7 +229,7 @@ class DataQualityCalendarService:
         return [_coerce_date(row[0]) for row in rows if _coerce_date(row[0]) is not None]
 
     def _expected_symbols(self) -> int:
-        rows = self.client.execute(
+        rows = self._execute(
             f"""
             select count()
             from stocks s
@@ -267,6 +273,7 @@ class DataQualityCalendarService:
                 trade_date=trade_date,
                 expected_symbols=expected_symbols,
                 expected_buckets=TRADING_MINUTES,
+                duplicate_extra_cols=("source",),
             )
         elif source_key == "stock_quote_snapshots_5m":
             metrics = self._single_table_metrics(
@@ -275,6 +282,7 @@ class DataQualityCalendarService:
                 trade_date=trade_date,
                 expected_symbols=expected_symbols,
                 expected_buckets=MINUTE5_BUCKETS,
+                duplicate_extra_cols=("source",),
             )
         else:
             metrics = self._health_snapshot_metrics(trade_date=trade_date)
@@ -294,6 +302,7 @@ class DataQualityCalendarService:
             missing_buckets=missing_buckets,
             duplicate_rows=int(metrics["duplicate_rows"]),
             max_gap_seconds=int(metrics["max_gap_seconds"]),
+            duplicate_label="失败检查" if source_key == "data_source_health" else "重复",
         )
         details = {
             "table": source.table,
@@ -333,8 +342,10 @@ class DataQualityCalendarService:
         expected_symbols: int,
         expected_buckets: int,
         include_gap: bool = False,
+        duplicate_extra_cols: tuple[str, ...] = (),
     ) -> dict[str, Any]:
-        rows = self.client.execute(
+        duplicate_cols = ", ".join(("symbol", time_col, *duplicate_extra_cols))
+        rows = self._execute(
             f"""
             select
                 count() as row_count,
@@ -347,7 +358,7 @@ class DataQualityCalendarService:
                         select symbol, {time_col}, count() as c
                         from {table}
                         where toDate({time_col}) = %(trade_date)s
-                        group by symbol, {time_col}
+                        group by {duplicate_cols}
                         having c > 1
                     )
                 ) as duplicate_rows
@@ -370,7 +381,7 @@ class DataQualityCalendarService:
         }
 
     def _health_snapshot_metrics(self, *, trade_date: date) -> dict[str, Any]:
-        rows = self.client.execute(
+        rows = self._execute(
             """
             select
                 count() as row_count,
@@ -397,7 +408,7 @@ class DataQualityCalendarService:
 
     def _max_gap_seconds(self, *, table: str, time_col: str, trade_date: date) -> int:
         try:
-            rows = self.client.execute(
+            rows = self._execute(
                 f"""
                 select {time_col}
                 from {table}
@@ -457,12 +468,13 @@ def _summary(
     missing_buckets: int,
     duplicate_rows: int,
     max_gap_seconds: int,
+    duplicate_label: str,
 ) -> str:
     parts = [f"覆盖 {covered_symbols}/{expected_symbols}" if expected_symbols else f"检查 {covered_symbols} 项"]
     if missing_buckets:
         parts.append(f"缺桶 {missing_buckets}")
     if duplicate_rows:
-        parts.append(f"重复/失败 {duplicate_rows}")
+        parts.append(f"{duplicate_label} {duplicate_rows}")
     if max_gap_seconds:
         parts.append(f"最大断档 {max_gap_seconds}s")
     return "，".join(parts)
