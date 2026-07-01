@@ -3,11 +3,212 @@
     <div class="page-header">
       <h1 class="page-title">数据中心</h1>
       <div class="toolbar">
+        <el-tag :type="qualityTagType(dataStatus?.quality?.status)" effect="plain">{{ overallReadiness }}</el-tag>
         <el-button type="primary" :loading="maintaining" @click="runDailyMaintenance">日常维护</el-button>
         <el-button :loading="loading" @click="loadData">刷新</el-button>
       </div>
     </div>
 
+    <div class="panel primary-health-panel">
+      <div class="section-header no-top-margin">
+        <div>
+          <h2 class="page-title">数据健康矩阵</h2>
+          <p class="section-subtitle">按数据源查看状态、完整度、最新时间、当前告警和修复入口</p>
+        </div>
+        <el-tag :type="qualityTagType(dataStatus?.quality?.status)" effect="plain">{{ overallReadiness }}</el-tag>
+      </div>
+      <el-table
+        :data="datasetHealthRows"
+        v-loading="loading"
+        row-key="key"
+        empty-text="数据源健康信息加载中或暂无返回"
+      >
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div class="dataset-health-detail">
+              <div><strong>数据来源</strong><span>{{ row.source }}</span></div>
+              <div><strong>更新机制</strong><span>{{ row.update_mechanism }}</span></div>
+              <div><strong>系统使用</strong><span>{{ row.consumer }}</span></div>
+              <div><strong>质量规则</strong><span>{{ datasetQualityRules(row).length ? datasetQualityRules(row).join('，') : '-' }}</span></div>
+              <div><strong>底层表</strong><span class="mono-text">{{ row.table }}</span></div>
+              <div><strong>告警</strong><span>{{ row.issues.length ? row.issues.join('，') : '无' }}</span></div>
+              <div>
+                <strong>数据修复</strong>
+                <span>
+                  <el-button
+                    size="small"
+                    type="primary"
+                    plain
+                    :disabled="!datasetActionableRepairKeys(row).length"
+                    :loading="repairingHealth"
+                    @click="repairDatasetHealth(row)"
+                  >
+                    修复此数据源
+                  </el-button>
+                </span>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="数据源" min-width="170">
+          <template #default="{ row }">
+            <div class="dataset-health-name">
+              <strong>{{ row.name }}</strong>
+              <small>{{ row.category }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态/完整度" min-width="210">
+          <template #default="{ row }">
+            <div class="dataset-health-range">
+              <span>
+                <el-tag :type="qualityTagType(row.status)" effect="plain" size="small">{{ row.status }}</el-tag>
+              </span>
+              <small>{{ datasetHealthStatusSummary(row) }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="最新/范围" min-width="220">
+          <template #default="{ row }">
+            <div class="dataset-health-range">
+              <span>{{ row.latest ?? '-' }}</span>
+              <small>{{ datasetHealthRangeText(row) }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前告警" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.issues.length ? row.issues.join('，') : '无' }}</template>
+        </el-table-column>
+        <el-table-column label="修复" width="120" align="center">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              type="primary"
+              plain
+              :disabled="!datasetActionableRepairKeys(row).length"
+              :loading="repairingHealth"
+              @click="repairDatasetHealth(row)"
+            >
+              数据修复
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div class="panel data-ops-task-panel">
+      <div class="section-header no-top-margin">
+        <div>
+          <h2 class="page-title">更新任务状态</h2>
+          <p class="section-subtitle">由 ClickHouse 配置和状态表驱动，runner 可独立部署到其他服务器</p>
+        </div>
+      </div>
+      <el-table
+        :data="dataOpsTaskRows"
+        row-key="task_key"
+        :expand-row-keys="expandedDataOpsTaskKeys"
+        empty-text="暂无更新任务状态"
+        @expand-change="onDataOpsTaskExpandChange"
+      >
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div class="dataset-health-detail data-ops-task-detail">
+              <div><strong>任务逻辑</strong><span>{{ dataOpsTaskDetail(row.task_key).logic }}</span></div>
+              <div><strong>触发规则</strong><span>{{ dataOpsTaskDetail(row.task_key).trigger }}</span></div>
+              <div><strong>读写数据</strong><span>{{ dataOpsTaskDetail(row.task_key).data }}</span></div>
+              <div><strong>执行依赖</strong><span>{{ dataOpsTaskDetail(row.task_key).dependency }}</span></div>
+              <div><strong>检查方式</strong><span>{{ dataOpsTaskDetail(row.task_key).verification }}</span></div>
+              <div><strong>异常判断</strong><span>{{ dataOpsTaskDetail(row.task_key).failure }}</span></div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="任务" min-width="170">
+          <template #default="{ row }">
+            <div class="dataset-health-name">
+              <strong>{{ dataOpsTaskTitle(row.task_key) }}</strong>
+              <small class="mono-text">{{ row.task_key }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag :type="dataOpsTaskTagType(row.status)" effect="plain">{{ row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="启用" width="90" align="center">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.enabled"
+              :loading="dataOpsTaskChanging === row.task_key"
+              @change="(value: boolean) => updateDataOpsTaskEnabled(row, value)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="调度配置" min-width="210">
+          <template #default="{ row }">
+            <div class="inline-control data-ops-schedule-control">
+              <el-time-picker
+                v-if="row.schedule_kind === 'daily_time'"
+                :model-value="dataOpsTaskScheduleValue(row)"
+                format="HH:mm"
+                value-format="HH:mm"
+                placeholder="执行时间"
+                style="width: 112px"
+                @change="(value: string) => saveDataOpsTaskSchedule(row, value)"
+              />
+              <el-input-number
+                v-else
+                :model-value="dataOpsTaskScheduleValue(row)"
+                :min="5"
+                :max="86400"
+                :step="5"
+                controls-position="right"
+                style="width: 120px"
+                @change="(value: number | undefined) => saveDataOpsTaskSchedule(row, value)"
+              />
+              <small>{{ row.schedule_kind === 'daily_time' ? '执行时间' : '间隔秒数' }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="最近运行" min-width="220">
+          <template #default="{ row }">
+            <div class="dataset-health-range">
+              <span>{{ row.last_finished_at ?? row.last_started_at ?? '-' }}</span>
+              <small>{{ row.last_error || dataOpsTaskResultText(row) }}</small>
+              <el-progress
+                :percentage="row.progress_percent ?? (row.status === 'success' ? 100 : 0)"
+                :status="dataOpsTaskProgressStatus(row)"
+              />
+              <small>{{ row.progress_message ?? row.progress_stage ?? '等待进度' }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="心跳/Runner" min-width="180">
+          <template #default="{ row }">
+            <div class="dataset-health-range">
+              <span>{{ row.heartbeat_at ?? '-' }}</span>
+              <small>{{ row.runner_id ?? '-' }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="130" align="center">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              plain
+              :disabled="row.status === 'running'"
+              :loading="dataOpsTaskChanging === row.task_key"
+              @click="runDataOpsTaskOnce(row.task_key)"
+            >
+              手动运行一次
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <el-collapse v-model="advancedSections" class="advanced-diagnostics">
+      <el-collapse-item title="高级诊断" name="advanced">
     <div class="panel overview-panel">
       <div class="section-header no-top-margin">
         <div>
@@ -231,59 +432,6 @@
           </div>
         </div>
       </div>
-    </div>
-
-    <div class="panel">
-      <div class="section-header no-top-margin">
-        <div>
-          <h2 class="page-title">数据健康矩阵</h2>
-          <p class="section-subtitle">按数据资产查看来源、更新机制、完整度、服务功能和当前告警</p>
-        </div>
-        <el-tag effect="plain">{{ datasetHealthRows.length }}</el-tag>
-      </div>
-      <el-table
-        :data="datasetHealthRows"
-        row-key="key"
-        empty-text="暂无数据健康信息"
-      >
-        <el-table-column type="expand">
-          <template #default="{ row }">
-            <div class="dataset-health-detail">
-              <div><strong>数据源</strong><span>{{ row.source }}</span></div>
-              <div><strong>更新机制</strong><span>{{ row.update_mechanism }}</span></div>
-              <div><strong>服务功能</strong><span>{{ row.consumer }}</span></div>
-              <div><strong>底层表</strong><span class="mono-text">{{ row.table }}</span></div>
-              <div><strong>告警</strong><span>{{ row.issues.length ? row.issues.join('，') : '无' }}</span></div>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="数据" min-width="170">
-          <template #default="{ row }">
-            <div class="dataset-health-name">
-              <strong>{{ row.name }}</strong>
-              <small>{{ row.category }}</small>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="update_mechanism" label="更新机制" min-width="260" show-overflow-tooltip />
-        <el-table-column prop="consumer" label="服务功能" min-width="240" show-overflow-tooltip />
-        <el-table-column label="最新/范围" min-width="210">
-          <template #default="{ row }">
-            <div class="dataset-health-range">
-              <span>{{ row.latest ?? '-' }}</span>
-              <small>{{ datasetHealthRangeText(row) }}</small>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="完整度" width="150">
-          <template #default="{ row }">{{ datasetHealthCoverageText(row) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag :type="qualityTagType(row.status)" effect="plain">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
     </div>
 
     <div class="panel stock-db-panel">
@@ -535,13 +683,15 @@
       </div>
     </div>
 
+      </el-collapse-item>
+    </el-collapse>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataReliabilityReport, type DataStatusResponse, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus, type TailMlAuditResponse } from '../api/client'
+import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataOpsTaskStatus, type DataReliabilityReport, type DataStatusResponse, type JobRecord, type JobStatus, type Minute5MonitorStatus, type QuoteSnapshotMonitorStatus, type TailMlAuditResponse } from '../api/client'
 
 const dataStatus = ref<DataStatusResponse | null>(null)
 const loading = ref(false)
@@ -558,10 +708,14 @@ const healthRepairJob = ref<JobRecord | null>(null)
 const minute5Monitor = ref<Minute5MonitorStatus | null>(null)
 const quoteSnapshotMonitor = ref<QuoteSnapshotMonitorStatus | null>(null)
 const dataOpsScheduler = ref<DataOpsSchedulerStatus | null>(null)
+const dataOpsTasks = ref<DataOpsTaskStatus[]>([])
+const expandedDataOpsTaskKeys = ref<string[]>([])
+const dataOpsTaskChanging = ref<string | null>(null)
 const repairPlan = ref<DataHealthRepairPlan | null>(null)
 const reliabilityReport = ref<DataReliabilityReport | null>(null)
 const tailMlAudit = ref<TailMlAuditResponse | null>(null)
 const minute5TradeDate = ref(todayLabel())
+const advancedSections = ref<string[]>([])
 let operationalRefreshTimer: number | null = null
 let dataStatusRefreshTimer: number | null = null
 
@@ -729,6 +883,7 @@ const operationRows = computed(() => [
     detail: dataOpsSchedulerText.value
   }
 ])
+const dataOpsTaskRows = computed(() => dataOpsTasks.value)
 const consumerReadinessRows = computed(() => {
   const quality = dataStatus.value?.quality
   const dailyOk = quality?.scheduled_checks?.freshness.status === 'ok' && quality?.scheduled_checks?.today_anomalies.status === 'ok'
@@ -940,11 +1095,12 @@ const dataOpsSchedulerText = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const [reliabilityResult, monitorResult, quoteSnapshotMonitorResult, dataOpsSchedulerResult, tailMlAuditResult] = await Promise.allSettled([
+    const [reliabilityResult, monitorResult, quoteSnapshotMonitorResult, dataOpsSchedulerResult, dataOpsTasksResult, tailMlAuditResult] = await Promise.allSettled([
       api.getDataReliability(),
       api.getMinute5Monitor(),
       api.getQuoteSnapshotMonitor(),
       api.getDataOpsScheduler(),
+      api.getDataOpsTasks(),
       api.getTailMlAudit()
     ])
     if (reliabilityResult.status !== 'fulfilled') throw reliabilityResult.reason
@@ -955,12 +1111,14 @@ async function loadData() {
     if (monitorResult.status === 'fulfilled') minute5Monitor.value = monitorResult.value
     if (quoteSnapshotMonitorResult.status === 'fulfilled') quoteSnapshotMonitor.value = quoteSnapshotMonitorResult.value
     if (dataOpsSchedulerResult.status === 'fulfilled') dataOpsScheduler.value = dataOpsSchedulerResult.value
+    if (dataOpsTasksResult.status === 'fulfilled') dataOpsTasks.value = dataOpsTasksResult.value.items
     if (tailMlAuditResult.status === 'fulfilled') {
       tailMlAudit.value = tailMlAuditResult.value
     } else {
       tailMlAudit.value = null
     }
   } catch (error) {
+    await loadDataStatusFallback()
     ElMessage.error(error instanceof Error ? error.message : '加载数据中心失败')
   } finally {
     loading.value = false
@@ -980,16 +1138,72 @@ async function loadRepairPlan() {
 
 async function refreshOperationalStatus() {
   try {
-    const [monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse] = await Promise.all([
+    const [monitorResponse, quoteSnapshotMonitorResponse, dataOpsSchedulerResponse, dataOpsTasksResponse] = await Promise.all([
       api.getMinute5Monitor(),
       api.getQuoteSnapshotMonitor(),
-      api.getDataOpsScheduler()
+      api.getDataOpsScheduler(),
+      api.getDataOpsTasks()
     ])
     minute5Monitor.value = monitorResponse
     quoteSnapshotMonitor.value = quoteSnapshotMonitorResponse
     dataOpsScheduler.value = dataOpsSchedulerResponse
+    dataOpsTasks.value = dataOpsTasksResponse.items
   } catch {
     // Keep the last known status on transient refresh failures.
+  }
+}
+
+async function updateDataOpsTaskEnabled(row: DataOpsTaskStatus, enabled: boolean) {
+  dataOpsTaskChanging.value = row.task_key
+  try {
+    const response = await api.updateDataOpsTaskConfig(row.task_key, {
+      enabled,
+      schedule_kind: row.schedule_kind,
+      schedule_config: row.schedule_config
+    })
+    dataOpsTasks.value = dataOpsTasks.value.map(item => item.task_key === row.task_key ? response.item : item)
+    ElMessage.success(enabled ? '任务已启用' : '任务已停用')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '更新任务配置失败')
+  } finally {
+    dataOpsTaskChanging.value = null
+  }
+}
+
+function onDataOpsTaskExpandChange(_row: DataOpsTaskStatus, expandedRows: DataOpsTaskStatus[]) {
+  expandedDataOpsTaskKeys.value = expandedRows.map(row => row.task_key)
+}
+
+async function saveDataOpsTaskSchedule(row: DataOpsTaskStatus, value: string | number | undefined) {
+  if (value === undefined || value === null || value === '') return
+  const scheduleConfig = dataOpsTaskScheduleConfig(row, value)
+  dataOpsTaskChanging.value = row.task_key
+  try {
+    const response = await api.updateDataOpsTaskConfig(row.task_key, {
+      enabled: row.enabled,
+      schedule_kind: row.schedule_kind,
+      schedule_config: scheduleConfig
+    })
+    dataOpsTasks.value = dataOpsTasks.value.map(item => item.task_key === row.task_key ? response.item : item)
+    ElMessage.success('调度配置已保存')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存调度配置失败')
+  } finally {
+    dataOpsTaskChanging.value = null
+  }
+}
+
+async function runDataOpsTaskOnce(taskKey: string) {
+  dataOpsTaskChanging.value = taskKey
+  try {
+    await api.runDataOpsTaskOnce(taskKey)
+    ElMessage.success('已提交手动运行请求')
+    const response = await api.getDataOpsTasks()
+    dataOpsTasks.value = response.items
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '提交任务失败')
+  } finally {
+    dataOpsTaskChanging.value = null
   }
 }
 
@@ -1000,8 +1214,13 @@ async function refreshDataStatus() {
     dataStatus.value = reliabilityResponse.data_status
     repairPlan.value = reliabilityResponse.repair_plan
   } catch {
-    // Keep the last known data status on transient refresh failures.
+    await loadDataStatusFallback()
   }
+}
+
+async function loadDataStatusFallback() {
+  dataStatus.value = await api.getDataStatus()
+  repairPlan.value = await api.getDataHealthRepairPlan()
 }
 
 async function loadMinute5Monitor() {
@@ -1159,6 +1378,37 @@ async function repairDataHealth() {
   }
 }
 
+async function repairDatasetHealth(row: NonNullable<DataStatusResponse['datasets_health']>[number]) {
+  const actionableKeys = datasetActionableRepairKeys(row)
+  if (!actionableKeys.length) {
+    ElMessage.info('当前数据源没有可自动执行的修复项')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将执行 ${row.name} 的 ${actionableKeys.length} 个自动修复项：${actionableKeys.join('，')}。`,
+      '数据修复',
+      { type: 'warning', confirmButtonText: '开始修复', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+
+  repairingHealth.value = true
+  try {
+    const response = await api.repairDataHealth({ action_keys: actionableKeys })
+    const completed = await pollHealthRepairJob(response.job_id)
+    if (completed) {
+      ElMessage.success(`${row.name} 修复完成`)
+      await loadData()
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : `${row.name} 修复失败`)
+  } finally {
+    repairingHealth.value = false
+  }
+}
+
 async function pollSyncJob(jobId: string) {
   for (let attempt = 0; attempt < 600; attempt += 1) {
     syncJob.value = await api.getJob(jobId)
@@ -1227,10 +1477,105 @@ function jobStatusType(status: JobStatus) {
 }
 
 function qualityTagType(status?: string) {
-  if (status === 'ok') return 'success'
+  if (status === 'ok' || status === 'success' || status === 'idle' || status === 'skipped') return 'success'
   if (status === 'warning') return 'warning'
-  if (status === 'missing' || status === 'unavailable') return 'danger'
+  if (status === 'missing' || status === 'unavailable' || status === 'failed' || status === 'stale') return 'danger'
   return 'info'
+}
+
+function dataOpsTaskTagType(status?: string) {
+  if (status === 'running') return 'primary'
+  if (status === 'disabled') return 'info'
+  return qualityTagType(status)
+}
+
+function dataOpsTaskTitle(taskKey: string) {
+  const titles: Record<string, string> = {
+    post_close_maintenance: '日终维护',
+    minute5_intraday_sync: '5m 分钟线同步',
+    quote_snapshot_capture: '行情快照采集',
+    quote_rollup_refresh: '快照聚合刷新',
+    quality_snapshot: '数据质量快照'
+  }
+  return titles[taskKey] ?? taskKey
+}
+
+function dataOpsTaskDetail(taskKey: string) {
+  const details: Record<string, { logic: string; trigger: string; data: string; dependency: string; verification: string; failure: string }> = {
+    post_close_maintenance: {
+      logic: '收盘后串联补齐 5m 分钟线、聚合修复日线、同步指数日线、写入质量快照；可作为日终数据闭环入口。',
+      trigger: '交易日到达配置时间后执行一次，默认 15:10；也支持手动运行一次。',
+      data: '读取 minute5_kline、daily_kline、index_daily、stocks；写入 daily_kline、index_daily、data_source_health、data_ops_task_runs、data_ops_task_heartbeats。',
+      dependency: '依赖 ClickHouse、5m 同步函数、日线聚合函数、指数日线同步函数和质量检查函数。',
+      verification: '查看任务进度、last_result、data_source_health 行数，以及健康矩阵中日线/分钟线/指数日线状态。',
+      failure: '同步函数异常、ClickHouse 不可用、质量检查失败或 runner 心跳停留在 running 超过阈值。'
+    },
+    minute5_intraday_sync: {
+      logic: '交易时段按配置间隔检查当日 5m K 线缺口，只同步 minute5_kline 未达到当前目标时间或 bar 数不足的标的，为尾盘策略、个股趋势和日终日线聚合提供分钟数据。',
+      trigger: '交易日上午和下午时段按 interval_seconds 执行，默认 60 秒；非交易日和非交易时段跳过。',
+      data: '读取 ClickHouse stocks 作为股票池，默认排除 ST；最近 7 天优先腾讯行情，失败或无数据后回退新浪、AKShare；历史日期优先新浪，再腾讯、AKShare；写入 ClickHouse minute5_kline，并记录 data_ops 心跳和运行结果。',
+      dependency: '依赖腾讯 ifzq.gtimg.cn 5m K 线接口、新浪分钟行情、AKShare/东方财富分钟行情、ClickHouse stocks 和 minute5_kline。',
+      verification: '检查 minute5_kline 最新桶、覆盖标的数、缺失标的样本、inserted_rows、remaining_symbols 和任务进度。',
+      failure: '行情源无数据、网络超时、单轮执行超过 interval_seconds 后调度被后续轮次挤压、ClickHouse 写入失败或长时间 running 无心跳。'
+    },
+    quote_snapshot_capture: {
+      logic: '交易时段按高频间隔采集实时行情快照，为盘中状态、快照聚合和尾盘快速数据模式提供输入。',
+      trigger: '交易时段按 interval_seconds 执行，默认 10 秒；非交易时段跳过。',
+      data: '读取 Tencent 实时行情；写入 stock_quote_snapshots，并记录 data_ops 心跳和运行结果。',
+      dependency: '依赖实时行情源、网络稳定性、chunk 配置和 ClickHouse 写入能力。',
+      verification: '检查 stock_quote_snapshots 最新时间、覆盖标的数、缺失轮次和任务进度。',
+      failure: '行情源超时、chunk 过大导致失败、快照缺失率过高或 ClickHouse 写入失败。'
+    },
+    quote_rollup_refresh: {
+      logic: '把原始行情快照合并刷新成 1m/5m 聚合层，供分钟图、尾盘快照兜底和质量检查使用。',
+      trigger: '交易时段按 interval_seconds 执行，默认 60 秒；也可手动运行。',
+      data: '读取 stock_quote_snapshots；写入或优化 stock_quote_snapshots_1m、stock_quote_snapshots_5m。',
+      dependency: '依赖原始快照已有数据、ClickHouse 聚合/优化能力。',
+      verification: '检查 1m/5m 聚合最新桶、重复键、覆盖标的数和快照数据体系健康。',
+      failure: '原始快照为空、聚合表重复异常、OPTIMIZE 失败或 ClickHouse 不可用。'
+    },
+    quality_snapshot: {
+      logic: '按配置间隔执行数据质量检查，并把健康矩阵核心结果写入历史快照，方便趋势化观察。',
+      trigger: '按 interval_seconds 执行，默认 300 秒；可手动运行一次。',
+      data: '读取 ClickHouse system tables、daily_kline、minute5_kline、stock_quote_snapshots、聚合表等；写入 data_source_health。',
+      dependency: '依赖质量检查 SQL、ClickHouse 读写能力和数据源健康规则。',
+      verification: '检查 data_source_health 新增行数、健康矩阵状态和任务 last_result.rows。',
+      failure: '质量 SQL 执行失败、ClickHouse 不可用、写入 data_source_health 失败或 runner 心跳超时。'
+    }
+  }
+  return details[taskKey] ?? {
+    logic: '未登记任务逻辑。',
+    trigger: '按 ClickHouse 中的任务配置执行。',
+    data: '查看任务配置和运行结果确认读写范围。',
+    dependency: '查看 runner 日志确认依赖。',
+    verification: '查看任务状态、运行结果和心跳。',
+    failure: '查看最近错误和 runner 日志。'
+  }
+}
+
+function dataOpsTaskResultText(row: DataOpsTaskStatus) {
+  const keys = Object.keys(row.last_result ?? {})
+  if (!keys.length) return '暂无结果'
+  return keys.slice(0, 3).join('，')
+}
+
+function dataOpsTaskProgressStatus(row: DataOpsTaskStatus) {
+  if (row.status === 'failed' || row.status === 'stale') return 'exception'
+  if (row.status === 'success') return 'success'
+  return undefined
+}
+
+function dataOpsTaskScheduleValue(row: DataOpsTaskStatus) {
+  if (row.schedule_kind === 'daily_time') {
+    return typeof row.schedule_config.time === 'string' ? row.schedule_config.time : '15:10'
+  }
+  const value = Number(row.schedule_config.interval_seconds ?? 60)
+  return Number.isFinite(value) ? value : 60
+}
+
+function dataOpsTaskScheduleConfig(row: DataOpsTaskStatus, value: string | number) {
+  if (row.schedule_kind === 'daily_time') return { ...row.schedule_config, time: String(value) }
+  return { ...row.schedule_config, interval_seconds: Number(value) }
 }
 
 function formatNumber(value: number) {
@@ -1285,6 +1630,26 @@ function datasetHealthCoverageText(row: NonNullable<DataStatusResponse['datasets
     : formatNumber(row.symbols)
   const ratioText = row.coverage_ratio == null ? '-' : formatPercent(row.coverage_ratio)
   return `${symbolText}，${ratioText}`
+}
+
+function datasetHealthStatusSummary(row: NonNullable<DataStatusResponse['datasets_health']>[number]) {
+  const issueText = row.issues.length ? `告警 ${formatNumber(row.issues.length)} 项` : '无告警'
+  return `${datasetHealthCoverageText(row)}，${issueText}`
+}
+
+function datasetQualityRules(row: NonNullable<DataStatusResponse['datasets_health']>[number]) {
+  return row.quality_rules ?? []
+}
+
+function datasetRepairActionKeys(row: NonNullable<DataStatusResponse['datasets_health']>[number]) {
+  return row.repair_action_keys ?? []
+}
+
+function datasetActionableRepairKeys(row: NonNullable<DataStatusResponse['datasets_health']>[number]) {
+  const configuredKeys = datasetRepairActionKeys(row)
+  return (repairPlan.value?.actions ?? [])
+    .filter((action) => action.auto_repair && configuredKeys.includes(action.key))
+    .map((action) => action.key)
 }
 
 function sleep(ms: number) {

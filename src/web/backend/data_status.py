@@ -61,6 +61,7 @@ QUOTE_MARKET_MORNING_START = time(9, 30)
 QUOTE_MARKET_MORNING_END = time(11, 30)
 QUOTE_MARKET_AFTERNOON_START = time(13, 0)
 QUOTE_MARKET_AFTERNOON_END = time(15, 0)
+_NON_ST_NAME_PREDICATE = "not match(upper(s.name), '^(\\\\*ST|S\\\\*ST|SST|ST)([^A-Z]|$)')"
 QUOTE_SNAPSHOT_ROLLUPS = {
     "1m": {"table": "stock_quote_snapshots_1m", "bucket_seconds": 60},
     "5m": {"table": "stock_quote_snapshots_5m", "bucket_seconds": 300},
@@ -132,7 +133,12 @@ def inspect_clickhouse_database(
     as_of: date | None = None,
 ) -> dict[str, Any]:
     """Return read-only coverage metrics for the ClickHouse stock database."""
-    source = ClickHouseStockDataSource(host=host, user=user, password=password, database=database)
+    source = ClickHouseStockDataSource(
+        host=host if host is not None else "localhost" if client is not None else None,
+        user=user,
+        password=password,
+        database=database if database is not None else "stock" if client is not None else None,
+    )
     db_info = {
         "type": "clickhouse",
         "host": source.host,
@@ -279,6 +285,8 @@ def _dataset_health_rows(
             "source": "ClickHouse / stocks",
             "update_mechanism": "旧库同步或基础信息同步任务更新，作为股票池和 ST 过滤基准。",
             "consumer": "全市场扫描、股票名称展示、非 ST 标的池",
+            "quality_rules": ["基础表存在", "股票总数", "非 ST 识别"],
+            "repair_action_keys": [],
             "expected_symbols": expected_all,
             "status": "ok" if tables.get("stocks", {}).get("row_count", 0) else "missing",
             "issues": [],
@@ -291,6 +299,8 @@ def _dataset_health_rows(
             "source": "ClickHouse / trade_calendar",
             "update_mechanism": "基础数据同步维护交易日，非交易日采集任务会自动跳过。",
             "consumer": "日常维护、分钟采集、快照采集、回测交易日判断",
+            "quality_rules": ["基础表存在", "交易日连续性", "最新交易日判断"],
+            "repair_action_keys": [],
             "status": "ok" if tables.get("trade_calendar", {}).get("row_count", 0) else "missing",
             "issues": [],
         },
@@ -302,6 +312,8 @@ def _dataset_health_rows(
             "source": "ClickHouse / daily_kline",
             "update_mechanism": "日常维护补齐；当分钟线先到位时可由 5m 聚合修复最新交易日。",
             "consumer": "尾盘选股、个股趋势、策略复盘、回测、因子计算",
+            "quality_rules": ["最新交易日覆盖率", "重复日线主键", "OHLC 合法性", "日线新鲜度"],
+            "repair_action_keys": ["daily_from_minute5", "daily_history_backfill", "daily_historical_invalid_prices"],
             "quality_key": ("daily",),
             "expected_symbols": (quality.get("daily") or {}).get("expected_symbols", non_st_count),
             "issues": _dataset_issues("daily_kline", quality),
@@ -314,6 +326,8 @@ def _dataset_health_rows(
             "source": "ClickHouse / minute1_kline",
             "update_mechanism": "可由分钟源补齐，当前主要用于更细粒度盘中分析和后续因子挖掘。",
             "consumer": "盘中趋势、精细化复盘、短周期因子",
+            "quality_rules": ["基础表存在", "最新时间", "标的覆盖"],
+            "repair_action_keys": [],
             "expected_symbols": non_st_count,
             "status": _table_presence_status(tables.get("minute1_kline")),
             "issues": [],
@@ -326,6 +340,8 @@ def _dataset_health_rows(
             "source": "ClickHouse / minute5_kline",
             "update_mechanism": "交易时段持续更新，手动更新可补指定交易日；尾盘读取可用快照 5m 聚合兜底。",
             "consumer": "今日尾盘选股、尾盘回测、个股趋势分钟图、策略复盘",
+            "quality_rules": ["最新完整 5m 桶覆盖率", "当前最新桶覆盖率", "重复分钟主键"],
+            "repair_action_keys": ["minute5_sync"],
             "quality_key": ("minute5",),
             "expected_symbols": (quality.get("minute5") or {}).get("expected_symbols", non_st_count),
             "issues": _dataset_issues("minute5_kline", quality),
@@ -338,6 +354,8 @@ def _dataset_health_rows(
             "source": "腾讯快照 / ClickHouse",
             "update_mechanism": "交易时段自动守护，按约 10 秒节拍全市场快照采集，原始数据保留短周期。",
             "consumer": "今日尾盘预演、实时价格、快照聚合、盘中可信度检查",
+            "quality_rules": ["最新快照覆盖率", "10 秒采集节拍", "原始快照缺失轮次"],
+            "repair_action_keys": ["quote_snapshot_sync"],
             "quality_key": ("quote_snapshots", "raw"),
             "expected_symbols": quote_quality.get("expected_symbols", non_st_count),
         },
@@ -349,6 +367,8 @@ def _dataset_health_rows(
             "source": "stock_quote_snapshots 聚合",
             "update_mechanism": "快照采集任务每轮写入后自动滚动聚合，保留长周期。",
             "consumer": "盘中复盘、短线统计、快照降采样",
+            "quality_rules": ["最新聚合桶覆盖率", "聚合重复主键", "保留周期"],
+            "repair_action_keys": ["quote_snapshot_sync", "quote_rollup_optimize"],
             "quality_key": ("quote_snapshots", "rollups", "1m"),
             "expected_symbols": quote_quality.get("expected_symbols", non_st_count),
         },
@@ -360,6 +380,8 @@ def _dataset_health_rows(
             "source": "stock_quote_snapshots 聚合",
             "update_mechanism": "快照采集任务每轮写入后自动滚动聚合，可作为 5m 分钟线实时兜底。",
             "consumer": "尾盘选股 5m 兜底、个股趋势、盘中验证",
+            "quality_rules": ["最新聚合桶覆盖率", "聚合重复主键", "5m 兜底可用性"],
+            "repair_action_keys": ["quote_snapshot_sync", "quote_rollup_optimize"],
             "quality_key": ("quote_snapshots", "rollups", "5m"),
             "expected_symbols": quote_quality.get("expected_symbols", non_st_count),
         },
@@ -371,6 +393,8 @@ def _dataset_health_rows(
             "source": "AKShare 指数日线 / ClickHouse",
             "update_mechanism": "日常维护或专项补齐同步指数行情。",
             "consumer": "市场环境、基准对照、策略过滤",
+            "quality_rules": ["基础表存在", "指数覆盖", "最新交易日"],
+            "repair_action_keys": [],
             "expected_symbols": 10,
             "status": _table_presence_status(tables.get("index_daily")),
             "issues": [],
@@ -383,6 +407,8 @@ def _dataset_health_rows(
             "source": "ClickHouse / financials",
             "update_mechanism": "低频同步财报数据，按报告期更新。",
             "consumer": "基本面过滤、估值分析、后续因子研究",
+            "quality_rules": ["基础表存在", "报告期覆盖", "标的覆盖"],
+            "repair_action_keys": [],
             "expected_symbols": expected_all,
             "status": _table_presence_status(tables.get("financials")),
             "issues": [],
@@ -395,6 +421,8 @@ def _dataset_health_rows(
             "source": "基金净值 CSV / ClickHouse",
             "update_mechanism": "基金尾盘建议生成时先刷新净值 CSV 并导入 ClickHouse，再刷新当日代理行情。",
             "consumer": "基金尾盘建议、基金复盘",
+            "quality_rules": ["净值表存在", "净值日期不落后代理行情", "基金覆盖"],
+            "repair_action_keys": [],
             "status": fund_tail_nav_status,
             "issues": fund_tail_nav_issues,
         },
@@ -406,6 +434,8 @@ def _dataset_health_rows(
             "source": "代理指数/ETF 行情 / ClickHouse",
             "update_mechanism": "基金尾盘数据导入任务写入，用于估计基金盘中表现。",
             "consumer": "基金尾盘建议、代理趋势判断",
+            "quality_rules": ["代理行情存在", "最新日期", "基金覆盖"],
+            "repair_action_keys": [],
             "status": _table_presence_status(tables.get("fund_tail_proxy")),
             "issues": [],
         },
@@ -417,6 +447,8 @@ def _dataset_health_rows(
             "source": "基准指数行情 / ClickHouse",
             "update_mechanism": "基金尾盘数据导入任务写入，用于对照市场基准。",
             "consumer": "基金尾盘相对强弱、基金复盘",
+            "quality_rules": ["基准行情存在", "最新日期"],
+            "repair_action_keys": [],
             "status": _table_presence_status(tables.get("fund_tail_benchmark")),
             "issues": [],
         },
@@ -428,6 +460,8 @@ def _dataset_health_rows(
             "source": "数据中心质量检查落库",
             "update_mechanism": "每次质量检查或日常维护后写入，保留历史健康度。",
             "consumer": "数据中心、任务健康追踪、异常复盘",
+            "quality_rules": ["质量快照表存在", "最近检查结果", "定时检查告警"],
+            "repair_action_keys": ["quality_snapshot"],
             "status": _table_presence_status(tables.get("data_source_health")),
             "issues": scheduled.get("issues", []),
         },
@@ -460,6 +494,8 @@ def _dataset_health_row(
         "source": definition["source"],
         "update_mechanism": definition["update_mechanism"],
         "consumer": definition["consumer"],
+        "quality_rules": [str(rule) for rule in definition.get("quality_rules", [])],
+        "repair_action_keys": [str(key) for key in definition.get("repair_action_keys", [])],
         "latest": _dataset_latest(table, quality_row),
         "range": table.get("date_range"),
         "rows": int(table.get("row_count") or quality_row.get("row_count") or 0),
@@ -879,7 +915,7 @@ def _daily_completeness_check(
         latest_date = _as_date(latest)
         window_start = latest_date - timedelta(days=window_days - 1) if latest_date else None
         rows = client.execute(
-            """
+            f"""
             select count() as affected_symbols
             from (
                 select s.symbol, countDistinct(k.date) as daily_days
@@ -893,7 +929,7 @@ def _daily_completeness_check(
                     on s.symbol = k.symbol
                     and k.date >= %(window_start)s
                     and k.date <= %(latest)s
-                where upper(s.name) not like '%%ST%%'
+                where {_NON_ST_NAME_PREDICATE}
                     and s.name not like '%%退市%%'
                     and (
                         toDateOrNull(nullIf(s.list_date, '')) is null
@@ -911,7 +947,7 @@ def _daily_completeness_check(
         )
         affected = int(rows[0][0] or 0) if rows else 0
         samples = client.execute(
-            """
+            f"""
             select s.symbol, any(s.name) as name, countDistinct(k.date) as daily_days
             from stocks s
             inner join daily_kline active
@@ -923,7 +959,7 @@ def _daily_completeness_check(
                 on s.symbol = k.symbol
                 and k.date >= %(window_start)s
                 and k.date <= %(latest)s
-            where upper(s.name) not like '%%ST%%'
+            where {_NON_ST_NAME_PREDICATE}
                 and s.name not like '%%退市%%'
                 and (
                     toDateOrNull(nullIf(s.list_date, '')) is null
@@ -1458,7 +1494,7 @@ def _missing_symbol_samples(
 ) -> list[dict[str, str]]:
     if not latest:
         return []
-    non_st_filter = "and upper(s.name) not like '%%ST%%'" if non_st_only else ""
+    non_st_filter = f"and {_NON_ST_NAME_PREDICATE}" if non_st_only else ""
     active_join = ""
     active_filter = ""
     if active_daily_only:
@@ -1496,7 +1532,7 @@ def _latest_symbol_count(
 ) -> int:
     if not latest:
         return 0
-    non_st_filter = "and upper(s.name) not like '%%ST%%'" if non_st_only else ""
+    non_st_filter = f"and {_NON_ST_NAME_PREDICATE}" if non_st_only else ""
     rows = client.execute(
         f"""
         select uniqExact(k.symbol)
@@ -1524,7 +1560,7 @@ def _latest_complete_intraday_bucket(
     latest_dt = _coerce_datetime(latest)
     if latest_dt is None:
         return None, 0
-    non_st_filter = "and upper(s.name) not like '%%ST%%'" if non_st_only else ""
+    non_st_filter = f"and {_NON_ST_NAME_PREDICATE}" if non_st_only else ""
     min_symbols = max(1, int(expected * min_coverage))
     try:
         rows = client.execute(

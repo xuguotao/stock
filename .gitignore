@@ -75,3 +75,4 @@ build/
 anaconda_projects/
 .worktrees/
 .runtime/
+logs/

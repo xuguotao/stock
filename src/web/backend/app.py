@@ -32,6 +32,8 @@ from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
 from src.web.backend.data_sync import DEFAULT_REMOTE_STOCK_DB, sync_stock_database
 from src.web.backend.data_ops_scheduler import DataOpsScheduler, DataOpsSchedulerConfig
+from src.data_ops.models import DataOpsTaskConfig
+from src.data_ops.repository import ClickHouseDataOpsRepository
 from src.web.backend.data_status import (
     inspect_clickhouse_database,
     inspect_stock_database,
@@ -113,6 +115,14 @@ class DataHealthRepairRequest(BaseModel):
     action_keys: list[str] | None = None
 
 
+class DataOpsTaskConfigRequest(BaseModel):
+    enabled: bool
+    schedule_kind: str
+    schedule_config: dict[str, Any] = Field(default_factory=dict)
+    max_runtime_seconds: int = Field(default=1800, ge=1)
+    stale_after_seconds: int = Field(default=300, ge=1)
+
+
 class Minute5MonitorRequest(BaseModel):
     trade_date: date | None = None
     interval_seconds: int = Field(default=60, ge=30, le=3600)
@@ -174,20 +184,21 @@ def create_app(
     stock_db_sync_runner=sync_stock_database,
     minute5_sync_runner=sync_clickhouse_minute5_kline,
     minute5_monitor_session_checker=None,
-    auto_start_minute5_monitor: bool = True,
+    auto_start_minute5_monitor: bool = False,
     minute5_auto_interval_seconds: int = 60,
     quote_snapshot_sync_runner=sync_clickhouse_quote_snapshots,
     quote_snapshot_session_checker=None,
-    auto_start_quote_snapshot_monitor: bool = True,
+    auto_start_quote_snapshot_monitor: bool = False,
     quote_snapshot_interval_seconds: int = 10,
     data_status_runner=inspect_clickhouse_database,
     daily_repair_runner=sync_clickhouse_daily_from_minute5,
     index_daily_sync_runner=sync_clickhouse_index_daily,
     quality_snapshot_writer=persist_clickhouse_quality_snapshot,
     quote_rollup_optimizer=optimize_quote_snapshot_rollups,
-    auto_start_data_ops_scheduler: bool = True,
+    auto_start_data_ops_scheduler: bool = False,
     data_ops_interval_seconds: int = 60,
     data_ops_maintenance_runner=None,
+    data_ops_repository=None,
     clickhouse_dataset_builder=build_clickhouse_research_dataset,
     tail_signal_repository=None,
     tail_ml_audit_runner=audit_tail_ml_data,
@@ -299,6 +310,7 @@ def create_app(
     app.state.auto_start_quote_snapshot_monitor = auto_start_quote_snapshot_monitor
     app.state.quote_snapshot_interval_seconds = quote_snapshot_interval_seconds
     app.state.auto_start_data_ops_scheduler = auto_start_data_ops_scheduler
+    app.state.data_ops_repository = data_ops_repository or ClickHouseDataOpsRepository()
 
     def _auto_data_maintenance() -> dict[str, Any]:
         payload = DailyMaintenanceRequest(run_strategy_review=False)
@@ -393,12 +405,14 @@ def create_app(
     def get_data_reliability() -> dict[str, Any]:
         status = app.state.data_status_runner()
         repair_plan = build_data_health_repair_plan(status)
+        task_statuses = _safe_data_ops_task_statuses(app.state.data_ops_repository)
         report = build_data_reliability_report(
             status=status,
             minute5_monitor=app.state.minute5_monitor.status(),
             quote_monitor=app.state.quote_snapshot_monitor.status(),
             scheduler=app.state.data_ops_scheduler.status(),
             repair_plan=repair_plan,
+            data_ops_tasks=task_statuses,
         )
         return {**report, "data_status": status, "repair_plan": repair_plan}
 
@@ -554,9 +568,46 @@ def create_app(
     def stop_quote_snapshot_monitor() -> dict[str, Any]:
         return app.state.quote_snapshot_monitor.stop()
 
+    @app.get("/api/data/ops-tasks")
+    def get_data_ops_tasks() -> dict[str, Any]:
+        repository = app.state.data_ops_repository
+        repository.ensure_tables()
+        repository.seed_default_configs()
+        return {"items": [_data_ops_status_item(status) for status in repository.list_task_statuses()]}
+
+    @app.put("/api/data/ops-tasks/{task_key}/config")
+    def update_data_ops_task_config(task_key: str, payload: DataOpsTaskConfigRequest) -> dict[str, Any]:
+        repository = app.state.data_ops_repository
+        configs = {config.task_key: config for config in repository.list_task_configs()}
+        if task_key not in configs:
+            raise HTTPException(status_code=404, detail="Data ops task not found")
+        existing = configs[task_key]
+        repository.upsert_task_config(
+            DataOpsTaskConfig(
+                task_key=task_key,
+                enabled=payload.enabled,
+                schedule_kind=payload.schedule_kind,
+                schedule_config=payload.schedule_config,
+                max_runtime_seconds=payload.max_runtime_seconds,
+                stale_after_seconds=payload.stale_after_seconds,
+                manual_trigger=existing.manual_trigger,
+                manual_triggered_at=existing.manual_triggered_at,
+            )
+        )
+        statuses = {status.task_key: status for status in repository.list_task_statuses()}
+        return {"item": _data_ops_status_item(statuses[task_key])}
+
+    @app.post("/api/data/ops-tasks/{task_key}/run-once")
+    def run_data_ops_task_once(task_key: str) -> dict[str, Any]:
+        repository = app.state.data_ops_repository
+        if task_key not in {config.task_key for config in repository.list_task_configs()}:
+            raise HTTPException(status_code=404, detail="Data ops task not found")
+        repository.request_manual_run(task_key)
+        return {"task_key": task_key, "manual_trigger": True}
+
     @app.get("/api/data/ops-scheduler")
     def get_data_ops_scheduler_status() -> dict[str, Any]:
-        return app.state.data_ops_scheduler.status()
+        return {**app.state.data_ops_scheduler.status(), "deprecated": True}
 
     @app.post("/api/data/ops-scheduler/start")
     def start_data_ops_scheduler() -> dict[str, Any]:
@@ -1908,6 +1959,45 @@ def _maintenance_verification(status: dict[str, Any]) -> dict[str, Any]:
         "minute5_complete_symbols": health.get("minute5_symbol_count", 0),
         "status": health.get("status", "unknown"),
     }
+
+
+def _safe_data_ops_task_statuses(repository) -> list[dict[str, Any]]:
+    try:
+        repository.ensure_tables()
+        repository.seed_default_configs()
+        return [_data_ops_status_item(status) for status in repository.list_task_statuses()]
+    except Exception as exc:  # noqa: BLE001 - dashboard should still show data health when task store is unavailable.
+        return [{"task_key": "data_ops", "enabled": False, "status": "unavailable", "last_error": str(exc)}]
+
+
+def _data_ops_status_item(status) -> dict[str, Any]:
+    return {
+        "task_key": status.task_key,
+        "enabled": status.enabled,
+        "status": status.status,
+        "schedule_kind": status.schedule_kind,
+        "schedule_config": status.schedule_config,
+        "last_started_at": _iso_or_none(status.last_started_at),
+        "last_finished_at": _iso_or_none(status.last_finished_at),
+        "next_run_at": _iso_or_none(status.next_run_at),
+        "last_result": status.last_result or {},
+        "last_error": status.last_error or "",
+        "heartbeat_at": _iso_or_none(status.heartbeat_at),
+        "runner_id": status.runner_id,
+        "progress_percent": status.progress_percent,
+        "progress_stage": status.progress_stage,
+        "progress_message": status.progress_message,
+        "progress_processed": status.progress_processed,
+        "progress_total": status.progress_total,
+    }
+
+
+def _iso_or_none(value) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat(sep=" ", timespec="seconds")
+    return str(value)
 
 
 def _fund_tail_degraded_response(error: Exception, **payload: Any) -> dict[str, Any]:

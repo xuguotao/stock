@@ -12,18 +12,20 @@ def build_data_reliability_report(
     quote_monitor: dict[str, Any],
     scheduler: dict[str, Any],
     repair_plan: dict[str, Any],
+    data_ops_tasks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Summarize data stability, completeness, freshness, and automation."""
     quality = status.get("quality") or {}
     quote_quality = quality.get("quote_snapshots") or {}
     quote_raw = quote_quality.get("raw") or {}
+    task_map = {row.get("task_key"): row for row in (data_ops_tasks or [])}
     rows = [
         _row(
             key="daily",
             name="日线行情",
             source="ClickHouse daily_kline；最新日线缺口可由 5m 聚合修复",
             update="日终维护执行 5m 同步后聚合补日线",
-            automation=_automation_status(scheduler),
+            automation=_task_automation_status(task_map.get("post_close_maintenance")) or _automation_status(scheduler),
             health=str((quality.get("daily") or {}).get("status") or "unknown"),
             latest=(quality.get("daily") or {}).get("latest_date"),
             coverage=_coverage_text(quality.get("daily")),
@@ -35,7 +37,7 @@ def build_data_reliability_report(
             name="5m 分钟线",
             source="Tencent 5m 优先；Sina 长窗口；AKShare 兜底；写入 ClickHouse minute5_kline",
             update="交易时段持续更新；日终维护全市场补齐；选股前可自动补齐",
-            automation="running" if minute5_monitor.get("running") else "stopped",
+            automation=_task_automation_status(task_map.get("minute5_intraday_sync")) or ("running" if minute5_monitor.get("running") else "stopped"),
             health=str((quality.get("minute5") or {}).get("status") or "unknown"),
             latest=(quality.get("minute5") or {}).get("latest_datetime"),
             coverage=_coverage_text(quality.get("minute5")),
@@ -47,7 +49,7 @@ def build_data_reliability_report(
             name="行情快照",
             source="Tencent 实时行情；写入 stock_quote_snapshots 并刷新 1m/5m rollup",
             update="交易时段 10s 级持续采集；支持动态 chunk 降载",
-            automation="running" if quote_monitor.get("running") else "stopped",
+            automation=_task_automation_status(task_map.get("quote_snapshot_capture")) or ("running" if quote_monitor.get("running") else "stopped"),
             health=str(quote_quality.get("status") or "unknown"),
             latest=quote_raw.get("latest_datetime"),
             coverage=_coverage_text(quote_raw, expected_fallback=quote_quality.get("expected_symbols")),
@@ -59,7 +61,7 @@ def build_data_reliability_report(
             name="健康检查与快照",
             source="ClickHouse system tables + 质量 SQL 检查",
             update="页面按需检查；日终维护写入 data_source_health 快照",
-            automation=_automation_status(scheduler),
+            automation=_task_automation_status(task_map.get("quality_snapshot")) or _automation_status(scheduler),
             health=str(quality.get("status") or "unknown"),
             latest=(status.get("health") or {}).get("daily_latest_date"),
             coverage=f"{len(quality.get('issues') or [])} 个阻塞告警，{len(quality.get('ignored_issues') or [])} 个已忽略",
@@ -113,6 +115,19 @@ def _automation_status(scheduler: dict[str, Any]) -> str:
     if scheduler.get("running") and ((scheduler.get("tasks") or {}).get("post_close_maintenance") or {}).get("enabled"):
         return "scheduled"
     return "stopped"
+
+
+def _task_automation_status(task: dict[str, Any] | None) -> str | None:
+    if not task:
+        return None
+    if not task.get("enabled"):
+        return "stopped"
+    status = str(task.get("status") or "")
+    if status in {"running", "success", "idle", "skipped"}:
+        return "scheduled"
+    if status in {"failed", "stale", "unavailable"}:
+        return "stopped"
+    return "scheduled"
 
 
 def _coverage_text(row: dict[str, Any] | None, *, expected_fallback: Any = None) -> str:

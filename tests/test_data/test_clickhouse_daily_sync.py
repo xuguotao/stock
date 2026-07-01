@@ -63,6 +63,8 @@ def test_sync_clickhouse_daily_from_minute5_derives_missing_daily_rows() -> None
     assert any("group by symbol, datetime" in query for query in executed)
     assert any("daily_kline_repair_locks" in query for query in executed)
     assert any("where bars.symbol not in" in query for query in executed)
+    assert any("sum(bars.close * bars.volume * 100)" in query for query in executed)
+    assert not any("sum(bars.amount) as amount" in query for query in executed)
 
 
 def test_sync_clickhouse_daily_from_minute5_skips_when_trade_date_lock_is_held() -> None:

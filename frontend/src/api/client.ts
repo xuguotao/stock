@@ -234,6 +234,8 @@ export interface DataStatusResponse {
     source: string
     update_mechanism: string
     consumer: string
+    quality_rules: string[]
+    repair_action_keys: string[]
     latest?: string | null
     range?: {
       start: string | null
@@ -530,6 +532,38 @@ export interface DataOpsSchedulerStatus {
   last_finished_at: string | null
   last_result: Record<string, unknown> | null
   last_error: string | null
+}
+
+export interface DataOpsTaskStatus {
+  task_key: string
+  enabled: boolean
+  status: string
+  schedule_kind: string
+  schedule_config: Record<string, unknown>
+  last_started_at: string | null
+  last_finished_at: string | null
+  next_run_at: string | null
+  last_result: Record<string, unknown>
+  last_error: string
+  heartbeat_at: string | null
+  runner_id: string | null
+  progress_percent: number | null
+  progress_stage: string | null
+  progress_message: string | null
+  progress_processed: number | null
+  progress_total: number | null
+}
+
+export interface DataOpsTasksResponse {
+  items: DataOpsTaskStatus[]
+}
+
+export interface DataOpsTaskConfigPayload {
+  enabled: boolean
+  schedule_kind: string
+  schedule_config: Record<string, unknown>
+  max_runtime_seconds?: number
+  stale_after_seconds?: number
 }
 
 export interface DailyMaintenancePayload {
@@ -991,6 +1025,20 @@ export const api = {
   },
   getDataOpsScheduler() {
     return request<DataOpsSchedulerStatus>('/api/data/ops-scheduler')
+  },
+  getDataOpsTasks() {
+    return request<DataOpsTasksResponse>('/api/data/ops-tasks')
+  },
+  updateDataOpsTaskConfig(taskKey: string, payload: DataOpsTaskConfigPayload) {
+    return request<{ item: DataOpsTaskStatus }>(`/api/data/ops-tasks/${encodeURIComponent(taskKey)}/config`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    })
+  },
+  runDataOpsTaskOnce(taskKey: string) {
+    return request<{ task_key: string; manual_trigger: boolean }>(`/api/data/ops-tasks/${encodeURIComponent(taskKey)}/run-once`, {
+      method: 'POST'
+    })
   },
   getDataHealthRepairPlan() {
     return request<DataHealthRepairPlan>('/api/data/health-repair-plan')
