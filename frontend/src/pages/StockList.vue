@@ -115,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api, type StockListItem } from '../api/client'
 
 const emit = defineEmits<{ (e: 'open-trend', symbol: string): void }>()
@@ -168,6 +168,10 @@ const filtered = computed(() => {
     if (status.value === 'delisted' && !isDelisted(row.name)) return false
     return true
   })
+})
+
+watch([keyword, industries, markets, status], () => {
+  page.value = 1
 })
 
 const paged = computed(() => {
