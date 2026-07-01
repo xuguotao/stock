@@ -1,5 +1,45 @@
 <template>
   <div class="stock-list" v-loading="loading">
+    <div class="stat-header">
+      <div class="stat-group">
+        <div class="stat-group-title">数据健康</div>
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="stat-value">{{ items.length }}</div>
+            <div class="stat-label">股票总数</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">{{ latestDaily || '—' }}</div>
+            <div class="stat-label">最新交易日</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value fresh">{{ countFresh }}</div>
+            <div class="stat-label">日线新鲜</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value stale">{{ countStale }}</div>
+            <div class="stat-label">日线陈旧(含 ST {{ countSt }})</div>
+          </div>
+        </div>
+      </div>
+      <div class="stat-group">
+        <div class="stat-group-title">宇宙画像</div>
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="stat-value">{{ countNonSt }} / <span class="st">ST {{ countSt }}</span> / <span class="delisted">退市 {{ countDelisted }}</span></div>
+            <div class="stat-label">非 ST / ST / 退市</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">{{ countSH }} / {{ countSZ }}</div>
+            <div class="stat-label">沪市 / 深市</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">{{ industryCount }}</div>
+            <div class="stat-label">行业数</div>
+          </div>
+        </div>
+      </div>
+    </div>
     <el-form :inline="true" class="filters">
       <el-form-item label="代码 / 名称">
         <el-input v-model="keyword" placeholder="代码 / 名称" clearable style="width: 200px" />
@@ -184,6 +224,17 @@ const countNonSt = computed(
 )
 const countSt = computed(() => items.value.filter((i) => i.is_st).length)
 const countDelisted = computed(() => items.value.filter((i) => isDelisted(i.name)).length)
+const countFresh = computed(
+  () => items.value.filter((i) => i.last_daily_date === latestDaily.value).length
+)
+const countStale = computed(
+  () => items.value.filter((i) => i.last_daily_date && i.last_daily_date < latestDaily.value).length
+)
+const countSH = computed(() => items.value.filter((i) => i.market === 'SH').length)
+const countSZ = computed(() => items.value.filter((i) => i.market === 'SZ').length)
+const industryCount = computed(
+  () => new Set(items.value.map((i) => i.industry).filter(Boolean)).size
+)
 
 function onPageSizeChange(size: number) {
   pageSize.value = size
@@ -237,6 +288,55 @@ load()
 
 .stale {
   color: #f56c6c;
+}
+
+.stat-header {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+
+.stat-group {
+  flex: 1;
+}
+
+.stat-group-title {
+  font-size: 13px;
+  color: #909399;
+  margin-bottom: 8px;
+}
+
+.stat-cards {
+  display: flex;
+  gap: 16px;
+}
+
+.stat-card {
+  min-width: 96px;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.4;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #909399;
+}
+
+.fresh {
+  color: #67c23a;
+}
+
+.st {
+  color: #f56c6c;
+}
+
+.delisted {
+  color: #909399;
 }
 
 .pager {
