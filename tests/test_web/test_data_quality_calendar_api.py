@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 
+from fastapi.testclient import TestClient
+
+from src.web.backend.app import create_app
 from src.web.backend.data_quality_calendar import (
     QUALITY_SOURCE_KEYS,
     DataQualityCalendarService,
@@ -57,6 +61,71 @@ class FakeQualityCalendarClient(FakeCalendarClient):
         return []
 
 
+class StoredQualityCalendarClient(FakeCalendarClient):
+    def execute(self, query, params=None):
+        self.commands.append((query, params))
+        normalized = " ".join(query.lower().split())
+        if "create table if not exists data_quality_calendar" in normalized:
+            return []
+        if "from trade_calendar" in normalized:
+            return [(date(2026, 7, 1),), (date(2026, 7, 2),)]
+        if "from data_quality_calendar final" in normalized:
+            return [
+                (
+                    date(2026, 7, 1),
+                    "daily_kline",
+                    "股票日线",
+                    "ok",
+                    datetime(2026, 7, 1),
+                    2,
+                    2,
+                    1.0,
+                    1,
+                    1,
+                    0,
+                    0,
+                    0,
+                    "可修复",
+                    "覆盖 2/2",
+                    json.dumps({"table": "daily_kline"}, ensure_ascii=False),
+                    datetime(2026, 7, 1, 15, 10),
+                ),
+                (
+                    date(2026, 7, 1),
+                    "minute5_kline",
+                    "5m 分钟线",
+                    "warning",
+                    datetime(2026, 7, 1, 15, 0),
+                    2,
+                    2,
+                    1.0,
+                    48,
+                    40,
+                    8,
+                    0,
+                    0,
+                    "可修复",
+                    "覆盖 2/2，缺桶 8",
+                    json.dumps({"table": "minute5_kline"}, ensure_ascii=False),
+                    datetime(2026, 7, 1, 15, 10),
+                ),
+            ]
+        return []
+
+
+class FakeQualityCalendarService:
+    def list(self, *, start, end, source_keys=None):
+        return {
+            "range": {"start": start.isoformat(), "end": end.isoformat()},
+            "source_keys": source_keys or ["daily_kline"],
+            "sources": [{"key": "daily_kline", "name": "股票日线", "table": "daily_kline"}],
+            "dates": [{"trade_date": start.isoformat(), "overall_status": "unchecked", "checked_at": None, "sources": []}],
+        }
+
+    def generate(self, *, start, end, source_keys=None):
+        return {"generated_dates": 1, "rows": 1}
+
+
 def test_data_quality_calendar_ensure_table_creates_replacing_table() -> None:
     client = FakeCalendarClient()
     service = DataQualityCalendarService(client=client)
@@ -87,3 +156,35 @@ def test_generate_day_writes_core_quality_sources() -> None:
     minute5 = next(row for row in rows if row[1] == "minute5_kline")
     assert minute5[3] == "warning"
     assert minute5[10] > 0
+
+
+def test_list_quality_calendar_returns_matrix_rows() -> None:
+    client = StoredQualityCalendarClient()
+    service = DataQualityCalendarService(client=client)
+
+    payload = service.list(start=date(2026, 7, 1), end=date(2026, 7, 2))
+
+    assert payload["range"] == {"start": "2026-07-01", "end": "2026-07-02"}
+    assert payload["source_keys"] == list(QUALITY_SOURCE_KEYS)
+    assert payload["dates"][0]["trade_date"] == "2026-07-02"
+    assert payload["dates"][0]["overall_status"] == "unchecked"
+    assert payload["dates"][1]["trade_date"] == "2026-07-01"
+    assert payload["dates"][1]["overall_status"] == "warning"
+    assert payload["dates"][1]["sources"][0]["source_key"] == "daily_kline"
+
+
+def test_data_quality_calendar_api_lists_and_generates(tmp_path) -> None:
+    app = create_app(
+        db_path=tmp_path / "jobs.sqlite3",
+        stock_db_path=tmp_path / "stock.db",
+        data_quality_calendar_service=FakeQualityCalendarService(),
+    )
+    client = TestClient(app)
+
+    listed = client.get("/api/data/quality-calendar?start=2026-07-01&end=2026-07-01")
+    generated = client.post("/api/data/quality-calendar/generate", json={"start": "2026-07-01", "end": "2026-07-01"})
+
+    assert listed.status_code == 200
+    assert listed.json()["dates"][0]["overall_status"] == "unchecked"
+    assert generated.status_code == 200
+    assert generated.json() == {"generated_dates": 1, "rows": 1}
