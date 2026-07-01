@@ -9,9 +9,11 @@
 ## 当前文档
 
 - `ARCHITECTURE.md`：当前系统架构和模块边界。
+- `superpowers/reviews/2026-07-01-stock-vs-daily-count-gap-analysis.md`：股票总数(5207)与日线覆盖数(4960)差异的根因排查(ST 口径 + 06-17 起 ST 日线断流)。
 - `fund_tail_prediction_todo.md`：基金尾盘预测的当前优化待办。
 - `notes/`：不绑定单次实施计划的长期领域笔记。
 - `superpowers/README.md`：新一轮项目优化的工作区说明。
+- `superpowers/specs/2026-07-01-data-quality-calendar-design.md`：数据质量日历 UI 设计。
 
 ## 当前实施计划
 

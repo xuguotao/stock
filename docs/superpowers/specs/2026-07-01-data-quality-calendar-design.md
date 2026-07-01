@@ -69,7 +69,7 @@
 
 ## 方案一：日历优先
 
-![日历优先](assets/data-quality-calendar/calendar-first.png)
+![日历优先](../../assets/data-quality-calendar/calendar-first.png)
 
 特点：
 
@@ -95,7 +95,7 @@
 
 ## 方案二：热力矩阵优先
 
-![热力矩阵优先](assets/data-quality-calendar/heatmap-matrix.png)
+![热力矩阵优先](../../assets/data-quality-calendar/heatmap-matrix.png)
 
 特点：
 
@@ -125,7 +125,7 @@
 
 ## 方案三：运维台优先
 
-![运维台优先](assets/data-quality-calendar/operations-console.png)
+![运维台优先](../../assets/data-quality-calendar/operations-console.png)
 
 特点：
 
