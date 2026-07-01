@@ -67,7 +67,7 @@
 
 验收：
 
-- `rg "10\\.211\\.49\\.42|stock123" src scripts config` 只允许在测试 fixture 或文档示例中出现。
+- `rg "10\\.211\\.49\\.42|[REDACTED]" src scripts config` 只允许在测试 fixture 或文档示例中出现。
 - 单元测试通过 monkeypatch env 覆盖连接配置。
 
 ## Phase 3：数据同步任务骨架统一

@@ -13,7 +13,7 @@
 
 ## Smoke 设置
 
-- ClickHouse：`10.211.49.42 / stock`
+- ClickHouse：`<PRIVATE_CLICKHOUSE_HOST> / stock`
 - 股票池：策略可交易池前 300 个标的，非 ST，沪深市场。
 - 样本窗口：2026-03-30 至 2026-06-17。
 - 样本量：97,200 行，54 个交易日。

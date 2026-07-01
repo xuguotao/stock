@@ -358,9 +358,9 @@ class TestDataAggregator:
         reset_settings()
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("STOCK_CLICKHOUSE_HOST", "10.211.49.42")
+        monkeypatch.setenv("STOCK_CLICKHOUSE_HOST", "<PRIVATE_CLICKHOUSE_HOST>")
         monkeypatch.setenv("STOCK_CLICKHOUSE_USER", "default")
-        monkeypatch.setenv("STOCK_CLICKHOUSE_PASSWORD", "stock123")
+        monkeypatch.setenv("STOCK_CLICKHOUSE_PASSWORD", "[REDACTED]")
         monkeypatch.setenv("STOCK_CLICKHOUSE_DATABASE", "stock")
         db_path = tmp_path / "data" / "stock.db"
         db_path.parent.mkdir()

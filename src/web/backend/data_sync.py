@@ -12,7 +12,7 @@ from typing import Any, Callable
 ProgressCallback = Callable[[int, str, str], None]
 
 
-DEFAULT_REMOTE_STOCK_DB = "augustine@10.211.49.42:/home/augustine/Dev/stock/data/stock.db"
+DEFAULT_REMOTE_STOCK_DB = "augustine@<PRIVATE_CLICKHOUSE_HOST>:/home/augustine/Dev/stock/data/stock.db"
 
 
 def sync_stock_database(

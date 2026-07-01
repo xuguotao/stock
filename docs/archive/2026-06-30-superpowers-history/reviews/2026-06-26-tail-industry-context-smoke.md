@@ -6,7 +6,7 @@ Smoke test after adding live daily feature alignment and industry context featur
 
 Environment:
 
-- ClickHouse: `STOCK_CLICKHOUSE_HOST=10.211.49.42`, database `stock`
+- ClickHouse: `STOCK_CLICKHOUSE_HOST=<PRIVATE_CLICKHOUSE_HOST>`, database `stock`
 - Universe: first 300 symbols from shared strategy tradable universe
 - Sample window: `2026-03-30` to `2026-06-17`
 - Training: walk-forward, `train_days=30`, `validation_days=10`, `top_n=2`

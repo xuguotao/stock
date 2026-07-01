@@ -80,7 +80,7 @@
 
 证据：
 
-- `src/data/clickhouse_source.py` 默认 host/password 为 `10.211.49.42` / `stock123`。
+- `src/data/clickhouse_source.py` 默认 host/password 为 `<PRIVATE_CLICKHOUSE_HOST>` / `[REDACTED]`。
 - `src/data/clickhouse_minute5_sync.py`、`clickhouse_minute1_sync.py`、`clickhouse_daily_sync.py`、`clickhouse_table_maintenance.py`、`src/web/backend/data_status.py`、多个 `scripts/` 仍有同类默认值。
 - `ClickHouseStockDataSource.from_env()` 已存在，但不是唯一入口。
 - `.env.example` 尚未形成完整 ClickHouse 配置样例。
