@@ -35,7 +35,7 @@ TABLE_SPECS = {
 }
 
 CLICKHOUSE_TABLE_SPECS = {
-    "stocks": {"symbol_col": "symbol"},
+    "stocks": {"symbol_col": "symbol", "date_col": "updated_at"},
     "trade_calendar": {"date_col": "date"},
     "daily_kline": {"date_col": "date", "symbol_col": "symbol"},
     "minute1_kline": {"date_col": "datetime", "symbol_col": "symbol"},
@@ -283,9 +283,9 @@ def _dataset_health_rows(
             "category": "基础数据",
             "table": "stocks",
             "source": "ClickHouse / stocks",
-            "update_mechanism": "旧库同步或基础信息同步任务更新，作为股票池和 ST 过滤基准。",
+            "update_mechanism": "股票主数据同步任务（stock_master_sync）按调度从腾讯股票池接口拉取并更新，作为股票池和 ST 过滤基准。",
             "consumer": "全市场扫描、股票名称展示、非 ST 标的池",
-            "quality_rules": ["基础表存在", "股票总数", "非 ST 识别"],
+            "quality_rules": ["基础表存在"],
             "repair_action_keys": [],
             "expected_symbols": expected_all,
             "status": "ok" if tables.get("stocks", {}).get("row_count", 0) else "missing",
