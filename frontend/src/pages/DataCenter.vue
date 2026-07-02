@@ -34,18 +34,18 @@
               <div><strong>告警</strong><span>{{ row.issues.length ? row.issues.join('，') : '无' }}</span></div>
               <div>
                 <strong>数据修复</strong>
-                <span>
+                <span v-if="datasetActionableRepairKeys(row).length">
                   <el-button
                     size="small"
                     type="primary"
                     plain
-                    :disabled="!datasetActionableRepairKeys(row).length"
                     :loading="repairingHealth"
                     @click="repairDatasetHealth(row)"
                   >
                     修复此数据源
                   </el-button>
                 </span>
+                <span v-else>-</span>
               </div>
             </div>
           </template>
@@ -81,16 +81,18 @@
         </el-table-column>
         <el-table-column label="修复" width="120" align="center">
           <template #default="{ row }">
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              :disabled="!datasetActionableRepairKeys(row).length"
-              :loading="repairingHealth"
-              @click="repairDatasetHealth(row)"
-            >
-              数据修复
-            </el-button>
+            <template v-if="datasetActionableRepairKeys(row).length">
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :loading="repairingHealth"
+                @click="repairDatasetHealth(row)"
+              >
+                数据修复
+              </el-button>
+            </template>
+            <span v-else class="muted-text">-</span>
           </template>
         </el-table-column>
       </el-table>
