@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from src.data.models import StockInfo
 from src.data.clickhouse_stock_master_sync import sync_clickhouse_stock_master
@@ -42,6 +42,6 @@ def test_sync_clickhouse_stock_master_preserves_existing_enrichment_fields() -> 
     insert_query, rows = client.commands[-1]
     assert "insert into stocks" in insert_query.lower()
     assert rows == [
-        ("000001", "平安银行", "银行", "SZ", date(1991, 4, 3), "2026-07-02 10:30:00"),
-        ("920699", "海达尔", "", "BJ", None, "2026-07-02 10:30:00"),
+        ("000001", "平安银行", "银行", "SZ", "1991-04-03", datetime(2026, 7, 2, 10, 30, 0)),
+        ("920699", "海达尔", "", "BJ", "", datetime(2026, 7, 2, 10, 30, 0)),
     ]

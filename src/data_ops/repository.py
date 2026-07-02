@@ -366,7 +366,7 @@ class ClickHouseDataOpsRepository:
             select run_id, task_key, status, started_at, finished_at, duration_seconds, result, error
             from data_ops_task_runs
             where task_key = %(task_key)s
-            order by started_at desc
+            order by started_at desc, isNull(finished_at) asc, finished_at desc
             limit 1
             """,
             {"task_key": task_key},

@@ -21,7 +21,7 @@ def sync_clickhouse_stock_master(
     """
     clickhouse = client or _default_client()
     data_source = source or _default_source()
-    updated_at = checked_at or datetime.now().replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+    updated_at = _datetime_value(checked_at) if checked_at else datetime.now().replace(microsecond=0)
     _ensure_table(clickhouse)
     existing = _existing_enrichment(clickhouse)
     stocks = data_source.fetch_stock_list()
@@ -38,7 +38,7 @@ def sync_clickhouse_stock_master(
         "source": getattr(data_source, "name", "tencent"),
         "fetched_rows": len(stocks),
         "inserted_rows": len(rows),
-        "preserved_enrichment_rows": sum(1 for row in rows if row[2] or row[4] is not None),
+        "preserved_enrichment_rows": sum(1 for row in rows if row[2] or row[4]),
     }
 
 
@@ -50,7 +50,7 @@ def _ensure_table(client: Any) -> None:
             name String,
             industry String,
             market LowCardinality(String),
-            list_date Nullable(Date),
+            list_date String,
             updated_at DateTime
         )
         engine = ReplacingMergeTree(updated_at)
@@ -93,14 +93,26 @@ def _stock_rows(stocks: list[StockInfo], existing: dict[str, dict[str, Any]], up
         rows.append(
             (
                 code,
-                stock.name,
+                str(stock.name or ""),
                 stock.industry or current.get("industry", ""),
                 _market_from_symbol(stock.symbol) or current.get("market", ""),
-                stock.list_date or current.get("list_date"),
+                _list_date_text(stock.list_date or current.get("list_date")),
                 updated_at,
             )
         )
     return rows
+
+
+def _list_date_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())
+    return str(value or "")
+
+
+def _datetime_value(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace(" ", "T"))
 
 
 def _market_from_symbol(symbol: str) -> str:
