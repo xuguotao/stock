@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -247,7 +248,7 @@ class DataQualityCalendarService:
                 time_col="date",
                 trade_date=trade_date,
                 expected_symbols=expected_symbols,
-                expected_buckets=1,
+                expected_buckets=_expected_buckets_for(source_key, trade_date, checked_at),
             )
         elif source_key == "minute5_kline":
             metrics = self._single_table_metrics(
@@ -255,7 +256,7 @@ class DataQualityCalendarService:
                 time_col="datetime",
                 trade_date=trade_date,
                 expected_symbols=expected_symbols,
-                expected_buckets=MINUTE5_BUCKETS,
+                expected_buckets=_expected_buckets_for(source_key, trade_date, checked_at),
             )
         elif source_key == "stock_quote_snapshots":
             metrics = self._single_table_metrics(
@@ -263,7 +264,7 @@ class DataQualityCalendarService:
                 time_col="snapshot_at",
                 trade_date=trade_date,
                 expected_symbols=expected_symbols,
-                expected_buckets=QUOTE_RAW_BUCKETS_10S,
+                expected_buckets=_expected_buckets_for(source_key, trade_date, checked_at),
                 include_gap=True,
             )
         elif source_key == "stock_quote_snapshots_1m":
@@ -272,7 +273,7 @@ class DataQualityCalendarService:
                 time_col="bucket_start",
                 trade_date=trade_date,
                 expected_symbols=expected_symbols,
-                expected_buckets=TRADING_MINUTES,
+                expected_buckets=_expected_buckets_for(source_key, trade_date, checked_at),
                 duplicate_extra_cols=("source",),
             )
         elif source_key == "stock_quote_snapshots_5m":
@@ -281,7 +282,7 @@ class DataQualityCalendarService:
                 time_col="bucket_start",
                 trade_date=trade_date,
                 expected_symbols=expected_symbols,
-                expected_buckets=MINUTE5_BUCKETS,
+                expected_buckets=_expected_buckets_for(source_key, trade_date, checked_at),
                 duplicate_extra_cols=("source",),
             )
         else:
@@ -446,6 +447,8 @@ def _status_from_metrics(
     duplicate_rows: int,
     source_key: str,
 ) -> str:
+    if expected_buckets == 0:
+        return "catching_up" if observed_buckets == 0 else "warning"
     if observed_buckets == 0 or (expected_symbols > 0 and covered_symbols == 0):
         return "failed"
     missing_buckets = max(0, expected_buckets - observed_buckets)
@@ -453,6 +456,39 @@ def _status_from_metrics(
     if duplicate_rows > 0 or missing_buckets > 0 or coverage < 0.98:
         return "warning"
     return "ok"
+
+
+def _expected_buckets_for(source_key: str, trade_date: date, checked_at: datetime) -> int:
+    if trade_date != checked_at.date():
+        return {
+            "daily_kline": 1,
+            "minute5_kline": MINUTE5_BUCKETS,
+            "stock_quote_snapshots": QUOTE_RAW_BUCKETS_10S,
+            "stock_quote_snapshots_1m": TRADING_MINUTES,
+            "stock_quote_snapshots_5m": MINUTE5_BUCKETS,
+        }.get(source_key, 1)
+    if source_key == "daily_kline":
+        return 1 if checked_at.time() >= time(15, 10) else 0
+    bucket_seconds = {
+        "minute5_kline": 300,
+        "stock_quote_snapshots": 10,
+        "stock_quote_snapshots_1m": 60,
+        "stock_quote_snapshots_5m": 300,
+    }.get(source_key)
+    if bucket_seconds is None:
+        return 1
+    return _elapsed_market_buckets(trade_date, checked_at, bucket_seconds)
+
+
+def _elapsed_market_buckets(trade_date: date, checked_at: datetime, bucket_seconds: int) -> int:
+    elapsed_seconds = 0.0
+    for start_time, end_time in ((time(9, 30), time(11, 30)), (time(13, 0), time(15, 0))):
+        start = datetime.combine(trade_date, start_time)
+        end = datetime.combine(trade_date, end_time)
+        if checked_at <= start:
+            continue
+        elapsed_seconds += max(0.0, (min(checked_at, end) - start).total_seconds())
+    return int(math.ceil(elapsed_seconds / bucket_seconds)) if elapsed_seconds > 0 else 0
 
 
 def _coverage_ratio(covered: int, expected: int) -> float:

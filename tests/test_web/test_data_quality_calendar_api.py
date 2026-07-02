@@ -61,6 +61,36 @@ class FakeQualityCalendarClient(FakeCalendarClient):
         return []
 
 
+class FakeCurrentDayQualityCalendarClient(FakeCalendarClient):
+    def execute(self, query, params=None):
+        self.commands.append((query, params))
+        normalized = " ".join(query.lower().split())
+        if "create table if not exists data_quality_calendar" in normalized:
+            return []
+        if "insert into data_quality_calendar" in normalized:
+            return []
+        if "from trade_calendar" in normalized:
+            return [(date(2026, 7, 2),)]
+        if "from stocks" in normalized and "count()" in normalized:
+            return [(2,)]
+        if "from daily_kline" in normalized and "count()" in normalized:
+            return [(0, None, 0, 0, 0)]
+        if "from stock_quote_snapshots" in normalized and "group by snapshot_at" in normalized:
+            return [
+                (datetime(2026, 7, 2, 9, 30, 0),),
+                (datetime(2026, 7, 2, 9, 30, 10),),
+                (datetime(2026, 7, 2, 9, 30, 20),),
+                (datetime(2026, 7, 2, 9, 30, 30),),
+                (datetime(2026, 7, 2, 9, 30, 40),),
+                (datetime(2026, 7, 2, 9, 30, 50),),
+                (datetime(2026, 7, 2, 9, 31, 0),),
+                (datetime(2026, 7, 2, 9, 31, 10),),
+            ]
+        if "from stock_quote_snapshots" in normalized:
+            return [(16, datetime(2026, 7, 2, 9, 31, 10), 2, 8, 0)]
+        return [(0, None, 0, 0, 0)]
+
+
 class StoredQualityCalendarClient(FakeCalendarClient):
     def execute(self, query, params=None):
         self.commands.append((query, params))
@@ -156,6 +186,32 @@ def test_generate_day_writes_core_quality_sources() -> None:
     minute5 = next(row for row in rows if row[1] == "minute5_kline")
     assert minute5[3] == "warning"
     assert minute5[10] > 0
+
+
+def test_generate_current_intraday_day_uses_elapsed_buckets_and_does_not_fail_daily_before_close() -> None:
+    client = FakeCurrentDayQualityCalendarClient()
+    service = DataQualityCalendarService(client=client)
+
+    result = service.generate(
+        start=date(2026, 7, 2),
+        end=date(2026, 7, 2),
+        source_keys=["daily_kline", "stock_quote_snapshots"],
+        checked_at=datetime(2026, 7, 2, 9, 31, 15),
+    )
+
+    assert result == {"generated_dates": 1, "rows": 2}
+    insert_rows = next(
+        params
+        for query, params in client.commands
+        if "insert into data_quality_calendar" in " ".join(query.lower().split())
+    )
+    daily = next(row for row in insert_rows if row[1] == "daily_kline")
+    snapshots = next(row for row in insert_rows if row[1] == "stock_quote_snapshots")
+    assert daily[3] == "catching_up"
+    assert daily[8] == 0
+    assert snapshots[3] == "ok"
+    assert snapshots[8] == 8
+    assert snapshots[10] == 0
 
 
 def test_list_quality_calendar_returns_matrix_rows() -> None:
