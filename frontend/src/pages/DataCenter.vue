@@ -1627,6 +1627,7 @@ function dataOpsTaskTagType(status?: string) {
 
 function dataOpsTaskTitle(taskKey: string) {
   const titles: Record<string, string> = {
+    stock_master_sync: '股票主数据同步',
     post_close_maintenance: '日终维护',
     minute5_intraday_sync: '5m 分钟线同步',
     quote_snapshot_capture: '行情快照采集',
@@ -1638,6 +1639,14 @@ function dataOpsTaskTitle(taskKey: string) {
 
 function dataOpsTaskDetail(taskKey: string) {
   const details: Record<string, { logic: string; trigger: string; data: string; dependency: string; verification: string; failure: string }> = {
+    stock_master_sync: {
+      logic: '同步当前 A 股股票池和基础名称信息，为日线、分钟线、行情快照和质量检查提供统一标的范围。',
+      trigger: '按 daily_time 执行，默认 08:30；也支持手动运行一次。',
+      data: '读取腾讯 getBoardRankList 股票池接口；写入 ClickHouse stocks，并保留系统已有行业、上市日期等补充字段。',
+      dependency: '依赖腾讯股票池接口、ClickHouse stocks 表和股票代码标准化规则。',
+      verification: '检查 fetched_rows、inserted_rows、preserved_enrichment_rows，以及健康矩阵和后续任务的 expected_symbols 是否稳定。',
+      failure: '腾讯股票池接口不可用、分页返回异常、ClickHouse 写入失败或 stocks 表结构不兼容。'
+    },
     post_close_maintenance: {
       logic: '收盘后串联补齐 5m 分钟线、聚合修复日线、同步指数日线、写入质量快照；可作为日终数据闭环入口。',
       trigger: '交易日到达配置时间后执行一次，默认 15:10；也支持手动运行一次。',
