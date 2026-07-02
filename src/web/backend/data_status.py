@@ -291,10 +291,10 @@ def _dataset_health_rows(
             "source": "stock_master_sync 生成的研究池状态",
             "update_mechanism": "股票主数据更新后同步生成研究池标签，并审计日线与 5m 缺口。",
             "consumer": "健康矩阵、数据日历、策略候选池、回测样本选择",
-            "quality_rules": ["研究池纳入规则", "未纳入原因标签", "日线缺口", "5m 缺口"],
+            "quality_rules": ["研究池纳入规则", "未纳入原因标签", "数据就绪状态", "日线缺口", "5m 缺口"],
             "repair_action_keys": ["stock_master_sync", "daily_history_backfill", "minute5_sync"],
-            "expected_symbols": int((research_summary or {}).get("total") or 0),
-            "symbols": int((research_summary or {}).get("eligible") or 0),
+            "expected_symbols": int((research_summary or {}).get("eligible") or 0),
+            "symbols": int((research_summary or {}).get("data_ready") or 0),
             "status": _research_summary_status(research_summary),
             "issues": _research_summary_issues(research_summary),
         },
@@ -662,10 +662,13 @@ def _empty_research_summary() -> dict[str, Any]:
     return {
         "total": 0,
         "eligible": 0,
+        "data_ready": 0,
         "excluded": 0,
+        "not_ready": 0,
         "daily_missing": 0,
         "minute5_missing": 0,
         "reason_counts": {},
+        "gap_reason_counts": {},
     }
 
 
@@ -673,7 +676,7 @@ def _stock_research_summary(client: Any) -> dict[str, Any]:
     try:
         rows = client.execute(
             """
-            select symbol, name, research_eligible, excluded_reasons, daily_missing, minute5_missing
+            select symbol, name, research_eligible, data_ready, excluded_reasons, data_gap_reasons, daily_missing, minute5_missing
             from stock_research_status final
             """
         )
@@ -681,25 +684,42 @@ def _stock_research_summary(client: Any) -> dict[str, Any]:
         return _empty_research_summary()
     total = len(rows)
     eligible = 0
+    data_ready = 0
     daily_missing = 0
     minute5_missing = 0
     reason_counts: dict[str, int] = {}
-    for _symbol, _name, research_eligible, excluded_reasons, row_daily_missing, row_minute5_missing in rows:
+    gap_reason_counts: dict[str, int] = {}
+    for row in rows:
+        values = tuple(row)
+        research_eligible = values[2] if len(values) > 2 else 0
+        row_data_ready = values[3] if len(values) > 3 else None
+        excluded_reasons = values[4] if len(values) > 4 else "[]"
+        data_gap_reasons = values[5] if len(values) > 5 else "[]"
+        row_daily_missing = values[6] if len(values) > 6 else 0
+        row_minute5_missing = values[7] if len(values) > 7 else 0
         if int(research_eligible or 0):
             eligible += 1
-        if int(row_daily_missing or 0):
+        if int(row_data_ready or 0):
+            data_ready += 1
+        if int(research_eligible or 0) and int(row_daily_missing or 0):
             daily_missing += 1
-        if int(row_minute5_missing or 0):
+        if int(research_eligible or 0) and int(row_minute5_missing or 0):
             minute5_missing += 1
         for reason in _json_list(excluded_reasons):
             reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if int(research_eligible or 0):
+            for reason in _json_list(data_gap_reasons):
+                gap_reason_counts[reason] = gap_reason_counts.get(reason, 0) + 1
     return {
         "total": total,
         "eligible": eligible,
+        "data_ready": data_ready,
         "excluded": total - eligible,
+        "not_ready": max(0, eligible - data_ready),
         "daily_missing": daily_missing,
         "minute5_missing": minute5_missing,
         "reason_counts": reason_counts,
+        "gap_reason_counts": gap_reason_counts,
     }
 
 
@@ -716,7 +736,7 @@ def _json_list(value: Any) -> list[str]:
 def _research_summary_status(summary: dict[str, Any] | None) -> str:
     if not summary or int(summary.get("total") or 0) <= 0:
         return "missing"
-    if int(summary.get("daily_missing") or 0) > 0 or int(summary.get("minute5_missing") or 0) > 0:
+    if int(summary.get("not_ready") or 0) > 0:
         return "warning"
     return "ok"
 
@@ -725,10 +745,13 @@ def _research_summary_issues(summary: dict[str, Any] | None) -> list[str]:
     if not summary or int(summary.get("total") or 0) <= 0:
         return ["research_universe_missing"]
     issues = []
-    if int(summary.get("daily_missing") or 0) > 0:
-        issues.append(f"research_daily_missing_{int(summary.get('daily_missing') or 0)}_symbols")
-    if int(summary.get("minute5_missing") or 0) > 0:
-        issues.append(f"research_minute5_missing_{int(summary.get('minute5_missing') or 0)}_symbols")
+    gap_counts = summary.get("gap_reason_counts") or {}
+    daily_missing = int(gap_counts.get("daily_missing") or summary.get("daily_missing") or 0)
+    minute5_missing = int(gap_counts.get("minute5_missing") or summary.get("minute5_missing") or 0)
+    if daily_missing > 0:
+        issues.append(f"research_daily_missing_{daily_missing}_symbols")
+    if minute5_missing > 0:
+        issues.append(f"research_minute5_missing_{minute5_missing}_symbols")
     return issues
 
 
@@ -1809,15 +1832,17 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
                 s.industry,
                 s.market,
                 s.list_date,
-                max(d.date) as last_daily_date,
+                if(countIf(d.symbol != '') = 0, null, maxIf(d.date, d.symbol != '')) as last_daily_date,
                 any(rs.research_eligible) as research_eligible,
+                any(rs.data_ready) as data_ready,
                 any(rs.excluded_reasons) as excluded_reasons,
+                any(rs.data_gap_reasons) as data_gap_reasons,
                 any(rs.daily_missing) as daily_missing,
                 any(rs.minute5_missing) as minute5_missing
             from stocks s
             left join daily_kline d on d.symbol = s.symbol
             left join (
-                select symbol, research_eligible, excluded_reasons, daily_missing, minute5_missing
+                select symbol, research_eligible, data_ready, excluded_reasons, data_gap_reasons, daily_missing, minute5_missing
                 from stock_research_status final
             ) rs on rs.symbol = s.symbol
             group by s.symbol, s.name, s.industry, s.market, s.list_date
@@ -1833,7 +1858,7 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
                 s.industry,
                 s.market,
                 s.list_date,
-                max(d.date) as last_daily_date
+                if(countIf(d.symbol != '') = 0, null, maxIf(d.date, d.symbol != '')) as last_daily_date
             from stocks s
             left join daily_kline d on d.symbol = s.symbol
             group by s.symbol, s.name, s.industry, s.market, s.list_date
@@ -1848,6 +1873,7 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
         list_date = values[4] if len(values) > 4 else None
         last_daily = values[5] if len(values) > 5 else None
         research_eligible = values[6] if len(values) > 6 else None
+        data_ready = values[7] if len(values) > 7 else None
         items.append(
             {
                 "symbol": str(values[0] or ""),
@@ -1858,9 +1884,11 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
                 "last_daily_date": str(last_daily) if last_daily is not None else None,
                 "is_st": is_st(name),
                 "research_eligible": None if research_eligible is None else bool(research_eligible),
-                "excluded_reasons": _json_list(values[7]) if len(values) > 7 else [],
-                "daily_missing": None if len(values) <= 8 or values[8] is None else bool(values[8]),
-                "minute5_missing": None if len(values) <= 9 or values[9] is None else bool(values[9]),
+                "data_ready": None if data_ready is None else bool(data_ready),
+                "excluded_reasons": _json_list(values[8]) if len(values) > 8 else [],
+                "data_gap_reasons": _json_list(values[9]) if len(values) > 9 else [],
+                "daily_missing": None if len(values) <= 10 or values[10] is None else bool(values[10]),
+                "minute5_missing": None if len(values) <= 11 or values[11] is None else bool(values[11]),
             }
         )
 

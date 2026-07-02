@@ -39,7 +39,7 @@ def sync_clickhouse_stock_master(
         from src.data.stock_research_status_sync import sync_stock_research_status
 
         research_status_sync = sync_stock_research_status
-    research_status = research_status_sync(client=clickhouse, checked_at=updated_at)
+    research_status = research_status_sync(client=clickhouse, checked_at=updated_at, quote_source=data_source)
     return {
         "source": getattr(data_source, "name", "tencent"),
         "fetched_rows": len(stocks),
