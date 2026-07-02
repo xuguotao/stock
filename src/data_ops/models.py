@@ -86,6 +86,14 @@ class DataOpsTaskStatus:
 def default_task_configs() -> list[DataOpsTaskConfig]:
     return [
         DataOpsTaskConfig(
+            task_key="stock_master_sync",
+            enabled=True,
+            schedule_kind="daily_time",
+            schedule_config={"time": "08:30"},
+            max_runtime_seconds=600,
+            stale_after_seconds=900,
+        ),
+        DataOpsTaskConfig(
             task_key="post_close_maintenance",
             enabled=True,
             schedule_kind="daily_time",
@@ -105,7 +113,7 @@ def default_task_configs() -> list[DataOpsTaskConfig]:
             task_key="quote_snapshot_capture",
             enabled=True,
             schedule_kind="market_interval",
-            schedule_config={"interval_seconds": 10},
+            schedule_config={"interval_seconds": 10, "chunk_size": 500, "quote_endpoint": "sqt_utf8"},
             max_runtime_seconds=60,
             stale_after_seconds=60,
         ),

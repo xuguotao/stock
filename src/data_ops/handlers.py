@@ -17,7 +17,12 @@ def build_default_handlers(
     quality_snapshot_writer: Callable[..., dict[str, Any]] | None = None,
     daily_repair_runner: Callable[..., dict[str, Any]] | None = None,
     index_daily_sync_runner: Callable[..., dict[str, Any]] | None = None,
+    stock_master_runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, TaskHandler]:
+    if stock_master_runner is None:
+        from src.data.clickhouse_stock_master_sync import sync_clickhouse_stock_master
+
+        stock_master_runner = sync_clickhouse_stock_master
     if minute5_runner is None:
         from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_kline
 
@@ -48,6 +53,7 @@ def build_default_handlers(
         index_daily_sync_runner = sync_clickhouse_index_daily
 
     return {
+        "stock_master_sync": lambda params: run_stock_master_sync(params, stock_master_runner),
         "minute5_intraday_sync": lambda params: run_minute5_intraday_sync(params, minute5_runner),
         "quote_snapshot_capture": lambda params: run_quote_snapshot_capture(params, quote_snapshot_runner),
         "quote_rollup_refresh": lambda params: run_quote_rollup_refresh(params, quote_rollup_runner),
@@ -61,6 +67,16 @@ def build_default_handlers(
             index_daily_sync_runner=index_daily_sync_runner,
         ),
     }
+
+
+def run_stock_master_sync(params: dict[str, Any], runner: Callable[..., dict[str, Any]]) -> dict[str, Any]:
+    progress = params.get("progress")
+    if callable(progress):
+        progress(20, "fetching", "同步股票主数据")
+    result = runner()
+    if callable(progress):
+        progress(100, "completed", "股票主数据同步完成")
+    return result
 
 
 def run_minute5_intraday_sync(params: dict[str, Any], runner: Callable[..., dict[str, Any]]) -> dict[str, Any]:
@@ -80,8 +96,9 @@ def run_quote_snapshot_capture(params: dict[str, Any], runner: Callable[..., dic
     return runner(
         limit=int(params.get("limit") or 0),
         include_st=bool(params.get("include_st") or False),
-        chunk_size=int(params.get("chunk_size") or 850),
+        chunk_size=int(params.get("chunk_size") or 500),
         timeout_seconds=int(params.get("timeout_seconds") or 8),
+        quote_endpoint=str(params.get("quote_endpoint") or "sqt_utf8"),
         progress=progress if callable(progress) else None,
     )
 

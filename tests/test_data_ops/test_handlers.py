@@ -17,8 +17,10 @@ def test_handlers_call_injected_runners_without_web_dependencies() -> None:
         quality_snapshot_writer=lambda **kwargs: calls.append("quality") or {"rows": 3},
         daily_repair_runner=lambda **kwargs: calls.append("daily") or {"rows": 2},
         index_daily_sync_runner=lambda **kwargs: calls.append("index") or {"rows": 1},
+        stock_master_runner=lambda **kwargs: calls.append("stock_master") or {"inserted_rows": 2},
     )
 
+    assert handlers["stock_master_sync"]({})["inserted_rows"] == 2
     assert handlers["minute5_intraday_sync"]({"trade_date": "2026-06-12"})["inserted_rows"] == 5
     assert handlers["quote_snapshot_capture"]({})["inserted_rows"] == 10
     assert handlers["quote_rollup_refresh"]({})["optimized"] is True
@@ -27,6 +29,7 @@ def test_handlers_call_injected_runners_without_web_dependencies() -> None:
 
     assert result["trade_date"] == date(2026, 6, 12).isoformat()
     assert calls == [
+        "stock_master",
         "minute5",
         "quote",
         "rollup",
@@ -45,3 +48,19 @@ def test_handler_exceptions_are_not_swallowed() -> None:
 
     with pytest.raises(RuntimeError, match="boom"):
         handlers["minute5_intraday_sync"]({"trade_date": "2026-06-12"})
+
+
+def test_quote_snapshot_handler_passes_endpoint_and_chunk_size() -> None:
+    calls = []
+
+    def fake_quote_snapshot(**kwargs):
+        calls.append(kwargs)
+        return {"inserted_rows": 10, "quote_endpoint": kwargs["quote_endpoint"]}
+
+    handlers = build_default_handlers(quote_snapshot_runner=fake_quote_snapshot)
+
+    result = handlers["quote_snapshot_capture"]({"chunk_size": 500, "quote_endpoint": "sqt_utf8"})
+
+    assert result["quote_endpoint"] == "sqt_utf8"
+    assert calls[0]["chunk_size"] == 500
+    assert calls[0]["quote_endpoint"] == "sqt_utf8"

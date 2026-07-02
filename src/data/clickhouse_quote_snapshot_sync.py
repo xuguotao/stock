@@ -9,6 +9,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from src.core.constants import format_symbol, is_st
+from src.data.tencent_source import TencentQuoteSource
 
 
 ProgressCallback = Callable[[int, str, str], None]
@@ -23,6 +24,7 @@ def sync_clickhouse_quote_snapshots(
     timeout_seconds: int | float | None = None,
     checked_at: str | None = None,
     quote_source: Any | None = None,
+    quote_endpoint: str = "sqt_utf8",
     client: Any | None = None,
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
@@ -31,7 +33,8 @@ def sync_clickhouse_quote_snapshots(
     prepare_started = started
     snapshot_at = _datetime_value(checked_at) if checked_at else datetime.now().replace(microsecond=0)
     clickhouse = client or _default_client()
-    source = quote_source or _default_quote_source()
+    source = quote_source or _default_quote_source(quote_endpoint=quote_endpoint)
+    resolved_quote_endpoint = getattr(source, "realtime_endpoint", "injected" if quote_source is not None else quote_endpoint)
     _progress(progress, 5, "preparing", "准备行情快照表")
     _ensure_table(clickhouse)
     _ensure_rollup_tables(clickhouse)
@@ -50,6 +53,7 @@ def sync_clickhouse_quote_snapshots(
             "latest_quote_time": None,
             "duration_seconds": round(total_seconds, 3),
             "timeout_seconds": timeout_seconds,
+            "quote_endpoint": resolved_quote_endpoint,
             "timings": _timings(
                 total_seconds=total_seconds,
                 prepare_seconds=prepare_seconds,
@@ -112,6 +116,7 @@ def sync_clickhouse_quote_snapshots(
         "latest_quote_time": latest_quote_time,
         "rollups": rollups,
         "timeout_seconds": timeout_seconds,
+        "quote_endpoint": resolved_quote_endpoint,
         "duration_seconds": round(total_seconds, 3),
         "timings": _timings(
             total_seconds=total_seconds,
@@ -367,7 +372,5 @@ def _default_client() -> Any:
     return ClickHouseStockDataSource()._client_instance()
 
 
-def _default_quote_source() -> Any:
-    from src.data.tencent_source import TencentQuoteSource
-
-    return TencentQuoteSource(rate_limit=0.0)
+def _default_quote_source(*, quote_endpoint: str = "sqt_utf8") -> Any:
+    return TencentQuoteSource(rate_limit=0.0, realtime_endpoint=quote_endpoint)

@@ -82,7 +82,7 @@ TASK_GROUP=maintenance DATA_OPS_RUNNER_ID=server-a-maintenance scripts/install_d
 
 - `realtime`：`quote_snapshot_capture`、`quote_rollup_refresh`，用于高频快照和聚合刷新。
 - `intraday`：`minute5_intraday_sync`，用于全市场 5m 分钟线同步。
-- `maintenance`：`quality_snapshot`、`post_close_maintenance`，用于质量快照和日终维护。
+- `maintenance`：`stock_master_sync`、`quality_snapshot`、`post_close_maintenance`，用于股票主数据、质量快照和日终维护。
 
 拆分后，5m 分钟线同步耗时较长时不会阻塞快照采集和聚合刷新。
 

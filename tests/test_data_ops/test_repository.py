@@ -28,6 +28,7 @@ def test_repository_ensures_tables_and_seeds_defaults() -> None:
     assert any("data_ops_task_config" in command for command in client.commands)
     assert set(client.configs) == {
         "post_close_maintenance",
+        "stock_master_sync",
         "minute5_intraday_sync",
         "quote_snapshot_capture",
         "quote_rollup_refresh",

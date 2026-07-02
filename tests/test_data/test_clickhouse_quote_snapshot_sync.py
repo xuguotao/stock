@@ -90,6 +90,7 @@ def test_sync_clickhouse_quote_snapshots_creates_table_and_inserts_quotes() -> N
     assert client.inserted[0][-1] == datetime(2026, 6, 16, 14, 30, 0)
     assert client.inserted[1][1] == "302132.SZ"
     assert result["target_symbols"] == 3
+    assert result["quote_endpoint"] == "injected"
     assert result["quote_rows"] == 3
     assert result["inserted_rows"] == 3
     assert result["failed_chunks"] == 0
@@ -98,6 +99,26 @@ def test_sync_clickhouse_quote_snapshots_creates_table_and_inserts_quotes() -> N
     assert result["timings"]["write_seconds"] >= 0
     assert result["timings"]["rollup_seconds"] >= 0
     assert progress[-1] == (100, "completed", "行情快照同步完成")
+
+
+def test_sync_clickhouse_quote_snapshots_builds_default_tencent_source_with_endpoint(monkeypatch) -> None:
+    created = []
+
+    class FakeDefaultSource(FakeQuoteSource):
+        def __init__(self, **kwargs):
+            super().__init__()
+            created.append(kwargs)
+
+    monkeypatch.setattr("src.data.clickhouse_quote_snapshot_sync.TencentQuoteSource", FakeDefaultSource)
+
+    result = sync_clickhouse_quote_snapshots(
+        client=FakeClickHouseClient(),
+        checked_at="2026-06-16 14:30:05",
+        quote_endpoint="sqt_utf8",
+    )
+
+    assert created == [{"rate_limit": 0.0, "realtime_endpoint": "sqt_utf8"}]
+    assert result["quote_endpoint"] == "sqt_utf8"
 
 
 def test_sync_clickhouse_quote_snapshots_maintains_retention_and_rollups() -> None:

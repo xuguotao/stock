@@ -21,7 +21,7 @@ from src.trading.scheduler import TradingScheduler
 TASK_GROUPS: dict[str, set[str]] = {
     "realtime": {"quote_snapshot_capture", "quote_rollup_refresh"},
     "intraday": {"minute5_intraday_sync"},
-    "maintenance": {"quality_snapshot", "post_close_maintenance"},
+    "maintenance": {"stock_master_sync", "quality_snapshot", "post_close_maintenance"},
 }
 
 
