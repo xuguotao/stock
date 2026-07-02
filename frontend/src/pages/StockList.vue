@@ -72,7 +72,9 @@
       <el-form-item label="状态">
         <el-select v-model="status" style="width: 140px">
           <el-option label="全部" value="all" />
-          <el-option label="研究池" value="research" />
+          <el-option label="数据就绪" value="ready" />
+          <el-option label="有研究资格" value="research" />
+          <el-option label="数据待补" value="not_ready" />
           <el-option label="未纳入" value="excluded" />
           <el-option label="非 ST" value="non_st" />
           <el-option label="ST" value="st" />
@@ -86,7 +88,7 @@
 
     <div class="summary">
       共 {{ items.length }} 只 / 符合筛选 {{ filtered.length }} 只
-      (研究池 {{ countResearchEligible }} · 未纳入 {{ countResearchExcluded }} · ST {{ countSt }} · 退市整理 {{ countDelisted }})
+      (数据就绪 {{ countDataReady }} · 有研究资格 {{ countResearchEligible }} · 数据待补 {{ countDataNotReady }} · 未纳入 {{ countResearchExcluded }} · ST {{ countSt }} · 退市整理 {{ countDelisted }})
     </div>
 
     <el-table v-if="!error" :data="paged" stripe border>
@@ -102,6 +104,7 @@
               <el-descriptions-item label="上市日">{{ row.list_date || '—' }}</el-descriptions-item>
               <el-descriptions-item label="最新日线">{{ row.last_daily_date || '—' }}</el-descriptions-item>
               <el-descriptions-item label="研究池">{{ row.research_eligible === true ? '纳入' : row.research_eligible === false ? '未纳入' : '未检查' }}</el-descriptions-item>
+              <el-descriptions-item label="数据就绪">{{ row.data_ready === true ? '就绪' : row.data_ready === false ? '待补' : '未检查' }}</el-descriptions-item>
               <el-descriptions-item label="未纳入原因">{{ excludedReasonText(row) }}</el-descriptions-item>
               <el-descriptions-item label="数据缺口">{{ gapText(row) }}</el-descriptions-item>
             </el-descriptions>
@@ -115,12 +118,13 @@
           <el-tag v-if="isDelistingPeriod(row)" type="info" size="small" style="margin-left: 6px">退市整理</el-tag>
           <el-tag v-else-if="row.is_st" type="danger" size="small" style="margin-left: 6px">ST</el-tag>
           <el-tag v-if="row.research_eligible === false" type="warning" size="small" style="margin-left: 6px">未纳入</el-tag>
+          <el-tag v-else-if="row.data_ready === false" type="warning" size="small" style="margin-left: 6px">待补</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="研究池" width="100">
+      <el-table-column label="数据就绪" width="100">
         <template #default="{ row }">
-          <el-tag :type="row.research_eligible ? 'success' : row.research_eligible === false ? 'warning' : 'info'" effect="plain" size="small">
-            {{ row.research_eligible === true ? '纳入' : row.research_eligible === false ? '未纳入' : '未检查' }}
+          <el-tag :type="row.data_ready ? 'success' : row.data_ready === false ? 'warning' : 'info'" effect="plain" size="small">
+            {{ row.data_ready === true ? '就绪' : row.data_ready === false ? '待补' : '未检查' }}
           </el-tag>
         </template>
       </el-table-column>
@@ -183,7 +187,7 @@ const error = ref('')
 const keyword = ref('')
 const industries = ref<string[]>([])
 const markets = ref<string[]>([])
-const status = ref<'all' | 'research' | 'excluded' | 'non_st' | 'st' | 'delisted'>('all')
+const status = ref<'all' | 'ready' | 'research' | 'not_ready' | 'excluded' | 'non_st' | 'st' | 'delisted'>('all')
 const page = ref(1)
 const pageSize = ref(50)
 
@@ -195,7 +199,7 @@ const marketOptions = computed(() =>
 )
 
 function isDelistingPeriod(row: StockListItem) {
-  return row.excluded_reasons?.includes('delisting_period') || row.name.endsWith('退') || row.name.endsWith('退市')
+  return row.excluded_reasons?.includes('delisting_period') || row.name.startsWith('退市') || row.name.endsWith('退') || row.name.endsWith('退市')
 }
 
 function excludedReasonText(row: StockListItem) {
@@ -205,10 +209,11 @@ function excludedReasonText(row: StockListItem) {
 }
 
 function gapText(row: StockListItem) {
-  const gaps = []
+  const gapReasons = row.data_gap_reasons ?? []
+  const gaps = gapReasons.map(reasonLabel)
   if (row.daily_missing) gaps.push('日线待补')
   if (row.minute5_missing) gaps.push('5m待补')
-  return gaps.length ? gaps.join('，') : '—'
+  return [...new Set(gaps)].length ? [...new Set(gaps)].join('，') : '—'
 }
 
 function reasonLabel(reason: string) {
@@ -245,7 +250,9 @@ const filtered = computed(() => {
     }
     if (industries.value.length && !industries.value.includes(row.industry)) return false
     if (markets.value.length && !markets.value.includes(row.market)) return false
+    if (status.value === 'ready' && row.data_ready !== true) return false
     if (status.value === 'research' && row.research_eligible !== true) return false
+    if (status.value === 'not_ready' && !(row.research_eligible === true && row.data_ready === false)) return false
     if (status.value === 'excluded' && row.research_eligible !== false) return false
     if (status.value === 'non_st' && (row.is_st || isDelistingPeriod(row))) return false
     if (status.value === 'st' && !row.is_st) return false
@@ -270,6 +277,8 @@ const countSt = computed(() => items.value.filter((i) => i.is_st).length)
 const countDelisted = computed(() => items.value.filter((i) => isDelistingPeriod(i)).length)
 const countResearchEligible = computed(() => items.value.filter((i) => i.research_eligible === true).length)
 const countResearchExcluded = computed(() => items.value.filter((i) => i.research_eligible === false).length)
+const countDataReady = computed(() => items.value.filter((i) => i.data_ready === true).length)
+const countDataNotReady = computed(() => items.value.filter((i) => i.research_eligible === true && i.data_ready === false).length)
 const countFresh = computed(
   () => items.value.filter((i) => i.last_daily_date === latestDaily.value).length
 )

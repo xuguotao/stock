@@ -31,10 +31,10 @@ class FakeClickHouseClient:
             ]
         if "from stock_research_status final" in normalized and "select symbol" in normalized:
             return [
-                ("000001", "平安银行", 1, "[]", 0, 0),
-                ("000004", "*ST国华", 0, '["st_stock"]', 0, 0),
-                ("002808", "恒久退", 0, '["delisting_period"]', 0, 0),
-                ("920699", "海达尔", 0, '["daily_missing", "minute5_missing"]', 1, 1),
+                ("000001", "平安银行", 1, 1, "[]", "[]", 0, 0),
+                ("000004", "*ST国华", 0, 0, '["st_stock"]', "[]", 0, 0),
+                ("002808", "恒久退", 0, 0, '["delisting_period"]', "[]", 0, 0),
+                ("920699", "海达尔", 1, 0, "[]", '["daily_missing", "minute5_missing"]', 1, 1),
             ]
         if "from stock_quote_snapshots" in normalized and "group by snapshot_at" in normalized:
             if "snapshot_at >= now() - interval 5 minute" in normalized:
@@ -225,13 +225,17 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
     }
     assert payload["research_summary"] == {
         "total": 4,
-        "eligible": 1,
-        "excluded": 3,
+        "eligible": 2,
+        "data_ready": 1,
+        "excluded": 2,
+        "not_ready": 1,
         "daily_missing": 1,
         "minute5_missing": 1,
         "reason_counts": {
             "st_stock": 1,
             "delisting_period": 1,
+        },
+        "gap_reason_counts": {
             "daily_missing": 1,
             "minute5_missing": 1,
         },
@@ -262,7 +266,7 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
     datasets = {row["key"]: row for row in payload["datasets_health"]}
     assert datasets["research_universe"]["name"] == "默认研究股票池"
     assert datasets["research_universe"]["symbols"] == 1
-    assert datasets["research_universe"]["expected_symbols"] == 4
+    assert datasets["research_universe"]["expected_symbols"] == 2
     assert "research_daily_missing_1_symbols" in datasets["research_universe"]["issues"]
     assert datasets["daily_kline"]["name"] == "股票日线"
     assert datasets["daily_kline"]["update_mechanism"] == "日常维护补齐；当分钟线先到位时可由 5m 聚合修复最新交易日。"

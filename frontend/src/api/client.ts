@@ -95,10 +95,13 @@ export interface DataStatusResponse {
   research_summary?: {
     total: number
     eligible: number
+    data_ready?: number
     excluded: number
+    not_ready?: number
     daily_missing: number
     minute5_missing: number
     reason_counts: Record<string, number>
+    gap_reason_counts?: Record<string, number>
   }
   health: {
     status: string
@@ -966,7 +969,9 @@ export interface StockListItem {
   last_daily_date: string | null
   is_st: boolean
   research_eligible?: boolean | null
+  data_ready?: boolean | null
   excluded_reasons?: string[]
+  data_gap_reasons?: string[]
   daily_missing?: boolean | null
   minute5_missing?: boolean | null
 }
