@@ -7,6 +7,7 @@ valuation fields such as PE, PB, market cap, turnover, and price limits.
 from __future__ import annotations
 
 import json
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any, Callable
@@ -14,7 +15,7 @@ from typing import Any, Callable
 import pandas as pd
 import requests
 
-from src.core.constants import format_symbol
+from src.core.constants import format_symbol, is_st
 from src.data.base import DataSourceBase
 from src.data.models import FinancialStatement, StockInfo
 
@@ -55,8 +56,8 @@ def parse_tencent_quote_text(text: str) -> pd.DataFrame:
             "turnover_pct": _float_at(values, 38),
             "pe_ttm": _float_at(values, 39),
             "amplitude_pct": _float_at(values, 43),
-            "mcap": _float_at(values, 44) * 100_000_000,
-            "float_mcap": _float_at(values, 45) * 100_000_000,
+            "float_mcap": _float_at(values, 44) * 100_000_000,
+            "mcap": _float_at(values, 45) * 100_000_000,
             "pb": _float_at(values, 46),
             "limit_up": _float_at(values, 47),
             "limit_down": _float_at(values, 48),
@@ -119,7 +120,7 @@ def parse_tencent_minute_json(payload: dict[str, Any], symbol: str, trade_date: 
     formatted_symbol = format_symbol(symbol)
     for raw in data:
         parts = str(raw).split()
-        if len(parts) < 4:
+        if len(parts) < 3:
             continue
         timestamp = pd.to_datetime(f"{trade_date.isoformat()} {parts[0]}", format="%Y-%m-%d %H%M", errors="coerce")
         if pd.isna(timestamp):
@@ -128,9 +129,10 @@ def parse_tencent_minute_json(payload: dict[str, Any], symbol: str, trade_date: 
             continue
         price = _safe_float(parts[1])
         cumulative_volume = _safe_float(parts[2])
-        cumulative_amount = _safe_float(parts[3])
+        has_amount = len(parts) >= 4
+        cumulative_amount = _safe_float(parts[3]) if has_amount else previous_amount
         volume = max(0.0, cumulative_volume - previous_volume)
-        amount = max(0.0, cumulative_amount - previous_amount)
+        amount = max(0.0, cumulative_amount - previous_amount) if has_amount else 0.0
         previous_volume = cumulative_volume
         previous_amount = cumulative_amount
         rows.append({
@@ -143,6 +145,7 @@ def parse_tencent_minute_json(payload: dict[str, Any], symbol: str, trade_date: 
             "close": price,
             "volume": volume,
             "amount": amount,
+            "amount_is_estimated": not has_amount,
         })
     if not rows:
         return pd.DataFrame()
@@ -160,11 +163,19 @@ class TencentQuoteSource(DataSourceBase):
         http_get: Callable[..., str] | None = None,
         intraday_workers: int = 30,
         realtime_chunk_size: int = 800,
+        realtime_endpoint: str = "sqt_utf8",
+        stock_list_page_size: int = 100,
     ):
         super().__init__(rate_limit=rate_limit)
         self._http_get = http_get or _requests_get_text
         self._intraday_workers = intraday_workers
         self._realtime_chunk_size = max(1, realtime_chunk_size)
+        self._realtime_endpoint = realtime_endpoint
+        self._stock_list_page_size = max(1, min(int(stock_list_page_size), 200))
+
+    @property
+    def realtime_endpoint(self) -> str:
+        return self._realtime_endpoint
 
     def fetch_bars(
         self,
@@ -176,7 +187,45 @@ class TencentQuoteSource(DataSourceBase):
         return pd.DataFrame()
 
     def fetch_stock_list(self) -> list[StockInfo]:
-        return []
+        stocks: list[StockInfo] = []
+        seen: set[str] = set()
+        total: int | None = None
+        offset = 0
+        while total is None or offset < total:
+            self._wait_for_rate_limit()
+            params = {
+                "_appver": "11.17.0",
+                "board_code": "aStock",
+                "sort_type": "priceRatio",
+                "direct": "down",
+                "offset": str(offset),
+                "count": str(self._stock_list_page_size),
+            }
+            text = self._http_get(
+                "https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList?"
+                + urllib.parse.urlencode(params),
+                headers={"User-Agent": _UA, "Referer": "https://stockapp.finance.qq.com/mstats/"},
+                timeout=10,
+            )
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                break
+            if payload.get("code") != 0:
+                break
+            data = payload.get("data") or {}
+            raw_rows = data.get("rank_list") or []
+            total = int(data.get("total") or 0)
+            if not raw_rows:
+                break
+            for raw in raw_rows:
+                item = _stock_info_from_rank_item(raw)
+                if item is None or item.symbol in seen:
+                    continue
+                seen.add(item.symbol)
+                stocks.append(item)
+            offset += len(raw_rows)
+        return stocks
 
     def fetch_realtime_quotes(self, symbols: list[str]) -> pd.DataFrame:
         if not symbols:
@@ -185,17 +234,30 @@ class TencentQuoteSource(DataSourceBase):
         for batch in _chunks(symbols, self._realtime_chunk_size):
             self._wait_for_rate_limit()
             query = ",".join(_tencent_symbol(symbol) for symbol in batch)
-            text = self._http_get(
-                f"https://qt.gtimg.cn/q={query}",
-                headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/"},
-                timeout=10,
-            )
+            text = self._fetch_realtime_quote_text(query)
             frame = parse_tencent_quote_text(text)
             if frame is not None and not frame.empty:
                 frames.append(frame)
         if not frames:
             return pd.DataFrame()
         return pd.concat(frames, ignore_index=True)
+
+    def _fetch_realtime_quote_text(self, query: str) -> str:
+        urls = _quote_endpoint_urls(query, self._realtime_endpoint)
+        last_error: Exception | None = None
+        for url in urls:
+            try:
+                return self._http_get(
+                    url,
+                    headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/"},
+                    timeout=10,
+                )
+            except Exception as exc:  # noqa: BLE001 - fallback endpoint is part of the data-source contract.
+                last_error = exc
+                continue
+        if last_error is not None:
+            raise last_error
+        return ""
 
     def fetch_intraday_bars(
         self,
@@ -271,7 +333,41 @@ class TencentQuoteSource(DataSourceBase):
 def _requests_get_text(url: str, *, headers: dict[str, str], timeout: int) -> str:
     response = requests.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
-    return response.content.decode("gbk", errors="ignore")
+    encoding = "utf-8" if "sqt.gtimg.cn/utf8" in url else "gbk"
+    return response.content.decode(encoding, errors="ignore")
+
+
+def _quote_endpoint_urls(query: str, endpoint: str) -> list[str]:
+    if endpoint == "qt":
+        return [f"https://qt.gtimg.cn/q={query}", f"https://sqt.gtimg.cn/utf8/q={query}"]
+    return [f"https://sqt.gtimg.cn/utf8/q={query}", f"https://qt.gtimg.cn/q={query}"]
+
+
+def _stock_info_from_rank_item(raw: Any) -> StockInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    raw_code = str(raw.get("code") or "").lower()
+    if len(raw_code) < 8:
+        return None
+    market = raw_code[:2]
+    if market not in {"sh", "sz", "bj"}:
+        return None
+    stock_type = str(raw.get("stock_type") or "")
+    if stock_type in {"ZS", "KJ"}:
+        return None
+    if market in {"sh", "sz"} and stock_type and not stock_type.startswith("GP-A") and stock_type != "GP":
+        return None
+    code = raw_code[2:].zfill(6)
+    suffix = {"sh": "SH", "sz": "SZ", "bj": "BJ"}[market]
+    name = str(raw.get("name") or "")
+    if not name:
+        return None
+    return StockInfo(
+        symbol=f"{code}.{suffix}",
+        code=code,
+        name=name,
+        is_st=is_st(name),
+    )
 
 
 def _chunks(values: list[str], size: int) -> list[list[str]]:

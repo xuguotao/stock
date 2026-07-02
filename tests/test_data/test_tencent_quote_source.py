@@ -5,7 +5,7 @@ from datetime import date
 import pandas as pd
 
 from src.data import tencent_source
-from src.data.tencent_source import TencentQuoteSource, parse_tencent_quote_text
+from src.data.tencent_source import TencentQuoteSource, parse_tencent_minute_json, parse_tencent_quote_text
 
 
 def test_parse_tencent_quote_text_outputs_standard_quote_columns() -> None:
@@ -52,8 +52,9 @@ def test_tencent_quote_source_uses_injected_http_get() -> None:
 
     assert isinstance(result, pd.DataFrame)
     assert result.iloc[0]["symbol"] == "600519.SH"
-    assert result.iloc[0]["float_mcap"] == 1_500_000_000_000.0
-    assert calls[0][0].endswith("q=sh600519")
+    assert result.iloc[0]["mcap"] == 1_500_000_000_000.0
+    assert result.iloc[0]["float_mcap"] == 1_600_000_000_000.0
+    assert "sqt.gtimg.cn/utf8/q=sh600519" in calls[0][0]
 
 
 def test_tencent_quote_source_respects_explicit_exchange_suffix_for_indexes() -> None:
@@ -116,6 +117,89 @@ def test_tencent_quote_source_batches_realtime_quotes_to_avoid_long_urls() -> No
     assert len(result) == 1200
     assert result["symbol"].iloc[0] == "000001.SZ"
     assert result["symbol"].iloc[-1] == "001200.SZ"
+
+
+def test_tencent_quote_source_falls_back_to_gbk_quote_endpoint_when_utf8_fails() -> None:
+    calls = []
+
+    def fake_get(url: str, *, headers: dict[str, str], timeout: int):
+        calls.append(url)
+        if "sqt.gtimg.cn" in url:
+            raise RuntimeError("utf8 endpoint failed")
+        return (
+            'v_sh600519="1~贵州茅台~600519~1271.10~1291.91~1292.70~0~0~0~'
+            '0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~~20260615150000~'
+            '-20.81~-1.61~1298.00~1268.00~1271.10/41586/528000000~41586~52800~'
+            '0.80~22.50~~1298.00~1268.00~2.32~16000.00~15000.00~8.50~1421.10~'
+            '1162.72~18.00";'
+        )
+
+    source = TencentQuoteSource(rate_limit=0.0, http_get=fake_get)
+
+    result = source.fetch_realtime_quotes(["600519.SH"])
+
+    assert result.iloc[0]["symbol"] == "600519.SH"
+    assert calls[0].startswith("https://sqt.gtimg.cn/utf8/q=")
+    assert calls[1].startswith("https://qt.gtimg.cn/q=")
+
+
+def test_tencent_quote_source_fetches_stock_list_from_board_rank_pages() -> None:
+    calls = []
+
+    def fake_get(url: str, *, headers: dict[str, str], timeout: int):
+        calls.append(url)
+        if "offset=0" in url:
+            return (
+                '{"code":0,"msg":"ok","data":{"total":3,"rank_list":['
+                '{"code":"sz000001","name":"平安银行"},'
+                '{"code":"sh000001","name":"上证指数","stock_type":"ZS"}'
+                ']}}'
+            )
+        return (
+            '{"code":0,"msg":"ok","data":{"total":3,"rank_list":['
+            '{"code":"bj920699","name":"海达尔","stock_type":"GP"}'
+            ']}}'
+        )
+
+    source = TencentQuoteSource(rate_limit=0.0, http_get=fake_get, stock_list_page_size=2)
+
+    result = source.fetch_stock_list()
+
+    assert [stock.symbol for stock in result] == ["000001.SZ", "920699.BJ"]
+    assert result[0].code == "000001"
+    assert result[0].name == "平安银行"
+    assert result[1].code == "920699"
+    assert calls[0].startswith("https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList?")
+    assert "count=2" in calls[0]
+    assert "offset=2" in calls[1]
+
+
+def test_parse_tencent_minute_json_keeps_bj_rows_without_amount_as_missing_amount() -> None:
+    payload = {
+        "code": 0,
+        "msg": "",
+        "data": {
+            "bj920699": {
+                "data": {
+                    "date": "20260702",
+                    "data": [
+                        "0930 94.00 476",
+                        "0931 94.10 500",
+                    ],
+                }
+            }
+        },
+    }
+
+    result = parse_tencent_minute_json(payload, "920699.BJ", date(2026, 7, 2))
+
+    assert result["datetime"].tolist() == [
+        pd.Timestamp("2026-07-02 09:30:00"),
+        pd.Timestamp("2026-07-02 09:31:00"),
+    ]
+    assert result["volume"].tolist() == [476.0, 24.0]
+    assert result["amount"].tolist() == [0.0, 0.0]
+    assert result["amount_is_estimated"].tolist() == [True, True]
 
 
 def test_parse_tencent_kline_json_outputs_5m_intraday_bars() -> None:

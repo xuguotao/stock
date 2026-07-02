@@ -18,6 +18,7 @@ def test_default_task_configs_cover_first_runner_tasks() -> None:
     configs = default_task_configs()
 
     assert [config.task_key for config in configs] == [
+        "stock_master_sync",
         "post_close_maintenance",
         "minute5_intraday_sync",
         "quote_snapshot_capture",
@@ -25,6 +26,9 @@ def test_default_task_configs_cover_first_runner_tasks() -> None:
         "quality_snapshot",
     ]
     assert all(config.enabled for config in configs)
+    quote_snapshot = next(config for config in configs if config.task_key == "quote_snapshot_capture")
+    assert quote_snapshot.schedule_config["chunk_size"] == 500
+    assert quote_snapshot.schedule_config["quote_endpoint"] == "sqt_utf8"
 
 
 def test_schedule_config_serializes_stably() -> None:
