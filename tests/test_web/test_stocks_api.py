@@ -19,8 +19,8 @@ class _FakeClickHouseClient:
 
 def test_fetch_stock_list_returns_full_fields_and_is_st_derivation() -> None:
     rows = [
-        ("000001.SZ", "平安银行", "银行", "SZ", "1991-04-03", "2026-06-30"),
-        ("000004.SZ", "*ST国华", "软件", "SZ", "1990-12-01", "2026-06-17"),
+        ("000001.SZ", "平安银行", "银行", "SZ", "1991-04-03", "2026-06-30", 1, "[]", 0, 0),
+        ("000004.SZ", "*ST国华", "软件", "SZ", "1990-12-01", "2026-06-17", 0, '["st_stock"]', 0, 0),
     ]
     client = _FakeClickHouseClient(rows)
 
@@ -36,6 +36,10 @@ def test_fetch_stock_list_returns_full_fields_and_is_st_derivation() -> None:
             "list_date": "1991-04-03",
             "last_daily_date": "2026-06-30",
             "is_st": False,
+            "research_eligible": True,
+            "excluded_reasons": [],
+            "daily_missing": False,
+            "minute5_missing": False,
         },
         {
             "symbol": "000004.SZ",
@@ -45,6 +49,10 @@ def test_fetch_stock_list_returns_full_fields_and_is_st_derivation() -> None:
             "list_date": "1990-12-01",
             "last_daily_date": "2026-06-17",
             "is_st": True,
+            "research_eligible": False,
+            "excluded_reasons": ["st_stock"],
+            "daily_missing": False,
+            "minute5_missing": False,
         },
     ]
 
@@ -52,8 +60,8 @@ def test_fetch_stock_list_returns_full_fields_and_is_st_derivation() -> None:
 def test_fetch_stock_list_keeps_stocks_without_daily_via_left_join() -> None:
     # 000005 无任何日线,last_daily_date 应为 None 但仍出现在结果里
     rows = [
-        ("000001.SZ", "平安银行", "银行", "SZ", "1991-04-03", "2026-06-30"),
-        ("000005.SZ", "best科技", "软件", "SZ", "1991-01-01", None),
+        ("000001.SZ", "平安银行", "银行", "SZ", "1991-04-03", "2026-06-30", 1, "[]", 0, 0),
+        ("000005.SZ", "best科技", "软件", "SZ", "1991-01-01", None, None, None, None, None),
     ]
     client = _FakeClickHouseClient(rows)
 
@@ -62,6 +70,8 @@ def test_fetch_stock_list_keeps_stocks_without_daily_via_left_join() -> None:
     assert result["total"] == 2
     no_daily = next(item for item in result["items"] if item["symbol"] == "000005.SZ")
     assert no_daily["last_daily_date"] is None
+    assert no_daily["research_eligible"] is None
+    assert no_daily["excluded_reasons"] == []
 
 
 from fastapi.testclient import TestClient

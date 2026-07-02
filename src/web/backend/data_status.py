@@ -27,6 +27,7 @@ TABLE_SPECS = {
     "stock_quote_snapshots_5m": {"date_col": "bucket_start", "symbol_col": "symbol"},
     "stock_concept_blocks": {"date_col": "updated_at", "symbol_col": "symbol"},
     "stock_announcements": {"date_col": "date", "symbol_col": "symbol"},
+    "stock_research_status": {"date_col": "checked_at", "symbol_col": "symbol"},
     "data_source_health": {"date_col": "checked_at"},
     "fund_tail_nav": {"date_col": "date", "symbol_col": "fund_code"},
     "fund_tail_proxy": {"date_col": "date", "symbol_col": "fund_code"},
@@ -47,6 +48,7 @@ CLICKHOUSE_TABLE_SPECS = {
     "stock_quote_snapshots_5m": {"date_col": "bucket_start", "symbol_col": "symbol"},
     "stock_concept_blocks": {"date_col": "updated_at", "symbol_col": "symbol"},
     "stock_announcements": {"date_col": "date", "symbol_col": "symbol"},
+    "stock_research_status": {"date_col": "checked_at", "symbol_col": "symbol"},
     "data_source_health": {"date_col": "checked_at"},
     "fund_tail_nav": {"date_col": "date", "symbol_col": "fund_code"},
     "fund_tail_proxy": {"date_col": "date", "symbol_col": "fund_code"},
@@ -169,6 +171,7 @@ def inspect_clickhouse_database(
             "non_st_stock_count": 0,
             "st_stock_count": 0,
         }
+        research_summary = _stock_research_summary(clickhouse) if "stock_research_status" in available_tables else _empty_research_summary()
     except Exception as exc:  # noqa: BLE001 - surface health instead of breaking the dashboard.
         return {
             "database": {**db_info, "exists": False},
@@ -196,6 +199,7 @@ def inspect_clickhouse_database(
         "database": db_info,
         "tables": tables,
         "stock_summary": stock_summary,
+        "research_summary": research_summary,
         "health": health,
         "quality": (
             quality := _clickhouse_quality(
@@ -208,6 +212,7 @@ def inspect_clickhouse_database(
         "datasets_health": _dataset_health_rows(
             tables=tables,
             stock_summary=stock_summary,
+            research_summary=research_summary,
             quality=quality,
         ),
     }
@@ -266,6 +271,7 @@ def _dataset_health_rows(
     *,
     tables: dict[str, dict[str, Any]],
     stock_summary: dict[str, int],
+    research_summary: dict[str, Any] | None = None,
     quality: dict[str, Any],
 ) -> list[dict[str, Any]]:
     non_st_count = int(stock_summary.get("non_st_stock_count") or 0)
@@ -277,6 +283,21 @@ def _dataset_health_rows(
     if fund_tail_nav_status == "ok" and fund_tail_nav_issues:
         fund_tail_nav_status = "warning"
     definitions = [
+        {
+            "key": "research_universe",
+            "name": "默认研究股票池",
+            "category": "研究口径",
+            "table": "stock_research_status",
+            "source": "stock_master_sync 生成的研究池状态",
+            "update_mechanism": "股票主数据更新后同步生成研究池标签，并审计日线与 5m 缺口。",
+            "consumer": "健康矩阵、数据日历、策略候选池、回测样本选择",
+            "quality_rules": ["研究池纳入规则", "未纳入原因标签", "日线缺口", "5m 缺口"],
+            "repair_action_keys": ["stock_master_sync", "daily_history_backfill", "minute5_sync"],
+            "expected_symbols": int((research_summary or {}).get("total") or 0),
+            "symbols": int((research_summary or {}).get("eligible") or 0),
+            "status": _research_summary_status(research_summary),
+            "issues": _research_summary_issues(research_summary),
+        },
         {
             "key": "stocks",
             "name": "股票基础信息",
@@ -481,7 +502,7 @@ def _dataset_health_row(
     table = tables.get(str(definition["table"]), {})
     quality_row = _nested_quality(quality, definition.get("quality_key"))
     status = str(definition.get("status") or quality_row.get("status") or _table_presence_status(table))
-    symbols = _quality_symbol_count(quality_row, table)
+    symbols = int(definition["symbols"]) if "symbols" in definition else _quality_symbol_count(quality_row, table)
     expected = definition.get("expected_symbols")
     coverage = quality_row.get("coverage_ratio")
     if coverage is None and expected:
@@ -635,6 +656,80 @@ def _clickhouse_stock_summary(client: Any) -> dict[str, int]:
         "non_st_stock_count": stock_count - st_stock_count,
         "st_stock_count": st_stock_count,
     }
+
+
+def _empty_research_summary() -> dict[str, Any]:
+    return {
+        "total": 0,
+        "eligible": 0,
+        "excluded": 0,
+        "daily_missing": 0,
+        "minute5_missing": 0,
+        "reason_counts": {},
+    }
+
+
+def _stock_research_summary(client: Any) -> dict[str, Any]:
+    try:
+        rows = client.execute(
+            """
+            select symbol, name, research_eligible, excluded_reasons, daily_missing, minute5_missing
+            from stock_research_status final
+            """
+        )
+    except Exception:  # noqa: BLE001 - optional table should not break data center.
+        return _empty_research_summary()
+    total = len(rows)
+    eligible = 0
+    daily_missing = 0
+    minute5_missing = 0
+    reason_counts: dict[str, int] = {}
+    for _symbol, _name, research_eligible, excluded_reasons, row_daily_missing, row_minute5_missing in rows:
+        if int(research_eligible or 0):
+            eligible += 1
+        if int(row_daily_missing or 0):
+            daily_missing += 1
+        if int(row_minute5_missing or 0):
+            minute5_missing += 1
+        for reason in _json_list(excluded_reasons):
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return {
+        "total": total,
+        "eligible": eligible,
+        "excluded": total - eligible,
+        "daily_missing": daily_missing,
+        "minute5_missing": minute5_missing,
+        "reason_counts": reason_counts,
+    }
+
+
+def _json_list(value: Any) -> list[str]:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed]
+
+
+def _research_summary_status(summary: dict[str, Any] | None) -> str:
+    if not summary or int(summary.get("total") or 0) <= 0:
+        return "missing"
+    if int(summary.get("daily_missing") or 0) > 0 or int(summary.get("minute5_missing") or 0) > 0:
+        return "warning"
+    return "ok"
+
+
+def _research_summary_issues(summary: dict[str, Any] | None) -> list[str]:
+    if not summary or int(summary.get("total") or 0) <= 0:
+        return ["research_universe_missing"]
+    issues = []
+    if int(summary.get("daily_missing") or 0) > 0:
+        issues.append(f"research_daily_missing_{int(summary.get('daily_missing') or 0)}_symbols")
+    if int(summary.get("minute5_missing") or 0) > 0:
+        issues.append(f"research_minute5_missing_{int(summary.get('minute5_missing') or 0)}_symbols")
+    return issues
 
 
 def _clickhouse_quality(
@@ -1705,21 +1800,46 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
             )
         client = source._client_instance()
 
-    rows = client.execute(
-        """
-        select
-            s.symbol,
-            s.name,
-            s.industry,
-            s.market,
-            s.list_date,
-            max(d.date) as last_daily_date
-        from stocks s
-        left join daily_kline d on d.symbol = s.symbol
-        group by s.symbol, s.name, s.industry, s.market, s.list_date
-        order by s.symbol
-        """
-    )
+    try:
+        rows = client.execute(
+            """
+            select
+                s.symbol,
+                s.name,
+                s.industry,
+                s.market,
+                s.list_date,
+                max(d.date) as last_daily_date,
+                any(rs.research_eligible) as research_eligible,
+                any(rs.excluded_reasons) as excluded_reasons,
+                any(rs.daily_missing) as daily_missing,
+                any(rs.minute5_missing) as minute5_missing
+            from stocks s
+            left join daily_kline d on d.symbol = s.symbol
+            left join (
+                select symbol, research_eligible, excluded_reasons, daily_missing, minute5_missing
+                from stock_research_status final
+            ) rs on rs.symbol = s.symbol
+            group by s.symbol, s.name, s.industry, s.market, s.list_date
+            order by s.symbol
+            """
+        )
+    except Exception:
+        rows = client.execute(
+            """
+            select
+                s.symbol,
+                s.name,
+                s.industry,
+                s.market,
+                s.list_date,
+                max(d.date) as last_daily_date
+            from stocks s
+            left join daily_kline d on d.symbol = s.symbol
+            group by s.symbol, s.name, s.industry, s.market, s.list_date
+            order by s.symbol
+            """
+        )
 
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -1727,6 +1847,7 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
         name = str(values[1] or "") if len(values) > 1 else ""
         list_date = values[4] if len(values) > 4 else None
         last_daily = values[5] if len(values) > 5 else None
+        research_eligible = values[6] if len(values) > 6 else None
         items.append(
             {
                 "symbol": str(values[0] or ""),
@@ -1736,6 +1857,10 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
                 "list_date": str(list_date) if list_date is not None else None,
                 "last_daily_date": str(last_daily) if last_daily is not None else None,
                 "is_st": is_st(name),
+                "research_eligible": None if research_eligible is None else bool(research_eligible),
+                "excluded_reasons": _json_list(values[7]) if len(values) > 7 else [],
+                "daily_missing": None if len(values) <= 8 or values[8] is None else bool(values[8]),
+                "minute5_missing": None if len(values) <= 9 or values[9] is None else bool(values[9]),
             }
         )
 

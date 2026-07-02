@@ -13,6 +13,7 @@ def sync_clickhouse_stock_master(
     source: Any | None = None,
     client: Any | None = None,
     checked_at: str | None = None,
+    research_status_sync: Any | None = None,
 ) -> dict[str, Any]:
     """Sync Tencent stock universe into the ClickHouse stocks table.
 
@@ -34,11 +35,17 @@ def sync_clickhouse_stock_master(
             """,
             rows,
         )
+    if research_status_sync is None:
+        from src.data.stock_research_status_sync import sync_stock_research_status
+
+        research_status_sync = sync_stock_research_status
+    research_status = research_status_sync(client=clickhouse, checked_at=updated_at)
     return {
         "source": getattr(data_source, "name", "tencent"),
         "fetched_rows": len(stocks),
         "inserted_rows": len(rows),
         "preserved_enrichment_rows": sum(1 for row in rows if row[2] or row[4]),
+        "research_status": research_status,
     }
 
 

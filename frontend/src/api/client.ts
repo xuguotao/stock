@@ -92,6 +92,14 @@ export interface DataStatusResponse {
     non_st_stock_count: number
     st_stock_count: number
   }
+  research_summary?: {
+    total: number
+    eligible: number
+    excluded: number
+    daily_missing: number
+    minute5_missing: number
+    reason_counts: Record<string, number>
+  }
   health: {
     status: string
     daily_latest_date?: string | null
@@ -957,6 +965,10 @@ export interface StockListItem {
   list_date: string | null
   last_daily_date: string | null
   is_st: boolean
+  research_eligible?: boolean | null
+  excluded_reasons?: string[]
+  daily_missing?: boolean | null
+  minute5_missing?: boolean | null
 }
 
 export interface StockListResponse {
