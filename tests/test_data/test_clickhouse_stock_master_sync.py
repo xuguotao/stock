@@ -31,13 +31,19 @@ class FakeSource:
 def test_sync_clickhouse_stock_master_preserves_existing_enrichment_fields() -> None:
     client = FakeClient()
 
-    result = sync_clickhouse_stock_master(client=client, source=FakeSource(), checked_at="2026-07-02 10:30:00")
+    result = sync_clickhouse_stock_master(
+        client=client,
+        source=FakeSource(),
+        checked_at="2026-07-02 10:30:00",
+        research_status_sync=lambda **kwargs: {"eligible_rows": 1, "daily_missing_rows": 1},
+    )
 
     assert result == {
         "source": "tencent",
         "fetched_rows": 2,
         "inserted_rows": 2,
         "preserved_enrichment_rows": 1,
+        "research_status": {"eligible_rows": 1, "daily_missing_rows": 1},
     }
     insert_query, rows = client.commands[-1]
     assert "insert into stocks" in insert_query.lower()

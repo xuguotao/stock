@@ -184,6 +184,8 @@ def test_data_center_client_exposes_dataset_health() -> None:
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
 
     assert "datasets_health" in client
+    assert "research_summary" in client
+    assert "reason_counts: Record<string, number>" in client
     assert "update_mechanism: string" in client
     assert "consumer: string" in client
     assert "coverage_ratio?: number | null" in client

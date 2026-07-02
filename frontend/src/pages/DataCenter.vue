@@ -39,6 +39,7 @@
                     size="small"
                     type="primary"
                     plain
+                    :disabled="!datasetActionableRepairKeys(row).length"
                     :loading="repairingHealth"
                     @click="repairDatasetHealth(row)"
                   >
@@ -86,6 +87,7 @@
                 size="small"
                 type="primary"
                 plain
+                :disabled="!datasetActionableRepairKeys(row).length"
                 :loading="repairingHealth"
                 @click="repairDatasetHealth(row)"
               >

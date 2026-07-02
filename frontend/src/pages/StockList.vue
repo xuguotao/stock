@@ -26,8 +26,8 @@
         <div class="stat-group-title">宇宙画像</div>
         <div class="stat-cards">
           <div class="stat-card">
-            <div class="stat-value">{{ countNonSt }} / <span class="st">ST {{ countSt }}</span> / <span class="delisted">退市 {{ countDelisted }}</span></div>
-            <div class="stat-label">非 ST / ST / 退市</div>
+            <div class="stat-value">{{ countResearchEligible }} / <span class="delisted">排除 {{ countResearchExcluded }}</span></div>
+            <div class="stat-label">研究池 / 未纳入</div>
           </div>
           <div class="stat-card">
             <div class="stat-value">{{ countSH }} / {{ countSZ }}</div>
@@ -72,9 +72,11 @@
       <el-form-item label="状态">
         <el-select v-model="status" style="width: 140px">
           <el-option label="全部" value="all" />
+          <el-option label="研究池" value="research" />
+          <el-option label="未纳入" value="excluded" />
           <el-option label="非 ST" value="non_st" />
           <el-option label="ST" value="st" />
-          <el-option label="退市" value="delisted" />
+          <el-option label="退市整理" value="delisted" />
         </el-select>
       </el-form-item>
       <el-form-item>
@@ -84,7 +86,7 @@
 
     <div class="summary">
       共 {{ items.length }} 只 / 符合筛选 {{ filtered.length }} 只
-      (非 ST {{ countNonSt }} · ST {{ countSt }} · 退市 {{ countDelisted }})
+      (研究池 {{ countResearchEligible }} · 未纳入 {{ countResearchExcluded }} · ST {{ countSt }} · 退市整理 {{ countDelisted }})
     </div>
 
     <el-table v-if="!error" :data="paged" stripe border>
@@ -99,6 +101,9 @@
               <el-descriptions-item label="市场">{{ row.market || '—' }}</el-descriptions-item>
               <el-descriptions-item label="上市日">{{ row.list_date || '—' }}</el-descriptions-item>
               <el-descriptions-item label="最新日线">{{ row.last_daily_date || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="研究池">{{ row.research_eligible === true ? '纳入' : row.research_eligible === false ? '未纳入' : '未检查' }}</el-descriptions-item>
+              <el-descriptions-item label="未纳入原因">{{ excludedReasonText(row) }}</el-descriptions-item>
+              <el-descriptions-item label="数据缺口">{{ gapText(row) }}</el-descriptions-item>
             </el-descriptions>
           </div>
         </template>
@@ -107,9 +112,20 @@
       <el-table-column label="名称" min-width="140">
         <template #default="{ row }">
           <span>{{ row.name }}</span>
-          <el-tag v-if="isDelisted(row.name)" type="info" size="small" style="margin-left: 6px">退市</el-tag>
+          <el-tag v-if="isDelistingPeriod(row)" type="info" size="small" style="margin-left: 6px">退市整理</el-tag>
           <el-tag v-else-if="row.is_st" type="danger" size="small" style="margin-left: 6px">ST</el-tag>
+          <el-tag v-if="row.research_eligible === false" type="warning" size="small" style="margin-left: 6px">未纳入</el-tag>
         </template>
+      </el-table-column>
+      <el-table-column label="研究池" width="100">
+        <template #default="{ row }">
+          <el-tag :type="row.research_eligible ? 'success' : row.research_eligible === false ? 'warning' : 'info'" effect="plain" size="small">
+            {{ row.research_eligible === true ? '纳入' : row.research_eligible === false ? '未纳入' : '未检查' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="未纳入原因" min-width="170" show-overflow-tooltip>
+        <template #default="{ row }">{{ excludedReasonText(row) }}</template>
       </el-table-column>
       <el-table-column label="行业" prop="industry" min-width="120">
         <template #default="{ row }">{{ row.industry || '—' }}</template>
@@ -167,7 +183,7 @@ const error = ref('')
 const keyword = ref('')
 const industries = ref<string[]>([])
 const markets = ref<string[]>([])
-const status = ref<'all' | 'non_st' | 'st' | 'delisted'>('all')
+const status = ref<'all' | 'research' | 'excluded' | 'non_st' | 'st' | 'delisted'>('all')
 const page = ref(1)
 const pageSize = ref(50)
 
@@ -178,8 +194,34 @@ const marketOptions = computed(() =>
   [...new Set(items.value.map((i) => i.market).filter(Boolean))].sort()
 )
 
-function isDelisted(name: string) {
-  return name.includes('退市')
+function isDelistingPeriod(row: StockListItem) {
+  return row.excluded_reasons?.includes('delisting_period') || row.name.endsWith('退') || row.name.endsWith('退市')
+}
+
+function excludedReasonText(row: StockListItem) {
+  const reasons = row.excluded_reasons ?? []
+  if (!reasons.length) return row.research_eligible === false ? '未登记原因' : '—'
+  return reasons.map(reasonLabel).join('，')
+}
+
+function gapText(row: StockListItem) {
+  const gaps = []
+  if (row.daily_missing) gaps.push('日线待补')
+  if (row.minute5_missing) gaps.push('5m待补')
+  return gaps.length ? gaps.join('，') : '—'
+}
+
+function reasonLabel(reason: string) {
+  const labels: Record<string, string> = {
+    st_stock: 'ST',
+    delisting_period: '退市整理',
+    delisted: '已退市',
+    unsupported_market: '不支持市场',
+    status_unknown: '状态未知',
+    daily_missing: '日线待补',
+    minute5_missing: '5m待补'
+  }
+  return labels[reason] ?? reason
 }
 
 const latestDaily = computed(() => {
@@ -203,9 +245,11 @@ const filtered = computed(() => {
     }
     if (industries.value.length && !industries.value.includes(row.industry)) return false
     if (markets.value.length && !markets.value.includes(row.market)) return false
-    if (status.value === 'non_st' && (row.is_st || isDelisted(row.name))) return false
+    if (status.value === 'research' && row.research_eligible !== true) return false
+    if (status.value === 'excluded' && row.research_eligible !== false) return false
+    if (status.value === 'non_st' && (row.is_st || isDelistingPeriod(row))) return false
     if (status.value === 'st' && !row.is_st) return false
-    if (status.value === 'delisted' && !isDelisted(row.name)) return false
+    if (status.value === 'delisted' && !isDelistingPeriod(row)) return false
     return true
   })
 })
@@ -220,10 +264,12 @@ const paged = computed(() => {
 })
 
 const countNonSt = computed(
-  () => items.value.filter((i) => !i.is_st && !isDelisted(i.name)).length
+  () => items.value.filter((i) => !i.is_st && !isDelistingPeriod(i)).length
 )
 const countSt = computed(() => items.value.filter((i) => i.is_st).length)
-const countDelisted = computed(() => items.value.filter((i) => isDelisted(i.name)).length)
+const countDelisted = computed(() => items.value.filter((i) => isDelistingPeriod(i)).length)
+const countResearchEligible = computed(() => items.value.filter((i) => i.research_eligible === true).length)
+const countResearchExcluded = computed(() => items.value.filter((i) => i.research_eligible === false).length)
 const countFresh = computed(
   () => items.value.filter((i) => i.last_daily_date === latestDaily.value).length
 )
