@@ -72,6 +72,23 @@ def test_repository_records_run_and_heartbeat() -> None:
     assert client.heartbeats[("runner-a", "quality_snapshot")]["message"] == "working"
 
 
+def test_repository_latest_run_query_prefers_completed_append_row() -> None:
+    class QueryOnlyClient:
+        def __init__(self) -> None:
+            self.commands: list[str] = []
+
+        def execute(self, query: str, params=None):
+            self.commands.append(" ".join(query.split()))
+            return []
+
+    client = QueryOnlyClient()
+    repo = ClickHouseDataOpsRepository(client=client)
+
+    repo._latest_run("quality_snapshot")
+
+    assert any("order by started_at desc, isNull(finished_at) asc, finished_at desc" in command for command in client.commands)
+
+
 def test_repository_decodes_heartbeat_progress() -> None:
     client = FakeClickHouseClient()
     repo = ClickHouseDataOpsRepository(client=client)

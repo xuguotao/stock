@@ -333,7 +333,7 @@ class TencentQuoteSource(DataSourceBase):
 def _requests_get_text(url: str, *, headers: dict[str, str], timeout: int) -> str:
     response = requests.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
-    encoding = "utf-8" if "sqt.gtimg.cn/utf8" in url else "gbk"
+    encoding = "utf-8" if "sqt.gtimg.cn/utf8" in url or "proxy.finance.qq.com" in url else "gbk"
     return response.content.decode(encoding, errors="ignore")
 
 
