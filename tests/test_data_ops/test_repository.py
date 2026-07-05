@@ -33,6 +33,7 @@ def test_repository_ensures_tables_and_seeds_defaults() -> None:
         "quote_snapshot_capture",
         "quote_rollup_refresh",
         "quality_snapshot",
+        "xdxr_sync",
     }
 
 
