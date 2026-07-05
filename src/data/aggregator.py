@@ -37,13 +37,6 @@ class DataAggregator:
             sources = []
             from src.data.clickhouse_source import ClickHouseStockDataSource
             sources.append(ClickHouseStockDataSource.from_env() or ClickHouseStockDataSource())
-            sqlite_path = Path("data/stock.db")
-            if sqlite_path.exists():
-                from src.data.sqlite_source import SQLiteStockDataSource
-                sources.append(SQLiteStockDataSource(sqlite_path))
-            from src.data.mootdx_source import MootdxSource, is_mootdx_available
-            if is_mootdx_available():
-                sources.append(MootdxSource(rate_limit=0.1))
             from src.data.tencent_source import TencentQuoteSource
             sources.append(TencentQuoteSource(rate_limit=0.2))
             try:
@@ -58,7 +51,7 @@ class DataAggregator:
     def _prefer_source_over_cache(self) -> bool:
         """Return true when the first source should be treated as authoritative."""
         return bool(
-            self.sources and getattr(self.sources[0], "name", "") in {"clickhouse", "sqlite"}
+            self.sources and getattr(self.sources[0], "name", "") == "clickhouse"
         )
 
     def get_bars(

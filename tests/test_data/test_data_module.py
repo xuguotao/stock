@@ -337,20 +337,6 @@ class TestDataAggregator:
         assert "000001.SZ" in symbols
         assert "300750.SZ" not in symbols
 
-    def test_default_sources_prefer_local_sqlite_when_database_exists(self, monkeypatch, tmp_path: Path) -> None:
-        from src.data.aggregator import DataAggregator
-        from config.settings import reset_settings
-        reset_settings()
-
-        monkeypatch.chdir(tmp_path)
-        db_path = tmp_path / "data" / "stock.db"
-        db_path.parent.mkdir()
-        db_path.touch()
-
-        agg = DataAggregator()
-
-        assert agg.sources[0].name == "clickhouse"
-        assert agg.sources[1].name == "sqlite"
 
     def test_default_sources_include_clickhouse_when_env_is_configured(self, monkeypatch, tmp_path: Path) -> None:
         from src.data.aggregator import DataAggregator
@@ -362,13 +348,10 @@ class TestDataAggregator:
         monkeypatch.setenv("STOCK_CLICKHOUSE_USER", "default")
         monkeypatch.setenv("STOCK_CLICKHOUSE_PASSWORD", "[REDACTED]")
         monkeypatch.setenv("STOCK_CLICKHOUSE_DATABASE", "stock")
-        db_path = tmp_path / "data" / "stock.db"
-        db_path.parent.mkdir()
-        db_path.touch()
 
         agg = DataAggregator()
 
-        assert [source.name for source in agg.sources[:3]] == ["clickhouse", "sqlite", "tencent"]
+        assert [source.name for source in agg.sources[:3]] == ["clickhouse", "tencent", "sina"]
 
     def test_stock_list_prefers_clickhouse_source_over_stale_cache(self) -> None:
         from src.data.aggregator import DataAggregator
@@ -392,36 +375,6 @@ class TestDataAggregator:
         agg.cache.read_stock_list.assert_not_called()
         agg.cache.write_stock_list.assert_not_called()
 
-    def test_stock_list_prefers_sqlite_source_over_stale_cache(self, tmp_path: Path) -> None:
-        import sqlite3
-
-        from src.data.aggregator import DataAggregator
-        from src.data.sqlite_source import SQLiteStockDataSource
-        from config.settings import reset_settings
-        reset_settings()
-
-        db_path = tmp_path / "stock.db"
-        conn = sqlite3.connect(db_path)
-        conn.execute(
-            "create table stocks (symbol text, name text, industry text, market text, list_date text, updated_at text)"
-        )
-        conn.execute(
-            "insert into stocks values ('000004', '*ST国华', '软件', 'SZ', '1990-12-01', '2026-06-12')"
-        )
-        conn.commit()
-        conn.close()
-
-        agg = DataAggregator([SQLiteStockDataSource(db_path)])
-        agg.cache = MagicMock()
-        agg.cache.read_stock_list.return_value = pd.DataFrame([
-            {"symbol": "000001.SZ", "code": "000001", "name": "旧缓存"}
-        ])
-
-        stocks = agg.get_stock_list()
-
-        assert len(stocks) == 1
-        assert stocks[0].symbol == "000004.SZ"
-        assert stocks[0].is_st is True
 
 
 def test_sina_intraday_bars_returns_dataframe() -> None:

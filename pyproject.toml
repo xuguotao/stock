@@ -33,9 +33,7 @@ dev = [
 timesfm = [
     "timesfm[torch]>=2.0.1",
 ]
-market = [
-    "mootdx>=0.10",
-]
+market = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
