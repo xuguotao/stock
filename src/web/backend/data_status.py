@@ -289,7 +289,7 @@ def _dataset_health_rows(
             "category": "研究口径",
             "table": "stock_research_status",
             "source": "stock_master_sync 生成的研究池状态",
-            "update_mechanism": "股票主数据更新后同步生成研究池标签，并审计日线与 5m 缺口。",
+            "update_mechanism": "股票主数据更新后同步生成研究池标签，并审计日线与 5m 缺口。预期标的数 = 符合研究条件的股票数（research_eligible=1），实际标的数 = 日线和5m都齐全的股票数（data_ready=1）。注意：腾讯数据源不支持北交所股票（920/83/87开头）的日线和5m数据，这部分股票 data_ready=0。",
             "consumer": "健康矩阵、数据日历、策略候选池、回测样本选择",
             "quality_rules": ["研究池纳入规则", "未纳入原因标签", "数据就绪状态", "日线缺口", "5m 缺口"],
             "repair_action_keys": ["stock_master_sync", "daily_history_backfill", "minute5_sync"],
@@ -304,10 +304,10 @@ def _dataset_health_rows(
             "category": "基础数据",
             "table": "stocks",
             "source": "ClickHouse / stocks",
-            "update_mechanism": "股票主数据同步任务（stock_master_sync）按调度从腾讯股票池接口拉取并更新，作为股票池和 ST 过滤基准。",
+            "update_mechanism": "股票主数据同步任务（stock_master_sync）每天 08:30 按调度从腾讯股票池接口拉取并更新，作为股票池和 ST 过滤基准。",
             "consumer": "全市场扫描、股票名称展示、非 ST 标的池",
-            "quality_rules": ["基础表存在"],
-            "repair_action_keys": [],
+            "quality_rules": ["基础表存在", "与腾讯股票池总数一致"],
+            "repair_action_keys": ["stock_master_sync"],
             "expected_symbols": expected_all,
             "status": "ok" if tables.get("stocks", {}).get("row_count", 0) else "missing",
             "issues": [],
@@ -331,7 +331,7 @@ def _dataset_health_rows(
             "category": "行情数据",
             "table": "daily_kline",
             "source": "ClickHouse / daily_kline",
-            "update_mechanism": "日常维护补齐；当分钟线先到位时可由 5m 聚合修复最新交易日。",
+            "update_mechanism": "日常维护补齐；当分钟线先到位时可由 5m 聚合修复最新交易日。预期标的数 = 策略可交易股票数（动态计算，基于最新交易日）。",
             "consumer": "尾盘选股、个股趋势、策略复盘、回测、因子计算",
             "quality_rules": ["最新交易日覆盖率", "重复日线主键", "OHLC 合法性", "日线新鲜度"],
             "repair_action_keys": ["daily_from_minute5", "daily_history_backfill", "daily_historical_invalid_prices"],
@@ -359,7 +359,7 @@ def _dataset_health_rows(
             "category": "行情数据",
             "table": "minute5_kline",
             "source": "ClickHouse / minute5_kline",
-            "update_mechanism": "交易时段持续更新，手动更新可补指定交易日；尾盘读取可用快照 5m 聚合兜底。",
+            "update_mechanism": "交易时段每 60 秒持续更新（minute5_intraday_sync），盘后维护补齐当日完整数据；尾盘读取可用快照 5m 聚合兜底。预期标的数 = 策略可交易股票数（动态计算）。",
             "consumer": "今日尾盘选股、尾盘回测、个股趋势分钟图、策略复盘",
             "quality_rules": ["最新完整 5m 桶覆盖率", "当前最新桶覆盖率", "重复分钟主键"],
             "repair_action_keys": ["minute5_sync"],
@@ -372,8 +372,8 @@ def _dataset_health_rows(
             "name": "秒级行情快照",
             "category": "实时数据",
             "table": "stock_quote_snapshots",
-            "source": "腾讯快照 / ClickHouse",
-            "update_mechanism": "交易时段自动守护，按约 10 秒节拍全市场快照采集，原始数据保留短周期。",
+            "source": "腾讯快照（sqt.gtimg.cn UTF-8 入口）/ ClickHouse",
+            "update_mechanism": "交易时段自动守护，按约 10 秒节拍全市场快照采集（quote_snapshot_capture），原始数据保留短周期。",
             "consumer": "今日尾盘预演、实时价格、快照聚合、盘中可信度检查",
             "quality_rules": ["最新快照覆盖率", "10 秒采集节拍", "原始快照缺失轮次"],
             "repair_action_keys": ["quote_snapshot_sync"],
@@ -485,6 +485,20 @@ def _dataset_health_rows(
             "repair_action_keys": ["quality_snapshot"],
             "status": _table_presence_status(tables.get("data_source_health")),
             "issues": scheduled.get("issues", []),
+        },
+        {
+            "key": "xdxr_info",
+            "name": "除权除息数据",
+            "category": "参考数据",
+            "table": "xdxr_info",
+            "source": "tdxrs (通达信 TCP 协议)",
+            "update_mechanism": "data_ops xdxr_sync 任务每日 15:30 盘后同步，从通达信获取全量除权除息历史（1990 年起）。",
+            "consumer": "复权计算、策略回测、价格跳变识别",
+            "quality_rules": ["基础表存在", "除权事件覆盖", "历史完整性"],
+            "repair_action_keys": ["xdxr_sync"],
+            "expected_symbols": expected_all,
+            "status": _table_presence_status(tables.get("xdxr_info")),
+            "issues": [],
         },
     ]
     return [
@@ -643,7 +657,7 @@ def _safe_clickhouse_table_status(client: Any, table: str, spec: dict[str, str])
 
 
 def _clickhouse_stock_summary(client: Any) -> dict[str, int]:
-    rows = client.execute("select symbol, name from stocks")
+    rows = client.execute("select symbol, name from stocks final")
     stock_count = len(rows)
     st_stock_count = 0
     for row in rows:
@@ -1037,7 +1051,7 @@ def _daily_completeness_check(
             select count() as affected_symbols
             from (
                 select s.symbol, countDistinct(k.date) as daily_days
-                from stocks s
+                from stocks s final
                 inner join daily_kline active
                     on s.symbol = active.symbol
                     and active.date = %(latest)s
@@ -1067,7 +1081,7 @@ def _daily_completeness_check(
         samples = client.execute(
             f"""
             select s.symbol, any(s.name) as name, countDistinct(k.date) as daily_days
-            from stocks s
+            from stocks s final
             inner join daily_kline active
                 on s.symbol = active.symbol
                 and active.date = %(latest)s
@@ -1624,7 +1638,7 @@ def _missing_symbol_samples(
     rows = client.execute(
         f"""
         select s.symbol, s.name
-        from stocks s
+        from stocks s final
         {active_join}
         left join {table} k
             on s.symbol = k.symbol and k.{date_col} = %(latest)s
@@ -1839,7 +1853,7 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
                 any(rs.data_gap_reasons) as data_gap_reasons,
                 any(rs.daily_missing) as daily_missing,
                 any(rs.minute5_missing) as minute5_missing
-            from stocks s
+            from stocks s final
             left join daily_kline d on d.symbol = s.symbol
             left join (
                 select symbol, research_eligible, data_ready, excluded_reasons, data_gap_reasons, daily_missing, minute5_missing
@@ -1859,7 +1873,7 @@ def fetch_stock_list(client: Any | None = None) -> dict[str, Any]:
                 s.market,
                 s.list_date,
                 if(countIf(d.symbol != '') = 0, null, maxIf(d.date, d.symbol != '')) as last_daily_date
-            from stocks s
+            from stocks s final
             left join daily_kline d on d.symbol = s.symbol
             group by s.symbol, s.name, s.industry, s.market, s.list_date
             order by s.symbol
