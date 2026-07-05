@@ -32,7 +32,6 @@ def test_run_source_checks_reports_source_statuses() -> None:
         tencent_source=FakeTencent(),
         eastmoney_source=FakeEastmoney(),
         cninfo_source=FakeCninfo(),
-        mootdx_available=lambda: False,
     )
 
     assert rows == [
@@ -40,5 +39,4 @@ def test_run_source_checks_reports_source_statuses() -> None:
         {"source": "eastmoney_concepts", "ok": True, "detail": "blocks=2"},
         {"source": "eastmoney_fund_flow", "ok": True, "detail": "rows=1"},
         {"source": "cninfo", "ok": True, "detail": "announcements=1"},
-        {"source": "mootdx", "ok": False, "detail": "optional dependency unavailable"},
     ]

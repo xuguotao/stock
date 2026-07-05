@@ -20,7 +20,6 @@ def run_source_checks(
     tencent_source: Any | None = None,
     eastmoney_source: Any | None = None,
     cninfo_source: Any | None = None,
-    mootdx_available: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Run lightweight source checks and return structured rows."""
     if tencent_source is None:
@@ -37,17 +36,12 @@ def run_source_checks(
         from src.data.cninfo_source import CninfoAnnouncementSource
 
         cninfo_source = CninfoAnnouncementSource()
-    if mootdx_available is None:
-        from src.data.mootdx_source import is_mootdx_available
-
-        mootdx_available = is_mootdx_available
 
     rows = []
     rows.append(_check_tencent(tencent_source, symbol))
     rows.append(_check_eastmoney_concepts(eastmoney_source, symbol))
     rows.append(_check_eastmoney_fund_flow(eastmoney_source, symbol))
     rows.append(_check_cninfo(cninfo_source, symbol))
-    rows.append(_check_mootdx(mootdx_available))
     return rows
 
 
@@ -93,13 +87,6 @@ def _check_cninfo(source: Any, symbol: str) -> dict[str, Any]:
         return {"source": "cninfo", "ok": False, "detail": str(exc)}
 
 
-def _check_mootdx(mootdx_available: Callable[[], bool]) -> dict[str, Any]:
-    available = mootdx_available()
-    return {
-        "source": "mootdx",
-        "ok": available,
-        "detail": "available" if available else "optional dependency unavailable",
-    }
 
 
 if __name__ == "__main__":
