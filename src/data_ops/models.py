@@ -133,6 +133,14 @@ def default_task_configs() -> list[DataOpsTaskConfig]:
             max_runtime_seconds=300,
             stale_after_seconds=180,
         ),
+        DataOpsTaskConfig(
+            task_key="xdxr_sync",
+            enabled=True,
+            schedule_kind="daily_time",
+            schedule_config={"time": "15:30"},
+            max_runtime_seconds=1800,
+            stale_after_seconds=900,
+        ),
     ]
 
 

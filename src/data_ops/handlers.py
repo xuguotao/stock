@@ -18,6 +18,7 @@ def build_default_handlers(
     daily_repair_runner: Callable[..., dict[str, Any]] | None = None,
     index_daily_sync_runner: Callable[..., dict[str, Any]] | None = None,
     stock_master_runner: Callable[..., dict[str, Any]] | None = None,
+    xdxr_sync_runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, TaskHandler]:
     if stock_master_runner is None:
         from src.data.clickhouse_stock_master_sync import sync_clickhouse_stock_master
@@ -51,6 +52,13 @@ def build_default_handlers(
         from src.data.clickhouse_daily_sync import sync_clickhouse_index_daily
 
         index_daily_sync_runner = sync_clickhouse_index_daily
+    if xdxr_sync_runner is None:
+        from src.data.clickhouse_xdxr_sync import sync_clickhouse_xdxr_info
+        from src.data.tdxrs_sync import fetch_xdxr_info
+
+        xdxr_sync_runner = lambda client, symbols: sync_clickhouse_xdxr_info(
+            client=client, fetch_fn=fetch_xdxr_info, symbols=symbols
+        )
 
     return {
         "stock_master_sync": lambda params: run_stock_master_sync(params, stock_master_runner),
@@ -66,6 +74,7 @@ def build_default_handlers(
             daily_repair_runner=daily_repair_runner,
             index_daily_sync_runner=index_daily_sync_runner,
         ),
+        "xdxr_sync": lambda params: run_xdxr_sync(params, xdxr_sync_runner),
     }
 
 
@@ -169,3 +178,34 @@ def _trade_date(params: dict[str, Any]) -> date:
     if value:
         return datetime.strptime(str(value), "%Y-%m-%d").date()
     return date.today()
+
+
+def run_xdxr_sync(params: dict[str, Any], runner: Callable[..., dict[str, Any]]) -> dict[str, Any]:
+    """Run xdxr sync task."""
+    progress = params.get("progress")
+    if callable(progress):
+        progress(10, "connecting", "连接通达信服务器")
+
+    from src.clickhouse.client import get_clickhouse_client
+    from src.data.tdxrs_sync import is_tdxrs_available
+
+    if not is_tdxrs_available():
+        return {"status": "skipped", "reason": "tdxrs not installed"}
+
+    if callable(progress):
+        progress(20, "fetching_symbols", "获取股票列表")
+
+    client = get_clickhouse_client()
+    symbols_result = client.execute("SELECT DISTINCT symbol FROM stocks WHERE market IN ('SZ', 'SH')")
+    symbols = [row[0] for row in symbols_result]
+
+    if callable(progress):
+        progress(30, "syncing", f"同步 {len(symbols)} 只股票的除权除息数据")
+
+    result = runner(client=client, symbols=symbols)
+
+    if callable(progress):
+        progress(100, "completed", f"除权除息同步完成，插入 {result.get('inserted', 0)} 条记录")
+
+    return result
+

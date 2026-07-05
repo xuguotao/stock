@@ -24,6 +24,7 @@ def test_default_task_configs_cover_first_runner_tasks() -> None:
         "quote_snapshot_capture",
         "quote_rollup_refresh",
         "quality_snapshot",
+        "xdxr_sync",
     ]
     assert all(config.enabled for config in configs)
     quote_snapshot = next(config for config in configs if config.task_key == "quote_snapshot_capture")
