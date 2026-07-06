@@ -250,7 +250,7 @@ def _bucket_start(value: datetime, minutes: int) -> datetime:
 
 
 def _resolve_symbols(client: Any, *, limit: int, include_st: bool) -> list[str]:
-    rows = client.execute("select symbol, name, market from stocks order by symbol")
+    rows = client.execute("select symbol, name, market from stocks final order by symbol")
     result = []
     for row in rows:
         symbol = row[0]

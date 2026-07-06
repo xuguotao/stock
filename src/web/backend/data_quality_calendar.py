@@ -230,11 +230,12 @@ class DataQualityCalendarService:
         return [_coerce_date(row[0]) for row in rows if _coerce_date(row[0]) is not None]
 
     def _expected_symbols(self) -> int:
+        # 使用研究eligible的股票数，排除已知无法获取数据的股票（如北交所股票）
         rows = self._execute(
-            f"""
+            """
             select count()
-            from stocks s
-            where {NON_ST_STOCK_PREDICATE}
+            from stock_research_status final
+            where research_eligible = 1
             """
         )
         return int(rows[0][0] or 0) if rows else 0
