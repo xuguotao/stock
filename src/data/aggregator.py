@@ -47,12 +47,20 @@ class DataAggregator:
 
         self.sources = sources
         self.cache = DataCache()
+        self._adjustment_service = None
 
     def _prefer_source_over_cache(self) -> bool:
         """Return true when the first source should be treated as authoritative."""
         return bool(
             self.sources and getattr(self.sources[0], "name", "") == "clickhouse"
         )
+
+    def _get_adjustment_service(self):
+        """Lazy initialization of AdjustmentService."""
+        if self._adjustment_service is None:
+            from src.data.adjustment_service import AdjustmentService
+            self._adjustment_service = AdjustmentService()
+        return self._adjustment_service
 
     def get_bars(
         self,
@@ -61,17 +69,31 @@ class DataAggregator:
         end: date,
         frequency: str = "daily",
         use_cache: bool = True,
+        adjusted: bool = False,
+        adjust_type: str = "forward",
     ) -> pd.DataFrame:
         """Get daily bars with cache + fallback.
 
         Tries cache first, then each data source in priority order.
+
+        Args:
+            symbol: Stock symbol like "000001.SZ"
+            start: Start date (inclusive)
+            end: End date (inclusive)
+            frequency: Bar frequency (default "daily")
+            use_cache: Whether to use cache (default True)
+            adjusted: Whether to apply price adjustment (default False)
+            adjust_type: Adjustment type - "forward" (前复权), "backward" (后复权), or "none"
         """
         prefer_source = self._prefer_source_over_cache()
         # Check cache
         if use_cache and not prefer_source:
             cached = self.cache.read_bars(symbol, start, end)
             if cached is not None and not cached.empty:
-                return cached
+                df = cached
+                if adjusted:
+                    df = self._apply_adjustment(df, symbol, start, end, adjust_type)
+                return df
 
         # Try each source
         for source in self.sources:
@@ -81,6 +103,8 @@ class DataAggregator:
                     # Cache result
                     if use_cache and not prefer_source:
                         self.cache.write_bars(df, symbol, start, end)
+                    if adjusted:
+                        df = self._apply_adjustment(df, symbol, start, end, adjust_type)
                     return df
             except Exception as e:
                 logger.warning(f"Source {source.name} failed for {symbol}: {e}")
@@ -89,6 +113,24 @@ class DataAggregator:
         logger.error(f"All sources failed for {symbol} ({start} to {end})")
         return pd.DataFrame()
 
+    def _apply_adjustment(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        start: date,
+        end: date,
+        adjust_type: str,
+    ) -> pd.DataFrame:
+        """Apply price adjustment to bars DataFrame."""
+        try:
+            service = self._get_adjustment_service()
+            return service.get_adjusted_bars(symbol, start, end, adjust_type)
+        except Exception as e:
+            logger.warning(f"Adjustment failed for {symbol}: {e}, returning raw bars")
+            df = df.copy()
+            df["adjusted_close"] = df["close"]
+            return df
+
     def get_bars_batch(
         self,
         symbols: list[str],
@@ -96,11 +138,23 @@ class DataAggregator:
         end: date,
         frequency: str = "daily",
         use_cache: bool = True,
+        adjusted: bool = False,
+        adjust_type: str = "forward",
     ) -> pd.DataFrame:
-        """Get bars for multiple symbols. Returns MultiIndex (date, symbol)."""
+        """Get bars for multiple symbols. Returns MultiIndex (date, symbol).
+
+        Args:
+            symbols: List of stock symbols
+            start: Start date (inclusive)
+            end: End date (inclusive)
+            frequency: Bar frequency (default "daily")
+            use_cache: Whether to use cache (default True)
+            adjusted: Whether to apply price adjustment (default False)
+            adjust_type: Adjustment type - "forward" (前复权), "backward" (后复权), or "none"
+        """
         all_dfs = []
         for sym in symbols:
-            df = self.get_bars(sym, start, end, frequency, use_cache)
+            df = self.get_bars(sym, start, end, frequency, use_cache, adjusted, adjust_type)
             if not df.empty:
                 all_dfs.append(df)
 
