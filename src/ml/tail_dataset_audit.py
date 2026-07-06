@@ -96,7 +96,7 @@ def audit_tail_ml_data(*, client: Any | None = None, as_of: date | None = None) 
 
 
 def _stock_summary(client: Any) -> dict[str, Any]:
-    rows = client.execute("select symbol, name from stocks")
+    rows = client.execute("select symbol, name from stocks final")
     stock_count = len(rows)
     st_count = sum(1 for row in rows if is_st(str(_value(tuple(row), 1) or "")))
     return {"stock_count": stock_count, "st_count": st_count, "non_st_count": stock_count - st_count}

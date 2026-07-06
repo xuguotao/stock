@@ -269,7 +269,7 @@ def test_inspect_clickhouse_database_returns_coverage() -> None:
     assert datasets["research_universe"]["expected_symbols"] == 2
     assert "research_daily_missing_1_symbols" in datasets["research_universe"]["issues"]
     assert datasets["daily_kline"]["name"] == "股票日线"
-    assert datasets["daily_kline"]["update_mechanism"] == "日常维护补齐；当分钟线先到位时可由 5m 聚合修复最新交易日。"
+    assert datasets["daily_kline"]["update_mechanism"] == "日常维护补齐；当分钟线先到位时可由 5m 聚合修复最新交易日。预期标的数 = 策略可交易股票数（动态计算，基于最新交易日）。"
     assert datasets["daily_kline"]["consumer"] == "尾盘选股、个股趋势、策略复盘、回测、因子计算"
     assert datasets["daily_kline"]["quality_rules"] == ["最新交易日覆盖率", "重复日线主键", "OHLC 合法性", "日线新鲜度"]
     assert datasets["daily_kline"]["repair_action_keys"] == ["daily_from_minute5", "daily_history_backfill", "daily_historical_invalid_prices"]

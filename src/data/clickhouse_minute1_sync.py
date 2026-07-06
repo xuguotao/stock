@@ -168,7 +168,7 @@ def _target_symbols(
             if include_st or not is_st(names.get(symbol.split(".")[0], ""))
         ]
     else:
-        rows = client.execute("select symbol, name from stocks order by symbol")
+        rows = client.execute("select symbol, name from stocks final order by symbol")
         filtered = [
             format_symbol(str(code))
             for code, name in rows

@@ -66,7 +66,7 @@ def _target_symbols(client: Any, *, symbols: list[str] | None, limit: int) -> li
     if symbols:
         filtered = [format_symbol(symbol) for symbol in symbols]
     else:
-        rows = client.execute("select symbol, name from stocks order by symbol")
+        rows = client.execute("select symbol, name from stocks final order by symbol")
         filtered = [
             format_symbol(str(code))
             for code, name in rows
