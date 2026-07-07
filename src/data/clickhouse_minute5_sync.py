@@ -269,11 +269,12 @@ def _target_symbols(
             if include_st or not is_st(names.get(symbol.split(".")[0], ""))
         ]
     else:
-        rows = client.execute("select symbol, name from stocks final order by symbol")
+        rows = client.execute("select symbol, name, market from stocks final order by symbol")
         filtered = [
             format_symbol(str(code))
-            for code, name in rows
-            if include_st or not is_st(str(name or ""))
+            for code, name, market in rows
+            if (include_st or not is_st(str(name or "")))
+            and str(market or "").upper() in ("SH", "SZ")
         ]
     if limit and limit > 0:
         return filtered[:limit]

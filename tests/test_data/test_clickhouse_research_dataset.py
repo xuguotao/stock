@@ -13,9 +13,9 @@ class FakeClickHouseClient:
         normalized = " ".join(query.lower().split())
         if "from stocks" in normalized:
             return [
-                ("000001", "平安银行"),
-                ("000004", "*ST国华"),
-                ("600000", "浦发银行"),
+                ("000001", "平安银行", "SZ"),
+                ("000004", "*ST国华", "SZ"),
+                ("600000", "浦发银行", "SH"),
             ]
         if "from daily_kline" in normalized:
             return [

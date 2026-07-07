@@ -66,11 +66,12 @@ def _target_symbols(client: Any, *, symbols: list[str] | None, limit: int) -> li
     if symbols:
         filtered = [format_symbol(symbol) for symbol in symbols]
     else:
-        rows = client.execute("select symbol, name from stocks final order by symbol")
+        rows = client.execute("select symbol, name, market from stocks final order by symbol")
         filtered = [
             format_symbol(str(code))
-            for code, name in rows
+            for code, name, market in rows
             if not is_st(str(name or ""))
+            and str(market or "").upper() in ("SH", "SZ")
         ]
     if limit and limit > 0:
         return filtered[:limit]

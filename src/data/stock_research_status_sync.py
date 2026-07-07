@@ -9,7 +9,7 @@ from typing import Any
 from src.core.constants import format_symbol, is_st
 
 
-SUPPORTED_MARKETS = {"SH", "SZ", "BJ"}
+SUPPORTED_MARKETS = {"SH", "SZ"}
 
 
 def sync_stock_research_status(

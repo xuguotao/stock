@@ -17,11 +17,20 @@ class FakeClickHouseClient:
         self.queries.append((query, params))
         normalized = " ".join(query.lower().split())
         if "from stocks" in normalized:
-            return [
-                ("000001", "平安银行"),
-                ("000004", "*ST国华"),
-                ("600000", "浦发银行"),
-            ]
+            if "where symbol in" in normalized:
+                # _stock_names query - return 2 values
+                return [
+                    ("000001", "平安银行"),
+                    ("000004", "*ST国华"),
+                    ("600000", "浦发银行"),
+                ][:len(params.get("symbols", []))]
+            else:
+                # _target_symbols query - return 3 values
+                return [
+                    ("000001", "平安银行", "SZ"),
+                    ("000004", "*ST国华", "SZ"),
+                    ("600000", "浦发银行", "SH"),
+                ]
         if "max(datetime)" in normalized and "group by symbol" in normalized:
             return [(symbol, latest) for symbol, latest in sorted(self.latest_by_symbol.items())]
         if normalized.startswith("insert into minute1_kline"):

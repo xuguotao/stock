@@ -40,12 +40,12 @@ def test_sync_stock_research_status_marks_eligibility_reasons_and_data_gaps() ->
     assert result == {
         "source": "stock_research_status",
         "total_rows": 4,
-        "eligible_rows": 2,
+        "eligible_rows": 1,
         "data_ready_rows": 1,
-        "excluded_rows": 2,
-        "not_ready_rows": 1,
-        "daily_missing_rows": 1,
-        "minute5_missing_rows": 1,
+        "excluded_rows": 3,
+        "not_ready_rows": 0,
+        "daily_missing_rows": 0,
+        "minute5_missing_rows": 0,
         "daily_latest_date": "2026-07-01",
         "minute5_trade_date": "2026-07-02",
     }
@@ -61,9 +61,9 @@ def test_sync_stock_research_status_marks_eligibility_reasons_and_data_gaps() ->
     assert by_symbol["000004"][11] == '["st_stock"]'
     assert by_symbol["002808"][9] == 0
     assert by_symbol["002808"][11] == '["delisting_period"]'
-    assert by_symbol["920699"][9] == 1
+    assert by_symbol["920699"][9] == 0
     assert by_symbol["920699"][10] == 0
-    assert by_symbol["920699"][11] == "[]"
+    assert by_symbol["920699"][11] == '["unsupported_market"]'
     assert by_symbol["920699"][12] == '["daily_missing", "minute5_missing"]'
     assert by_symbol["920699"][14] == 1
     assert by_symbol["920699"][16] == 1
@@ -143,10 +143,12 @@ def test_sync_stock_research_status_does_not_mark_no_trade_symbols_as_missing() 
     _insert_query, rows = client.commands[-1]
     by_symbol = {row[0]: row for row in rows}
     assert result["data_ready_rows"] == 1
-    assert result["daily_missing_rows"] == 1
+    assert result["daily_missing_rows"] == 0
     assert by_symbol["000524"][10] == 1
     assert by_symbol["000524"][12] == "[]"
     assert by_symbol["000524"][14] == 0
     assert by_symbol["000524"][16] == 0
+    assert by_symbol["920580"][9] == 0
     assert by_symbol["920580"][10] == 0
+    assert by_symbol["920580"][11] == '["unsupported_market"]'
     assert by_symbol["920580"][12] == '["daily_missing", "minute5_missing"]'

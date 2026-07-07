@@ -259,6 +259,8 @@ def _resolve_symbols(client: Any, *, limit: int, include_st: bool) -> list[str]:
         stock_name = str(name or "")
         if not include_st and is_st(stock_name):
             continue
+        if str(market or "").upper() not in ("SH", "SZ"):
+            continue
         result.append(_format_symbol_with_market(str(symbol), str(market or "")))
         if limit > 0 and len(result) >= limit:
             break

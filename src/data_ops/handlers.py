@@ -196,7 +196,7 @@ def run_xdxr_sync(params: dict[str, Any], runner: Callable[..., dict[str, Any]])
         progress(20, "fetching_symbols", "获取股票列表")
 
     client = get_clickhouse_client()
-    symbols_result = client.execute("SELECT DISTINCT symbol FROM stocks WHERE market IN ('SZ', 'SH')")
+    symbols_result = client.execute("SELECT symbol || '.' || market FROM stocks FINAL WHERE market IN ('SZ', 'SH')")
     symbols = [row[0] for row in symbols_result]
 
     if callable(progress):
