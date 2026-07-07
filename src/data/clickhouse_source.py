@@ -179,7 +179,7 @@ class ClickHouseStockDataSource(DataSourceBase):
             where symbol in %(symbols)s and bucket_start >= %(start)s and bucket_start <= %(end)s
             order by symbol, bucket_start
             """,
-            {"symbols": tuple(_code(symbol) for symbol in symbols), "start": start, "end": end},
+            {"symbols": tuple(format_symbol(symbol) for symbol in symbols), "start": start, "end": end},
         )
         if not rows:
             return pd.DataFrame()

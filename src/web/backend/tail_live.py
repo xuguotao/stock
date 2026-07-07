@@ -632,6 +632,79 @@ def _clickhouse_client_from_aggregator(aggregator: Any) -> Any | None:
     return None
 
 
+def _query_latest_intraday_time(
+    aggregator: Any,
+    trade_date: date,
+    frequency: str = "5m",
+) -> time | None:
+    """Query ClickHouse for the global max intraday bar time across all symbols.
+
+    Checks three data sources and returns the latest timestamp found:
+    - ``stock_quote_snapshots`` (raw real-time snapshots, near-second latency)
+    - ``stock_quote_snapshots_5m`` (5-minute aggregated snapshot data)
+    - ``minute5_kline`` (batch-synced K-line data)
+
+    The raw snapshots table provides the most timely signal of data pipeline
+    health; its ``snapshot_at`` is aligned to the 5-minute bucket grid so the
+    comparison with ``scan_as_of_time`` stays consistent.
+
+    Returns the latest bar time as a time object, or None if no data is available.
+    """
+    client = _clickhouse_client_from_aggregator(aggregator)
+    if client is None:
+        return None
+    start_dt = datetime.combine(trade_date, time(0, 0))
+    end_dt = datetime.combine(trade_date, time(23, 59, 59))
+    if frequency == "5m":
+        minute_table = "minute5_kline"
+        minute_time_col = "datetime"
+        snapshot_5m_table = "stock_quote_snapshots_5m"
+        snapshot_5m_time_col = "bucket_start"
+        # Raw snapshots: align to 5-minute bucket grid
+        raw_snapshot_query = """
+            select toStartOfFiveMinutes(max(snapshot_at)) as latest
+            from stock_quote_snapshots
+            where snapshot_at >= %(start)s and snapshot_at <= %(end)s
+        """
+        snapshot_5m_query = f"""
+            select max({snapshot_5m_time_col}) as latest
+            from {snapshot_5m_table} final
+            where {snapshot_5m_time_col} >= %(start)s and {snapshot_5m_time_col} <= %(end)s
+        """
+        minute_query = f"""
+            select max({minute_time_col}) as latest
+            from {minute_table} final
+            where {minute_time_col} >= %(start)s and {minute_time_col} <= %(end)s
+        """
+        union_query = f"""
+            select max(latest) from (
+                {raw_snapshot_query}
+                union all
+                {snapshot_5m_query}
+                union all
+                {minute_query}
+            )
+        """
+    else:
+        minute_table = "minute1_kline"
+        minute_time_col = "datetime"
+        union_query = f"""
+            select max({minute_time_col}) as latest
+            from {minute_table} final
+            where {minute_time_col} >= %(start)s and {minute_time_col} <= %(end)s
+        """
+    try:
+        rows = client.execute(union_query, {"start": start_dt, "end": end_dt})
+        if not rows or not rows[0] or not rows[0][0]:
+            return None
+        latest_dt = rows[0][0]
+        if hasattr(latest_dt, "time"):
+            return latest_dt.time()
+        return None
+    except Exception:
+        return None
+
+
 def _code(symbol: str) -> str:
     return str(symbol).split(".", 1)[0].zfill(6)
 
@@ -1024,19 +1097,41 @@ def _credibility_risks(signal: Any, *, mode: str) -> list[str]:
     return risks
 
 
+_COVERAGE_SAMPLE_SIZE = 50
+
+
+def _sample_symbols_for_coverage(symbols: list[str]) -> list[str]:
+    """Return a representative sample of symbols for intraday coverage diagnostics.
+
+    Uses even spacing across the universe rather than just the first N,
+    so that diagnostic info reflects the whole pool instead of
+    being skewed by a handful of potentially slow-to-sync symbols.
+    """
+    if len(symbols) <= _COVERAGE_SAMPLE_SIZE:
+        return list(symbols)
+    step = max(1, len(symbols) // _COVERAGE_SAMPLE_SIZE)
+    return symbols[::step][:_COVERAGE_SAMPLE_SIZE]
+
+
 def _intraday_coverage(aggregator: Any, symbols: list[str], trade_date: date) -> dict[str, Any]:
-    checked_symbols = symbols[:20]
+    """Check intraday data availability and freshness.
+
+    Uses a direct ClickHouse query for the global max bar time (accurate and efficient),
+    with a fallback to sample-based computation when ClickHouse is unavailable.
+    Per-symbol diagnostic info uses a representative sample.
+    """
+    checked_symbols = _sample_symbols_for_coverage(symbols)
     available = []
     missing = []
     symbol_rows = []
-    latest_time: time | None = None
+    sample_latest_time: time | None = None
     for index, symbol in enumerate(checked_symbols, start=1):
         bars = aggregator.get_intraday_bars(symbol, trade_date, "5m")
         if bars is not None and not bars.empty:
             available.append(symbol)
             symbol_latest_time = _latest_bar_time(bars)
-            if symbol_latest_time is not None and (latest_time is None or symbol_latest_time > latest_time):
-                latest_time = symbol_latest_time
+            if symbol_latest_time is not None and (sample_latest_time is None or symbol_latest_time > sample_latest_time):
+                sample_latest_time = symbol_latest_time
             symbol_rows.append({
                 "rank": index,
                 "symbol": symbol,
@@ -1051,6 +1146,12 @@ def _intraday_coverage(aggregator: Any, symbols: list[str], trade_date: date) ->
                 "has_intraday_data": False,
                 "latest_time": None,
             })
+
+    # Prefer ClickHouse global max time; fall back to sample-based max
+    latest_time = _query_latest_intraday_time(aggregator, trade_date, "5m")
+    if latest_time is None:
+        latest_time = sample_latest_time
+
     return {
         "checked_count": len(checked_symbols),
         "available_count": len(available),

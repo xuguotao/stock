@@ -35,11 +35,11 @@ class FakeClickHouseClient:
             ]
         if "from stock_quote_snapshots_5m" in query:
             symbols = set((params or {}).get("symbols") or ())
-            if "600519" not in symbols:
+            if not any("600519" in s for s in symbols):
                 return []
             return [
-                ("600519", datetime(2026, 6, 15, 14, 30), 1200.0, 1205.0, 1198.0, 1202.0, 100, 120200.0),
-                ("600519", datetime(2026, 6, 15, 14, 35), 1202.0, 1208.0, 1201.0, 1206.0, 120, 144720.0),
+                ("600519.SH", datetime(2026, 6, 15, 14, 30), 1200.0, 1205.0, 1198.0, 1202.0, 100, 120200.0),
+                ("600519.SH", datetime(2026, 6, 15, 14, 35), 1202.0, 1208.0, 1201.0, 1206.0, 120, 144720.0),
             ]
         if "from stock_quote_snapshots" in query:
             return [
@@ -74,12 +74,12 @@ class GapFillingClickHouseClient(FakeClickHouseClient):
             ]
         if "from stock_quote_snapshots_5m" in query:
             symbols = set((params or {}).get("symbols") or ())
-            if "000001" not in symbols:
+            if not any("000001" in s for s in symbols):
                 return []
             return [
-                ("000001", datetime(2026, 6, 15, 14, 35), 10.1, 10.4, 10.0, 10.25, 1300, 13325.0),
-                ("000001", datetime(2026, 6, 15, 14, 40), 10.25, 10.5, 10.2, 10.45, 1500, 15675.0),
-                ("000001", datetime(2026, 6, 15, 14, 45), 10.45, 10.6, 10.4, 10.55, 1600, 16880.0),
+                ("000001.SZ", datetime(2026, 6, 15, 14, 35), 10.1, 10.4, 10.0, 10.25, 1300, 13325.0),
+                ("000001.SZ", datetime(2026, 6, 15, 14, 40), 10.25, 10.5, 10.2, 10.45, 1500, 15675.0),
+                ("000001.SZ", datetime(2026, 6, 15, 14, 45), 10.45, 10.6, 10.4, 10.55, 1600, 16880.0),
             ]
         return super().execute(query, params)
 
