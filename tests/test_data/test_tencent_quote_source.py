@@ -5,7 +5,7 @@ from datetime import date
 import pandas as pd
 
 from src.data import tencent_source
-from src.data.tencent_source import TencentQuoteSource, parse_tencent_minute_json, parse_tencent_quote_text
+from src.data.tencent_source import TencentQuoteSource, parse_tencent_quote_text
 
 
 def test_parse_tencent_quote_text_outputs_standard_quote_columns() -> None:
@@ -174,34 +174,6 @@ def test_tencent_quote_source_fetches_stock_list_from_board_rank_pages() -> None
     assert "offset=2" in calls[1]
 
 
-def test_parse_tencent_minute_json_keeps_bj_rows_without_amount_as_missing_amount() -> None:
-    payload = {
-        "code": 0,
-        "msg": "",
-        "data": {
-            "bj920699": {
-                "data": {
-                    "date": "20260702",
-                    "data": [
-                        "0930 94.00 476",
-                        "0931 94.10 500",
-                    ],
-                }
-            }
-        },
-    }
-
-    result = parse_tencent_minute_json(payload, "920699.BJ", date(2026, 7, 2))
-
-    assert result["datetime"].tolist() == [
-        pd.Timestamp("2026-07-02 09:30:00"),
-        pd.Timestamp("2026-07-02 09:31:00"),
-    ]
-    assert result["volume"].tolist() == [476.0, 24.0]
-    assert result["amount"].tolist() == [0.0, 0.0]
-    assert result["amount_is_estimated"].tolist() == [True, True]
-
-
 def test_parse_tencent_kline_json_outputs_5m_intraday_bars() -> None:
     payload = {
         "code": 0,
@@ -290,7 +262,7 @@ def test_tencent_quote_source_fetches_intraday_bars_batch() -> None:
     assert len(calls) == 2
 
 
-def test_tencent_quote_source_fetches_1m_intraday_bars_with_incremental_volume() -> None:
+def test_tencent_quote_source_does_not_fetch_1m_intraday_bars() -> None:
     calls = []
 
     def fake_get(url: str, *, headers: dict[str, str], timeout: int):
@@ -308,16 +280,8 @@ def test_tencent_quote_source_fetches_1m_intraday_bars_with_incremental_volume()
 
     result = source.fetch_intraday_bars("000001.SZ", date(2026, 6, 17), "1m")
 
-    assert result["datetime"].tolist() == [
-        pd.Timestamp("2026-06-17 09:30:00"),
-        pd.Timestamp("2026-06-17 09:31:00"),
-        pd.Timestamp("2026-06-17 09:32:00"),
-    ]
-    assert result["close"].tolist() == [10.97, 10.94, 10.95]
-    assert result["open"].tolist() == [10.97, 10.94, 10.95]
-    assert result["volume"].tolist() == [6058.0, 20770.0, 4578.0]
-    assert result["amount"].tolist() == [6645626.0, 22727533.21, 5011719.0]
-    assert calls[0] == "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sz000001"
+    assert result.empty
+    assert calls == []
 
 
 def test_tencent_quote_source_rejects_1m_payload_for_different_trade_date() -> None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
+from src.data.clickhouse_source import ClickHouseStockDataSource
+
 TaskHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 
@@ -186,7 +188,6 @@ def run_xdxr_sync(params: dict[str, Any], runner: Callable[..., dict[str, Any]])
     if callable(progress):
         progress(10, "connecting", "连接通达信服务器")
 
-    from src.clickhouse.client import get_clickhouse_client
     from src.data.tdxrs_sync import is_tdxrs_available
 
     if not is_tdxrs_available():
@@ -195,7 +196,7 @@ def run_xdxr_sync(params: dict[str, Any], runner: Callable[..., dict[str, Any]])
     if callable(progress):
         progress(20, "fetching_symbols", "获取股票列表")
 
-    client = get_clickhouse_client()
+    client = ClickHouseStockDataSource()._client_instance()
     symbols_result = client.execute("SELECT symbol || '.' || market FROM stocks FINAL WHERE market IN ('SZ', 'SH')")
     symbols = [row[0] for row in symbols_result]
 
@@ -208,4 +209,3 @@ def run_xdxr_sync(params: dict[str, Any], runner: Callable[..., dict[str, Any]])
         progress(100, "completed", f"除权除息同步完成，插入 {result.get('inserted', 0)} 条记录")
 
     return result
-

@@ -64,3 +64,32 @@ def test_quote_snapshot_handler_passes_endpoint_and_chunk_size() -> None:
     assert result["quote_endpoint"] == "sqt_utf8"
     assert calls[0]["chunk_size"] == 500
     assert calls[0]["quote_endpoint"] == "sqt_utf8"
+
+
+def test_xdxr_sync_handler_uses_clickhouse_data_source(monkeypatch) -> None:
+    calls = {}
+
+    class FakeClient:
+        def execute(self, query):
+            calls["query"] = query
+            return [("600519.SH",), ("000001.SZ",)]
+
+    class FakeClickHouseSource:
+        def _client_instance(self):
+            calls["client_created"] = True
+            return FakeClient()
+
+    monkeypatch.setattr("src.data.tdxrs_sync.is_tdxrs_available", lambda: True)
+    monkeypatch.setattr("src.data_ops.handlers.ClickHouseStockDataSource", FakeClickHouseSource)
+
+    def fake_runner(*, client, symbols):
+        calls["client"] = client
+        calls["symbols"] = symbols
+        return {"inserted": len(symbols)}
+
+    result = build_default_handlers(xdxr_sync_runner=fake_runner)["xdxr_sync"]({})
+
+    assert result == {"inserted": 2}
+    assert calls["client_created"] is True
+    assert calls["symbols"] == ["600519.SH", "000001.SZ"]
+    assert "stocks FINAL" in calls["query"]

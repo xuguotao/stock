@@ -653,12 +653,6 @@
         <el-descriptions-item label="日线股票">
           {{ formatNumber(dataStatus?.health.daily_symbol_count ?? 0) }}
         </el-descriptions-item>
-        <el-descriptions-item label="1m覆盖">
-          {{ tableRange('minute1_kline') }}
-        </el-descriptions-item>
-        <el-descriptions-item label="1m标的">
-          {{ formatNumber(dataStatus?.health.minute1_symbol_count ?? 0) }}
-        </el-descriptions-item>
         <el-descriptions-item label="5m覆盖">
           {{ tableRange('minute5_kline') }}
         </el-descriptions-item>
@@ -921,7 +915,7 @@ const assetRows = computed(() => {
       title: '分钟行情',
       status: quality?.minute5.status ?? 'missing',
       range: tableRange('minute5_kline'),
-      symbols: `5m ${formatNumber(status?.health.minute5_symbol_count ?? 0)} / 1m ${formatNumber(status?.health.minute1_symbol_count ?? 0)}`,
+      symbols: `5m ${formatNumber(status?.health.minute5_symbol_count ?? 0)}`,
       purpose: '尾盘策略、盘中预演、复盘'
     },
     {

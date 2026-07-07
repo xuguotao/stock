@@ -686,13 +686,7 @@ def _query_latest_intraday_time(
             )
         """
     else:
-        minute_table = "minute1_kline"
-        minute_time_col = "datetime"
-        union_query = f"""
-            select max({minute_time_col}) as latest
-            from {minute_table} final
-            where {minute_time_col} >= %(start)s and {minute_time_col} <= %(end)s
-        """
+        return None
     try:
         rows = client.execute(union_query, {"start": start_dt, "end": end_dt})
         if not rows or not rows[0] or not rows[0][0]:

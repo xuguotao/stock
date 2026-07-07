@@ -103,55 +103,6 @@ def parse_tencent_kline_json(payload: dict[str, Any], symbol: str, frequency: st
     return pd.DataFrame(rows).sort_values("datetime").reset_index(drop=True)
 
 
-def parse_tencent_minute_json(payload: dict[str, Any], symbol: str, trade_date: date) -> pd.DataFrame:
-    """Parse Tencent minute trend JSON into approximate 1-minute bars."""
-    if payload.get("code") != 0:
-        return pd.DataFrame()
-    query_symbol = _tencent_symbol(symbol)
-    node = (payload.get("data") or {}).get(query_symbol) or {}
-    minute_data = node.get("data") or {}
-    payload_date = str(minute_data.get("date") or "")
-    if payload_date and payload_date != trade_date.strftime("%Y%m%d"):
-        return pd.DataFrame()
-    data = minute_data.get("data") or []
-    rows = []
-    previous_volume = 0.0
-    previous_amount = 0.0
-    formatted_symbol = format_symbol(symbol)
-    for raw in data:
-        parts = str(raw).split()
-        if len(parts) < 3:
-            continue
-        timestamp = pd.to_datetime(f"{trade_date.isoformat()} {parts[0]}", format="%Y-%m-%d %H%M", errors="coerce")
-        if pd.isna(timestamp):
-            continue
-        if not _is_regular_a_share_minute(timestamp.time()):
-            continue
-        price = _safe_float(parts[1])
-        cumulative_volume = _safe_float(parts[2])
-        has_amount = len(parts) >= 4
-        cumulative_amount = _safe_float(parts[3]) if has_amount else previous_amount
-        volume = max(0.0, cumulative_volume - previous_volume)
-        amount = max(0.0, cumulative_amount - previous_amount) if has_amount else 0.0
-        previous_volume = cumulative_volume
-        previous_amount = cumulative_amount
-        rows.append({
-            "datetime": timestamp,
-            "time": timestamp.time(),
-            "symbol": formatted_symbol,
-            "open": price,
-            "high": price,
-            "low": price,
-            "close": price,
-            "volume": volume,
-            "amount": amount,
-            "amount_is_estimated": not has_amount,
-        })
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows).sort_values("datetime").reset_index(drop=True)
-
-
 class TencentQuoteSource(DataSourceBase):
     """Tencent Finance adapter for real-time quotes and valuation fields."""
 
@@ -265,8 +216,6 @@ class TencentQuoteSource(DataSourceBase):
         trade_date: date,
         frequency: str = "5m",
     ) -> pd.DataFrame:
-        if frequency == "1m":
-            return self._fetch_1m_intraday_bars(symbol, trade_date)
         if frequency != "5m":
             return pd.DataFrame()
         self._wait_for_rate_limit()
@@ -286,27 +235,13 @@ class TencentQuoteSource(DataSourceBase):
         mask = bars["datetime"].dt.date == trade_date
         return bars.loc[mask].reset_index(drop=True)
 
-    def _fetch_1m_intraday_bars(self, symbol: str, trade_date: date) -> pd.DataFrame:
-        self._wait_for_rate_limit()
-        query_symbol = _tencent_symbol(symbol)
-        text = self._http_get(
-            f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={query_symbol}",
-            headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/", "Accept": "application/json,*/*"},
-            timeout=10,
-        )
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            return pd.DataFrame()
-        return parse_tencent_minute_json(payload, symbol, trade_date)
-
     def fetch_intraday_bars_batch(
         self,
         symbols: list[str],
         trade_date: date,
         frequency: str = "5m",
     ) -> pd.DataFrame:
-        if not symbols or frequency not in {"1m", "5m"}:
+        if not symbols or frequency != "5m":
             return pd.DataFrame()
         frames = []
         workers = max(1, min(self._intraday_workers, len(symbols)))

@@ -203,6 +203,38 @@ def test_realtime_runner_only_executes_realtime_task_group() -> None:
     assert result == {"executed": 2, "failed": 0, "skipped": 0}
 
 
+def test_intraday_runner_executes_minute5_kline_task() -> None:
+    repo = FakeRepository([
+        DataOpsTaskConfig(
+            task_key="minute5_intraday_sync",
+            enabled=True,
+            schedule_kind="market_interval",
+            schedule_config={"interval_seconds": 0},
+        ),
+        DataOpsTaskConfig(
+            task_key="quality_snapshot",
+            enabled=True,
+            schedule_kind="interval",
+            schedule_config={"interval_seconds": 0},
+        ),
+    ])
+    runner = DataOpsRunner(
+        repository=repo,
+        handlers={
+            "minute5_intraday_sync": lambda params: {"minute5": True},
+            "quality_snapshot": lambda params: {"quality": True},
+        },
+        config=DataOpsRunnerConfig(runner_id="runner-intraday", once=True, task_group="intraday"),
+        clock=lambda: datetime(2026, 6, 12, 10, 0),
+        is_trading_day=lambda value: True,
+    )
+
+    result = runner.run_once()
+
+    assert repo.started == ["minute5_intraday_sync"]
+    assert result == {"executed": 1, "failed": 0, "skipped": 0}
+
+
 def test_task_key_filter_still_applies_inside_task_group() -> None:
     repo = FakeRepository([
         DataOpsTaskConfig(

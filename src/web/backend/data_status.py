@@ -18,7 +18,6 @@ TABLE_SPECS = {
     "stocks": {"symbol_col": "symbol"},
     "trade_calendar": {"date_col": "date"},
     "daily_kline": {"date_col": "date", "symbol_col": "symbol"},
-    "minute1_kline": {"date_col": "datetime", "symbol_col": "symbol"},
     "minute5_kline": {"date_col": "datetime", "symbol_col": "symbol"},
     "index_daily": {"date_col": "date", "symbol_col": "code"},
     "financials": {"date_col": "report_date", "symbol_col": "symbol"},
@@ -39,7 +38,6 @@ CLICKHOUSE_TABLE_SPECS = {
     "stocks": {"symbol_col": "symbol", "date_col": "updated_at"},
     "trade_calendar": {"date_col": "date"},
     "daily_kline": {"date_col": "date", "symbol_col": "symbol"},
-    "minute1_kline": {"date_col": "datetime", "symbol_col": "symbol"},
     "minute5_kline": {"date_col": "datetime", "symbol_col": "symbol"},
     "index_daily": {"date_col": "date", "symbol_col": "code"},
     "financials": {"date_col": "report_date", "symbol_col": "symbol"},
@@ -103,15 +101,12 @@ def inspect_stock_database(db_path: str | Path = "data/stock.db") -> dict[str, A
         }
 
     daily = tables.get("daily_kline", {})
-    minute1 = tables.get("minute1_kline", {})
     minute5 = tables.get("minute5_kline", {})
     quote_snapshots = tables.get("stock_quote_snapshots", {})
     health = {
         "status": "ok",
         "daily_latest_date": (daily.get("date_range") or {}).get("end"),
         "daily_symbol_count": daily.get("symbol_count", 0),
-        "minute1_latest_datetime": (minute1.get("date_range") or {}).get("end"),
-        "minute1_symbol_count": minute1.get("symbol_count", 0),
         "minute5_latest_datetime": (minute5.get("date_range") or {}).get("end"),
         "minute5_symbol_count": minute5.get("symbol_count", 0),
         "quote_snapshot_latest_datetime": (quote_snapshots.get("date_range") or {}).get("end"),
@@ -181,15 +176,12 @@ def inspect_clickhouse_database(
         }
 
     daily = tables.get("daily_kline", {})
-    minute1 = tables.get("minute1_kline", {})
     minute5 = tables.get("minute5_kline", {})
     quote_snapshots = tables.get("stock_quote_snapshots", {})
     health = {
         "status": "ok",
         "daily_latest_date": (daily.get("date_range") or {}).get("end"),
         "daily_symbol_count": daily.get("symbol_count", 0),
-        "minute1_latest_datetime": (minute1.get("date_range") or {}).get("end"),
-        "minute1_symbol_count": minute1.get("symbol_count", 0),
         "minute5_latest_datetime": (minute5.get("date_range") or {}).get("end"),
         "minute5_symbol_count": minute5.get("symbol_count", 0),
         "quote_snapshot_latest_datetime": (quote_snapshots.get("date_range") or {}).get("end"),
@@ -293,6 +285,9 @@ def _dataset_health_rows(
             "consumer": "健康矩阵、数据日历、策略候选池、回测样本选择",
             "quality_rules": ["研究池纳入规则", "未纳入原因标签", "数据就绪状态", "日线缺口", "5m 缺口"],
             "repair_action_keys": ["stock_master_sync", "daily_history_backfill", "minute5_sync"],
+            "latest": (research_summary or {}).get("checked_at"),
+            "range": None,
+            "rows": int((research_summary or {}).get("eligible") or 0),
             "expected_symbols": int((research_summary or {}).get("eligible") or 0),
             "symbols": int((research_summary or {}).get("data_ready") or 0),
             "status": _research_summary_status(research_summary),
@@ -308,6 +303,8 @@ def _dataset_health_rows(
             "consumer": "全市场扫描、股票名称展示、非 ST 标的池",
             "quality_rules": ["基础表存在", "与腾讯股票池总数一致"],
             "repair_action_keys": ["stock_master_sync"],
+            "rows": expected_all,
+            "symbols": expected_all,
             "expected_symbols": expected_all,
             "status": "ok" if tables.get("stocks", {}).get("row_count", 0) else "missing",
             "issues": [],
@@ -338,20 +335,6 @@ def _dataset_health_rows(
             "quality_key": ("daily",),
             "expected_symbols": (quality.get("daily") or {}).get("expected_symbols", non_st_count),
             "issues": _dataset_issues("daily_kline", quality),
-        },
-        {
-            "key": "minute1_kline",
-            "name": "1m 分钟线",
-            "category": "行情数据",
-            "table": "minute1_kline",
-            "source": "ClickHouse / minute1_kline",
-            "update_mechanism": "可由分钟源补齐，当前主要用于更细粒度盘中分析和后续因子挖掘。",
-            "consumer": "盘中趋势、精细化复盘、短周期因子",
-            "quality_rules": ["基础表存在", "最新时间", "标的覆盖"],
-            "repair_action_keys": [],
-            "expected_symbols": non_st_count,
-            "status": _table_presence_status(tables.get("minute1_kline")),
-            "issues": [],
         },
         {
             "key": "minute5_kline",
@@ -531,9 +514,9 @@ def _dataset_health_row(
         "consumer": definition["consumer"],
         "quality_rules": [str(rule) for rule in definition.get("quality_rules", [])],
         "repair_action_keys": [str(key) for key in definition.get("repair_action_keys", [])],
-        "latest": _dataset_latest(table, quality_row),
-        "range": table.get("date_range"),
-        "rows": int(table.get("row_count") or quality_row.get("row_count") or 0),
+        "latest": str(definition["latest"]) if definition.get("latest") is not None else _dataset_latest(table, quality_row),
+        "range": definition["range"] if "range" in definition else table.get("date_range"),
+        "rows": int(definition["rows"]) if "rows" in definition else int(table.get("row_count") or quality_row.get("row_count") or 0),
         "symbols": symbols,
         "expected_symbols": expected,
         "coverage_ratio": coverage,
@@ -681,6 +664,7 @@ def _empty_research_summary() -> dict[str, Any]:
         "not_ready": 0,
         "daily_missing": 0,
         "minute5_missing": 0,
+        "checked_at": None,
         "reason_counts": {},
         "gap_reason_counts": {},
     }
@@ -690,7 +674,7 @@ def _stock_research_summary(client: Any) -> dict[str, Any]:
     try:
         rows = client.execute(
             """
-            select symbol, name, research_eligible, data_ready, excluded_reasons, data_gap_reasons, daily_missing, minute5_missing
+            select symbol, name, research_eligible, data_ready, excluded_reasons, data_gap_reasons, daily_missing, minute5_missing, checked_at
             from stock_research_status final
             """
         )
@@ -703,6 +687,7 @@ def _stock_research_summary(client: Any) -> dict[str, Any]:
     minute5_missing = 0
     reason_counts: dict[str, int] = {}
     gap_reason_counts: dict[str, int] = {}
+    checked_at_values = []
     for row in rows:
         values = tuple(row)
         research_eligible = values[2] if len(values) > 2 else 0
@@ -711,6 +696,8 @@ def _stock_research_summary(client: Any) -> dict[str, Any]:
         data_gap_reasons = values[5] if len(values) > 5 else "[]"
         row_daily_missing = values[6] if len(values) > 6 else 0
         row_minute5_missing = values[7] if len(values) > 7 else 0
+        if len(values) > 8 and values[8] is not None:
+            checked_at_values.append(values[8])
         if int(research_eligible or 0):
             eligible += 1
         if int(row_data_ready or 0):
@@ -732,6 +719,7 @@ def _stock_research_summary(client: Any) -> dict[str, Any]:
         "not_ready": max(0, eligible - data_ready),
         "daily_missing": daily_missing,
         "minute5_missing": minute5_missing,
+        "checked_at": _format_status_value(max(checked_at_values)) if checked_at_values else None,
         "reason_counts": reason_counts,
         "gap_reason_counts": gap_reason_counts,
     }

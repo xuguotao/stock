@@ -107,8 +107,6 @@ export interface DataStatusResponse {
     status: string
     daily_latest_date?: string | null
     daily_symbol_count?: number
-    minute1_latest_datetime?: string | null
-    minute1_symbol_count?: number
     minute5_latest_datetime?: string | null
     minute5_symbol_count?: number
     quote_snapshot_latest_datetime?: string | null

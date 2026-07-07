@@ -43,8 +43,8 @@ def test_stock_trend_api_returns_symbol_trend(tmp_path) -> None:
     assert payload["symbol"] == "601899.SH"
     assert payload["name"] == "紫金矿业"
     assert payload["latest_intraday_time"] == "14:35:00"
-    assert payload["granularity"] == "1m"
+    assert payload["granularity"] == "5m"
     assert payload["tail_evidence"]["volume_ratio"] == 2.1
-    assert observed["granularity"] == "1m"
+    assert observed["granularity"] == "5m"
     assert payload["quote"]["source"] == "snapshot"
     assert payload["metrics"]["daily_return_5d"] == 0.032

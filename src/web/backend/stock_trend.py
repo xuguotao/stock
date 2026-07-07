@@ -54,7 +54,7 @@ def analyze_stock_trend(
 
 
 def _normalize_granularity(value: str) -> str:
-    return value if value in {"1m", "5m"} else "5m"
+    return "5m"
 
 
 def _stock_name(aggregator: DataAggregator, symbol: str) -> str:

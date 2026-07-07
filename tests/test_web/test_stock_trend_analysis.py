@@ -40,12 +40,12 @@ def test_stock_trend_analysis_returns_tail_strategy_evidence(monkeypatch) -> Non
 
     result = stock_trend.analyze_stock_trend("000001.SZ", trade_date=date(2026, 6, 16), granularity="1m")
 
-    assert fake.intraday_frequency == "1m"
-    assert result["granularity"] == "1m"
+    assert fake.intraday_frequency == "5m"
+    assert result["granularity"] == "5m"
     assert result["tail_evidence"]["status"] == "ok"
     assert result["tail_evidence"]["volume_ratio"] == 3.0
     assert result["tail_evidence"]["tail_return"] == 0.034653
     assert result["tail_evidence"]["tail_high_return"] == 0.039604
     assert result["tail_evidence"]["pullback_from_high"] == -0.004762
     assert result["tail_evidence"]["close_position"] == 0.888889
-    assert result["tail_evidence"]["source"] == "1m"
+    assert result["tail_evidence"]["source"] == "5m"

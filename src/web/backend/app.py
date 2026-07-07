@@ -493,7 +493,7 @@ def create_app(
             symbol,
             trade_date=trade_date,
             daily_window=daily_window,
-            granularity=granularity,
+            granularity="5m",
         )
 
     @app.get("/api/watchlist-monitor/report")

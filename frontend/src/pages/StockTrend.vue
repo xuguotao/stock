@@ -71,7 +71,7 @@ const queryParams = new URLSearchParams(window.location.search)
 const today = new Date().toISOString().slice(0, 10)
 const symbolInput = ref(props.symbol || '')
 const tradeDate = ref(queryParams.get('trade_date') || today)
-const granularity = ref(queryParams.get('granularity') === '1m' ? '1m' : '5m')
+const granularity = ref('5m')
 const chartMode = ref(queryParams.get('granularity') ? 'intraday' : 'daily')
 const loading = ref(false)
 const trend = ref<StockTrendResponse | null>(null)
@@ -83,8 +83,7 @@ const chartModeOptions = [
   { label: '分钟', value: 'intraday' }
 ]
 const granularityOptions = [
-  { label: '5分钟', value: '5m' },
-  { label: '1分钟', value: '1m' }
+  { label: '5分钟', value: '5m' }
 ]
 
 const stockCode = computed(() => trend.value?.symbol.split('.')[0] ?? '-')
