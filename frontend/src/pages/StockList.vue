@@ -1,41 +1,118 @@
 <template>
   <div class="stock-list" v-loading="loading">
     <div class="stat-header">
-      <div class="stat-group">
-        <div class="stat-group-title">数据健康</div>
+      <!-- 股票池概览 -->
+      <div class="stat-group theme-primary">
+        <div class="stat-group-title">
+          <span class="stat-group-dot"></span>
+          股票池概览
+        </div>
         <div class="stat-cards">
           <div class="stat-card">
             <div class="stat-value">{{ items.length }}</div>
-            <div class="stat-label">股票总数</div>
+            <div class="stat-label">总数</div>
+          </div>
+          <div class="stat-card has-bar">
+            <div class="stat-value theme-success">{{ countResearchEligible }}</div>
+            <div class="stat-label">
+              可研究
+              <span class="stat-rate">{{ eligibleRate }}%</span>
+            </div>
+            <div class="stat-bar"><div class="stat-bar-fill theme-success-bg" :style="{ width: eligibleRate + '%' }"></div></div>
+          </div>
+          <div class="stat-card has-bar">
+            <div class="stat-value theme-success">{{ countDataReady }}</div>
+            <div class="stat-label">
+              数据就绪
+              <span class="stat-rate">{{ dataReadyRate }}%</span>
+            </div>
+            <div class="stat-bar"><div class="stat-bar-fill theme-success-bg" :style="{ width: dataReadyRate + '%' }"></div></div>
           </div>
           <div class="stat-card">
-            <div class="stat-value">{{ latestDaily || '—' }}</div>
-            <div class="stat-label">最新交易日</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value fresh">{{ countFresh }}</div>
-            <div class="stat-label">日线新鲜</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value stale">{{ countStale }}</div>
-            <div class="stat-label">日线陈旧(含 ST {{ countSt }})</div>
+            <div class="stat-value theme-warn">{{ countDataNotReady }}</div>
+            <div class="stat-label">待补数据</div>
           </div>
         </div>
       </div>
-      <div class="stat-group">
-        <div class="stat-group-title">宇宙画像</div>
+
+      <!-- 市场分布 -->
+      <div class="stat-group theme-blue">
+        <div class="stat-group-title">
+          <span class="stat-group-dot"></span>
+          市场分布
+        </div>
         <div class="stat-cards">
           <div class="stat-card">
-            <div class="stat-value">{{ countResearchEligible }} / <span class="delisted">排除 {{ countResearchExcluded }}</span></div>
-            <div class="stat-label">研究池 / 未纳入</div>
+            <div class="stat-value">{{ countSH }}</div>
+            <div class="stat-label">沪市</div>
           </div>
           <div class="stat-card">
-            <div class="stat-value">{{ countSH }} / {{ countSZ }}</div>
-            <div class="stat-label">沪市 / 深市</div>
+            <div class="stat-value">{{ countSZ }}</div>
+            <div class="stat-label">深市</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value theme-muted">{{ countBJ }}</div>
+            <div class="stat-label">北交所 <span class="stat-tag">已排除</span></div>
           </div>
           <div class="stat-card">
             <div class="stat-value">{{ industryCount }}</div>
             <div class="stat-label">行业数</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 风险标记 -->
+      <div class="stat-group theme-danger">
+        <div class="stat-group-title">
+          <span class="stat-group-dot"></span>
+          风险标记
+        </div>
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="stat-value theme-danger-text">{{ countSt }}</div>
+            <div class="stat-label">ST 股票</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value theme-danger-text">{{ countDelisted }}</div>
+            <div class="stat-label">退市整理</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value theme-warn">{{ countResearchExcluded }}</div>
+            <div class="stat-label">已排除</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value theme-muted">{{ countResearchExcluded + countSt + countDelisted }}</div>
+            <div class="stat-label">风险合计</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 数据质量 -->
+      <div class="stat-group theme-cyan">
+        <div class="stat-group-title">
+          <span class="stat-group-dot"></span>
+          数据质量
+        </div>
+        <div class="stat-cards">
+          <div class="stat-card has-bar">
+            <div class="stat-value">{{ countFresh }}</div>
+            <div class="stat-label">
+              日线完整
+              <span class="stat-rate">{{ freshRate }}%</span>
+            </div>
+            <div class="stat-bar"><div class="stat-bar-fill theme-cyan-bg" :style="{ width: freshRate + '%' }"></div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value theme-warn">{{ countDailyMissing }}</div>
+            <div class="stat-label">日线缺失</div>
+          </div>
+          <div class="stat-card has-bar">
+            <div class="stat-value">{{ countMinute5Ready }}</div>
+            <div class="stat-label">
+              5分钟完整
+              <span class="stat-rate">{{ minute5Rate }}%</span>
+            </div>
+            <div class="stat-bar"><div class="stat-bar-fill theme-cyan-bg" :style="{ width: minute5Rate + '%' }"></div></div>
           </div>
         </div>
       </div>
@@ -287,6 +364,33 @@ const countStale = computed(
 )
 const countSH = computed(() => items.value.filter((i) => i.market === 'SH').length)
 const countSZ = computed(() => items.value.filter((i) => i.market === 'SZ').length)
+const countBJ = computed(() => items.value.filter((i) => i.market === 'BJ').length)
+const countDailyMissing = computed(() => items.value.length - countFresh.value)
+const countMinute5Ready = computed(
+  () => items.value.filter((i) => !i.minute5_missing).length
+)
+
+// 百分比计算
+const eligibleRate = computed(() => {
+  if (!items.value.length) return '0'
+  return ((countResearchEligible.value / items.value.length) * 100).toFixed(1)
+})
+
+const dataReadyRate = computed(() => {
+  if (!countResearchEligible.value) return '0'
+  return ((countDataReady.value / countResearchEligible.value) * 100).toFixed(1)
+})
+
+const freshRate = computed(() => {
+  if (!items.value.length) return '0'
+  return ((countFresh.value / items.value.length) * 100).toFixed(1)
+})
+
+const minute5Rate = computed(() => {
+  if (!items.value.length) return '0'
+  return ((countMinute5Ready.value / items.value.length) * 100).toFixed(1)
+})
+
 const industryCount = computed(
   () => new Set(items.value.map((i) => i.industry).filter(Boolean)).size
 )
@@ -346,52 +450,170 @@ load()
 }
 
 .stat-header {
-  display: flex;
-  gap: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
   margin-bottom: 16px;
 }
 
-.stat-group {
-  flex: 1;
+@media (max-width: 1080px) {
+  .stat-header {
+    grid-template-columns: 1fr;
+  }
 }
+
+.stat-group {
+  background: #fff;
+  border: 1px solid #e8ecf0;
+  border-radius: 8px;
+  padding: 14px 16px 12px;
+  border-left: 3px solid #d9dee7;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.stat-group:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* 分组主题色 - 左边框 + 标题圆点 + 背景微染 */
+.stat-group.theme-primary {
+  border-left-color: #409eff;
+  background: linear-gradient(135deg, #f0f7ff 0%, #fff 60%);
+}
+.stat-group.theme-primary .stat-group-dot { background: #409eff; }
+
+.stat-group.theme-blue {
+  border-left-color: #67c23a;
+  background: linear-gradient(135deg, #f0f9eb 0%, #fff 60%);
+}
+.stat-group.theme-blue .stat-group-dot { background: #67c23a; }
+
+.stat-group.theme-danger {
+  border-left-color: #f56c6c;
+  background: linear-gradient(135deg, #fef0f0 0%, #fff 60%);
+}
+.stat-group.theme-danger .stat-group-dot { background: #f56c6c; }
+
+.stat-group.theme-cyan {
+  border-left-color: #13c2c2;
+  background: linear-gradient(135deg, #e6fffb 0%, #fff 60%);
+}
+.stat-group.theme-cyan .stat-group-dot { background: #13c2c2; }
 
 .stat-group-title {
   font-size: 13px;
-  color: #909399;
-  margin-bottom: 8px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stat-group-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 .stat-cards {
   display: flex;
-  gap: 16px;
+  gap: 0;
 }
 
 .stat-card {
-  min-width: 96px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 10px;
+  border-right: 1px solid #f0f2f5;
+}
+
+.stat-card:last-child {
+  border-right: none;
 }
 
 .stat-value {
-  font-size: 20px;
-  font-weight: 600;
-  color: #303133;
-  line-height: 1.4;
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a1a2e;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-label {
   font-size: 12px;
   color: #909399;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
-.fresh {
-  color: #67c23a;
+/* 有进度条的卡片 */
+.stat-card.has-bar {
+  padding-bottom: 0;
 }
 
-.st {
-  color: #f56c6c;
+.stat-bar {
+  height: 3px;
+  background: #f0f2f5;
+  border-radius: 2px;
+  margin-top: 6px;
+  overflow: hidden;
 }
 
-.delisted {
+.stat-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+
+/* 颜色主题 */
+.theme-success { color: #67c23a !important; }
+.theme-success-bg { background: linear-gradient(90deg, #95d475, #67c23a); }
+
+.theme-warn { color: #e6a23c !important; }
+
+.theme-danger-text { color: #f56c6c !important; }
+
+.theme-muted { color: #c0c4cc !important; }
+
+.theme-cyan-bg { background: linear-gradient(90deg, #5cdbd3, #13c2c2); }
+
+.stat-rate {
+  font-size: 11px;
+  font-weight: 500;
   color: #909399;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-tag {
+  font-size: 10px;
+  color: #c0c4cc;
+  background: #f4f4f5;
+  padding: 0 4px;
+  border-radius: 2px;
+  line-height: 1.6;
+}
+
+/* 保留旧样式兼容性 */
+.fresh { color: #67c23a; }
+.stale { color: #f56c6c; }
+.success { color: #67c23a; }
+.warning { color: #e6a23c; }
+.danger { color: #f56c6c; }
+.muted { color: #909399; }
+.st { color: #f56c6c; }
+.delisted { color: #909399; }
+.stat-percent {
+  font-size: 13px;
+  font-weight: 400;
+  color: #909399;
+  margin-left: 4px;
 }
 
 .pager {
