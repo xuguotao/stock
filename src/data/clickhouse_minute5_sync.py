@@ -30,7 +30,7 @@ def sync_clickhouse_minute5_kline(
     target_time: time | None = None,
     max_fetch_symbols: int = 0,
     insert_batch_size: int = 50000,
-    fetch_batch_size: int = 500,
+    fetch_batch_size: int = 1000,
     commit_per_batch: bool = True,
     db_path: str | Path | None = None,
     client: Any | None = None,
