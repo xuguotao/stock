@@ -191,9 +191,26 @@ class Minute5UpdateMonitor:
             self._last_error = None
             self._last_finished_at = _now()
 
-    def _progress(self, percent: int, stage: str, message: str) -> None:
+    def _progress(
+        self,
+        percent: int,
+        stage: str,
+        message: str,
+        *,
+        processed: int | None = None,
+        total: int | None = None,
+    ) -> None:
         with self._lock:
-            self._last_progress = {"percent": percent, "stage": stage, "message": message}
+            progress_data: dict[str, Any] = {
+                "percent": percent,
+                "stage": stage,
+                "message": message,
+            }
+            if processed is not None:
+                progress_data["processed"] = processed
+            if total is not None:
+                progress_data["total"] = total
+            self._last_progress = progress_data
 
     def _set_next_run(self, interval_seconds: int) -> None:
         with self._lock:

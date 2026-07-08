@@ -29,6 +29,9 @@ def sync_clickhouse_minute5_kline(
     progress: ProgressCallback | None = None,
     target_time: time | None = None,
     max_fetch_symbols: int = 0,
+    insert_batch_size: int = 50000,
+    fetch_batch_size: int = 500,
+    commit_per_batch: bool = True,
     db_path: str | Path | None = None,
     client: Any | None = None,
     host: str | None = None,
@@ -47,9 +50,13 @@ def sync_clickhouse_minute5_kline(
         include_st=include_st,
         limit=limit,
     )
+
+    # Determine initial target datetime
     target_dt = _target_datetime(trade_date, target_time=target_time)
     target_expected_bars = _expected_5m_bars(target_dt.time())
     stats_by_code = _bar_stats(clickhouse, trade_date, [symbol.split(".")[0] for symbol in target_symbols])
+
+    # Identify symbols that need refresh
     symbols_to_fetch: list[str] = []
     incremental_watermarks: dict[str, datetime] = {}
     gap_codes: set[str] = set()
@@ -70,21 +77,20 @@ def sync_clickhouse_minute5_kline(
     remaining_before_batch = len(symbols_to_fetch)
     if max_fetch_symbols and max_fetch_symbols > 0:
         symbols_to_fetch = symbols_to_fetch[:max_fetch_symbols]
-    selected_codes = {symbol.split(".")[0].zfill(6) for symbol in symbols_to_fetch}
-    existing_by_code = _existing_datetimes_by_symbol(
-        clickhouse,
-        trade_date,
-        sorted(gap_codes & selected_codes),
-    )
+
     total = len(symbols_to_fetch)
     skipped = len(target_symbols) - remaining_before_batch
     remaining_after_batch = max(0, remaining_before_batch - total)
     success = 0
     no_data = 0
     failed = 0
-    inserted_rows = 0
     no_data_symbols: list[str] = []
     failures: list[dict[str, str]] = []
+    total_inserted_rows = 0
+
+    # Track batches for progress reporting
+    batches_completed = 0
+    total_batches = (total + fetch_batch_size - 1) // fetch_batch_size if total > 0 else 0
 
     if total == 0:
         return {
@@ -103,35 +109,79 @@ def sync_clickhouse_minute5_kline(
             "coverage_after": _minute5_coverage(clickhouse),
         }
 
-    batch_bars = _fetch_intraday_bars_batch(data_source, symbols_to_fetch, trade_date)
-    for index, symbol in enumerate(symbols_to_fetch, start=1):
-        percent = 5 + int(index / total * 90)
-        _report(progress, min(percent, 95), "fetching", f"更新 {symbol} ClickHouse 5m 分钟线 {index}/{total}")
-        try:
-            bars = batch_bars.get(symbol)
-            if bars is None:
-                bars = data_source.fetch_intraday_bars(symbol, trade_date, "5m")
-            rows = _bar_rows(symbol, bars)
-            if not rows:
-                no_data += 1
-                no_data_symbols.append(symbol)
-                continue
-            code = symbol.split(".")[0].zfill(6)
-            if code in existing_by_code:
-                inserted = _insert_missing_rows(clickhouse, symbol, rows, existing_by_code[code])
-            elif code in incremental_watermarks:
-                inserted = _insert_rows_after_datetime(clickhouse, rows, incremental_watermarks[code])
-            else:
-                inserted = _insert_missing_rows(clickhouse, symbol, rows, set())
-            if inserted:
-                inserted_rows += inserted
-                success += 1
-            else:
-                no_data += 1
-                no_data_symbols.append(symbol)
-        except Exception as exc:  # noqa: BLE001 - keep batch sync resilient per symbol.
-            failed += 1
-            failures.append({"symbol": symbol, "error": str(exc)})
+    # Process in batches for streaming commits
+    for batch_start in range(0, total, fetch_batch_size):
+        batch_end = min(batch_start + fetch_batch_size, total)
+        batch_symbols = symbols_to_fetch[batch_start:batch_end]
+
+        # Recalculate target_dt at the start of each batch (if not fixed by target_time)
+        if target_time is None and commit_per_batch and batch_start > 0:
+            target_dt = _target_datetime(trade_date, target_time=None)
+            target_expected_bars = _expected_5m_bars(target_dt.time())
+
+        _report(
+            progress,
+            5 + int((batch_start / total) * 90),
+            "fetching",
+            f"批次 {batches_completed + 1}/{total_batches} ({len(batch_symbols)} 只股票) 目标桶: {target_dt.strftime('%H:%M')}",
+        )
+
+        # Fetch batch
+        batch_bars = _fetch_intraday_bars_batch(data_source, batch_symbols, trade_date)
+
+        # Process batch
+        rows_to_insert: list[tuple[Any, ...]] = []
+        selected_codes = {symbol.split(".")[0].zfill(6) for symbol in batch_symbols}
+        existing_by_code = _existing_datetimes_by_symbol(
+            clickhouse,
+            trade_date,
+            sorted(gap_codes & selected_codes),
+        )
+
+        for symbol in batch_symbols:
+            try:
+                bars = batch_bars.get(symbol)
+                if bars is None:
+                    bars = data_source.fetch_intraday_bars(symbol, trade_date, "5m")
+                rows = _bar_rows(symbol, bars)
+                if not rows:
+                    no_data += 1
+                    no_data_symbols.append(symbol)
+                    continue
+                code = symbol.split(".")[0].zfill(6)
+                if code in existing_by_code:
+                    missing = _missing_rows(rows, existing_by_code[code], target_dt=target_dt)
+                elif code in incremental_watermarks:
+                    missing = _rows_after_datetime(rows, incremental_watermarks[code], target_dt=target_dt)
+                else:
+                    missing = _missing_rows(rows, set(), target_dt=target_dt)
+                if missing:
+                    rows_to_insert.extend(missing)
+                    success += 1
+                else:
+                    no_data += 1
+                    no_data_symbols.append(symbol)
+            except Exception as exc:  # noqa: BLE001 - keep batch sync resilient per symbol.
+                failed += 1
+                failures.append({"symbol": symbol, "error": str(exc)})
+
+        # Deduplicate and insert batch
+        rows_to_insert = _deduplicate_rows(rows_to_insert)
+        if rows_to_insert:
+            _insert_rows_batched(clickhouse, rows_to_insert, batch_size=insert_batch_size)
+            total_inserted_rows += len(rows_to_insert)
+
+        batches_completed += 1
+
+        # Report progress with processed/total for heartbeat
+        if progress is not None:
+            progress(
+                5 + int((batch_end / total) * 90),
+                "fetching",
+                f"批次 {batches_completed}/{total_batches} 已提交，目标桶: {target_dt.strftime('%H:%M')}",
+                processed=batch_end,
+                total=total,
+            )
 
     result = {
         "trade_date": trade_date.isoformat(),
@@ -144,7 +194,7 @@ def sync_clickhouse_minute5_kline(
         "no_data": no_data,
         "no_data_symbols": no_data_symbols[:100],
         "failed": failed,
-        "inserted_rows": inserted_rows,
+        "inserted_rows": total_inserted_rows,
         "failures": failures[:50],
         "coverage_after": _minute5_coverage(clickhouse),
     }
@@ -249,7 +299,6 @@ def _default_intraday_source(trade_date: date) -> FallbackIntradaySource:
     return FallbackIntradaySource([
         TencentQuoteSource(rate_limit=0.0),
         SinaSource(rate_limit=0.2, intraday_datalen=10000),
-        AKShareSource(rate_limit=0.2),
     ])
 
 
@@ -395,39 +444,42 @@ def _existing_datetimes_by_symbol_window(
     }
 
 
-def _insert_missing_rows(
-    client: Any,
-    symbol: str,
+def _missing_rows(
     rows: list[tuple[Any, ...]],
     existing: set[datetime],
-) -> int:
-    missing = [row for row in rows if row[1] not in existing]
-    if not missing:
-        return 0
-    client.execute(
-        """
-        insert into minute5_kline
-            (symbol, datetime, open, high, low, close, volume, amount)
-        values
-        """,
-        missing,
-    )
-    return len(missing)
+    *,
+    target_dt: datetime,
+) -> list[tuple[Any, ...]]:
+    return [row for row in rows if row[1] <= target_dt and row[1] not in existing]
 
 
-def _insert_rows_after_datetime(client: Any, rows: list[tuple[Any, ...]], latest: datetime) -> int:
-    missing = [row for row in rows if row[1] > latest]
-    if not missing:
-        return 0
-    client.execute(
-        """
-        insert into minute5_kline
-            (symbol, datetime, open, high, low, close, volume, amount)
-        values
-        """,
-        missing,
-    )
-    return len(missing)
+def _rows_after_datetime(
+    rows: list[tuple[Any, ...]],
+    latest: datetime,
+    *,
+    target_dt: datetime,
+) -> list[tuple[Any, ...]]:
+    return [row for row in rows if latest < row[1] <= target_dt]
+
+
+def _insert_rows_batched(client: Any, rows: list[tuple[Any, ...]], *, batch_size: int) -> None:
+    size = max(1, int(batch_size or 50000))
+    for offset in range(0, len(rows), size):
+        client.execute(
+            """
+            insert into minute5_kline
+                (symbol, datetime, open, high, low, close, volume, amount)
+            values
+            """,
+            rows[offset:offset + size],
+        )
+
+
+def _deduplicate_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
+    by_key: dict[tuple[str, datetime], tuple[Any, ...]] = {}
+    for row in rows:
+        by_key[(str(row[0]).zfill(6), row[1])] = row
+    return [by_key[key] for key in sorted(by_key)]
 
 
 def _insert_missing_window_rows(
