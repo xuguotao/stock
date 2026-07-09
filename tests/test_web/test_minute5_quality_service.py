@@ -13,7 +13,7 @@ class FakeMinute5Client:
         if "group by symbol, datetime" in normalized and "having count() > 1" in normalized:
             return [(0, 0)]
         if "countif(open <= 0" in normalized:
-            return [(0, 1, 0, 0, 0)]
+            return [(0, 1, 0, 0, 0, 80)]  # 最后一个是 zero_amount
         if "tominute(datetime) % 5" in normalized:
             return [(0,)]
         if "not ((tohour(datetime)" in normalized:

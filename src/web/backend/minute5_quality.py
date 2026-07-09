@@ -67,7 +67,11 @@ class Minute5QualityService:
         expected_symbols = self._expected_symbols()
         latest_raw_bucket, latest_raw_symbols = self._latest_raw_bucket(latest_date)
         complete_bucket, complete_symbols = self._latest_complete_bucket(latest_date, expected_symbols)
-        invalid_ohlc = sum(invalid.values())
+        invalid_ohlc = (
+            invalid.get("non_positive_ohlc", 0)
+            + invalid.get("high_invalid", 0)
+            + invalid.get("low_invalid", 0)
+        )
         status = "ok" if duplicate_groups == 0 and invalid_ohlc == 0 and non_5m_boundary == 0 and non_market_session == 0 else "warning"
         return {
             "table": "minute5_kline",
@@ -552,17 +556,19 @@ class Minute5QualityService:
                 countIf(high < greatest(open, close, low)) as high_invalid,
                 countIf(low > least(open, close, high)) as low_invalid,
                 countIf(volume < 0) as negative_volume,
-                countIf(amount < 0) as negative_amount
+                countIf(amount < 0) as negative_amount,
+                countIf(amount = 0) as zero_amount
             from minute5_kline
             """
         )
-        row = rows[0] if rows else (0, 0, 0, 0, 0)
+        row = rows[0] if rows else (0, 0, 0, 0, 0, 0)
         return {
             "non_positive_ohlc": int(row[0] or 0),
             "high_invalid": int(row[1] or 0),
             "low_invalid": int(row[2] or 0),
             "negative_volume": int(row[3] or 0),
             "negative_amount": int(row[4] or 0),
+            "zero_amount": int(row[5] or 0),
         }
 
     def _latest_date(self) -> date | None:
