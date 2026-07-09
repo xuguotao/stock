@@ -388,6 +388,13 @@ export interface Minute5QualitySummary {
     complete_threshold: number
   }
   issues: Record<string, number>
+  latest_day: {
+    trade_date: string | null
+    complete_symbols: number
+    partial_symbols: number
+    missing_symbols: number
+    expected_symbols: number
+  }
   status: string
 }
 
@@ -454,6 +461,8 @@ export interface Minute5QualityBackfillPlanItem {
   missing_symbols: number
   invalid_rows: number
   latest_bucket: string | null
+  partial_missing: number
+  complete_missing: number
   status: string
 }
 
@@ -465,6 +474,8 @@ export interface Minute5QualityBackfillPlan {
     missing_buckets: number
     missing_symbols: number
     invalid_rows: number
+    partial_missing: number
+    complete_missing: number
   }
   items: Minute5QualityBackfillPlanItem[]
 }

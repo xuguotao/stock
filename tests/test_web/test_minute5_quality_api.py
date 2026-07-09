@@ -19,7 +19,14 @@ class FakeMinute5QualityService:
             "symbols": 3,
             "range": {"start": "2026-07-01 09:35:00", "end": "2026-07-08 11:25:00"},
             "latest": {"raw_bucket": "2026-07-08 11:25:00", "raw_symbols": 2, "complete_bucket": "2026-07-08 11:20:00"},
-            "issues": {"duplicate_groups": 0, "extra_rows": 0, "invalid_ohlc": 1, "non_5m_boundary": 0, "non_market_session": 0},
+            "issues": {"duplicate_groups": 0, "extra_rows": 0, "invalid_ohlc": 1, "non_5m_boundary": 0, "non_market_session": 0, "zero_amount": 80},
+            "latest_day": {
+                "trade_date": "2026-07-08",
+                "complete_symbols": 2,
+                "partial_symbols": 1,
+                "missing_symbols": 0,
+                "expected_symbols": 3,
+            },
             "status": "warning",
         }
 
@@ -53,7 +60,11 @@ class FakeMinute5QualityService:
 
     def backfill_plan(self, start: date, end: date, limit: int = 90) -> dict[str, object]:
         self.calls.append(("backfill_plan", {"start": start, "end": end, "limit": limit}))
-        return {"range": {"start": str(start), "end": str(end)}, "items": [{"trade_date": "2026-07-08", "status": "needs_backfill"}]}
+        return {
+            "range": {"start": str(start), "end": str(end)},
+            "items": [{"trade_date": "2026-07-08", "partial_missing": 1, "complete_missing": 0, "status": "needs_backfill"}],
+            "summary": {"partial_missing": 1, "complete_missing": 0},
+        }
 
 
 def test_minute5_quality_api_exposes_summary_days_buckets_sample_and_symbol_bars(tmp_path) -> None:

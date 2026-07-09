@@ -43,9 +43,17 @@
           <small>覆盖：{{ formatNumber(minute5QualitySummary?.latest.complete_symbols ?? 0) }} / {{ formatNumber(minute5QualitySummary?.latest.complete_threshold ?? 0) }}</small>
         </div>
         <div class="quality-card">
+          <div class="quality-title"><span>最新交易日覆盖</span></div>
+          <strong>{{ minute5QualitySummary?.latest_day?.trade_date ?? '-' }}</strong>
+          <small>完整：{{ formatNumber(minute5QualitySummary?.latest_day?.complete_symbols ?? 0) }}</small>
+          <small>部分：{{ formatNumber(minute5QualitySummary?.latest_day?.partial_symbols ?? 0) }}</small>
+          <small>缺失：{{ formatNumber(minute5QualitySummary?.latest_day?.missing_symbols ?? 0) }}</small>
+        </div>
+        <div class="quality-card">
           <div class="quality-title"><span>数据污染</span></div>
           <strong>重复 {{ formatNumber(minute5QualitySummary?.issues.extra_rows ?? 0) }} 行</strong>
           <small>异常 OHLC：{{ formatNumber(minute5QualitySummary?.issues.invalid_ohlc ?? 0) }}</small>
+          <small>零成交额：{{ formatNumber(minute5QualitySummary?.issues.zero_amount ?? 0) }}</small>
           <small>非 5m 边界：{{ formatNumber(minute5QualitySummary?.issues.non_5m_boundary ?? 0) }}，非交易时段：{{ formatNumber(minute5QualitySummary?.issues.non_market_session ?? 0) }}</small>
         </div>
       </div>
@@ -66,6 +74,8 @@
           <span>缺桶 {{ formatNumber(minute5BackfillPlan?.summary.missing_buckets ?? 0) }}</span>
           <span>缺标的 {{ formatNumber(minute5BackfillPlan?.summary.missing_symbols ?? 0) }}</span>
           <span>异常 {{ formatNumber(minute5BackfillPlan?.summary.invalid_rows ?? 0) }}</span>
+          <span>可回补 {{ formatNumber(minute5BackfillPlan?.summary.partial_missing ?? 0) }}</span>
+          <span>完全缺失 {{ formatNumber(minute5BackfillPlan?.summary.complete_missing ?? 0) }}</span>
         </div>
         <el-table :data="minute5BackfillPlan?.items ?? []" height="300" empty-text="暂无回补计划">
           <el-table-column prop="trade_date" label="日期" width="110" />
