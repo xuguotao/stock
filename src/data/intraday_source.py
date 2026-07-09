@@ -85,7 +85,7 @@ def fetch_intraday_bars(
                 "low": float(item.get("low", 0)),
                 "close": float(item.get("close", 0)),
                 "volume": int(float(item.get("volume", 0))),
-                "amount": 0.0,
+                "amount": float(item.get("close", 0)) * int(float(item.get("volume", 0))) * 100,
                 "symbol": symbol,
             })
 
@@ -151,7 +151,7 @@ def fetch_intraday_bars_range(
                 "low": float(item.get("low", 0)),
                 "close": float(item.get("close", 0)),
                 "volume": int(float(item.get("volume", 0))),
-                "amount": 0.0,
+                "amount": float(item.get("close", 0)) * int(float(item.get("volume", 0))) * 100,
                 "symbol": symbol,
             })
 

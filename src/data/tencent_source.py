@@ -112,7 +112,7 @@ class TencentQuoteSource(DataSourceBase):
         self,
         rate_limit: float = 0.2,
         http_get: Callable[..., str] | None = None,
-        intraday_workers: int = 30,
+        intraday_workers: int = 80,
         realtime_chunk_size: int = 800,
         realtime_endpoint: str = "sqt_utf8",
         stock_list_page_size: int = 100,
