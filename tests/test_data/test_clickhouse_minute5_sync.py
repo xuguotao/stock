@@ -4,9 +4,20 @@ from datetime import date, datetime, time
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 import src.data.clickhouse_minute5_sync as clickhouse_minute5_sync
 from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_history_window, sync_clickhouse_minute5_kline
+
+
+@pytest.fixture(autouse=True)
+def _clear_minute5_complete_cache() -> None:
+    """The complete-symbol cache is module-level; isolate it between tests."""
+    clickhouse_minute5_sync._complete_symbols_cache.clear()
+    clickhouse_minute5_sync._cache_timestamps.clear()
+    yield
+    clickhouse_minute5_sync._complete_symbols_cache.clear()
+    clickhouse_minute5_sync._cache_timestamps.clear()
 
 
 class FakeClickHouseClient:
@@ -27,6 +38,25 @@ class FakeClickHouseClient:
     def execute(self, query, params=None):
         self.calls.append((query, params))
         normalized = " ".join(query.lower().split())
+        # _check_tail_coverage: return the codes missing any tail bucket, derived
+        # from each symbol's existing datetimes (placed before the generic
+        # "select distinct symbol from minute5_kline" branch to disambiguate).
+        if "arrayjoin" in normalized and "tohour(datetime)" in normalized:
+            trade_date = (params or {}).get("trade_date")
+            if trade_date is not None:
+                tail_dts = {
+                    datetime.combine(trade_date, time(14, 50)),
+                    datetime.combine(trade_date, time(14, 55)),
+                    datetime.combine(trade_date, time(15, 0)),
+                }
+            else:
+                tail_dts = set()
+            missing = [
+                code
+                for code, dts in sorted(self.existing_by_symbol.items())
+                if not tail_dts.issubset(dts)
+            ]
+            return [(code,) for code in missing]
         if "from stocks" in normalized:
             if "where symbol in" in normalized:
                 # _stock_names query - return 2 values
@@ -729,3 +759,148 @@ def test_sync_clickhouse_minute5_history_window_reports_no_data_symbols() -> Non
     assert result["no_data"] == 2
     assert result["no_data_symbols"] == ["000001.SZ", "600000.SH"]
     assert client.inserts == []
+
+
+class _FakeMiddleBarSource:
+    """Returns only the missing 11:20 bucket, to prove a middle gap is refilled."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def fetch_intraday_bars(self, symbol: str, trade_date: date, frequency: str = "5m") -> pd.DataFrame:
+        self.calls.append(symbol)
+        return pd.DataFrame(
+            [
+                {
+                    "datetime": pd.Timestamp(f"{trade_date.isoformat()} 11:20:00"),
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "volume": 1000,
+                    "amount": 10100.0,
+                }
+            ]
+        )
+
+
+def test_check_tail_coverage_returns_all_missing_tail_symbols() -> None:
+    """Regression for the arrayJoin fix: the inner SELECT must produce one row per
+    code, not collapse multiple codes into a single aliased column (which would
+    only ever check the first code)."""
+    trade_date = date(2026, 6, 12)
+    client = FakeClickHouseClient()
+    client.existing_by_symbol = {
+        "000001": {
+            datetime(2026, 6, 12, 14, 50),
+            datetime(2026, 6, 12, 14, 55),
+            datetime(2026, 6, 12, 15, 0),
+        },
+        "600000": set(),
+        "600519": set(),
+    }
+
+    missing = clickhouse_minute5_sync._check_tail_coverage(
+        client, trade_date, ["000001.SZ", "600000.SH", "600519.SH"]
+    )
+
+    assert sorted(missing) == ["600000.SH", "600519.SH"]
+
+
+def test_tail_sync_fills_missing_tail_bucket_and_caches_only_complete() -> None:
+    """When most symbols are complete, tail sync fills the missing tail bucket;
+    the cache records only symbols confirmed complete this run, not the one just
+    tail-synced (which may still have other gaps)."""
+    trade_date = date(2026, 6, 12)
+    client = FakeClickHouseClient()
+    for code in ("000001", "600000", "600519"):
+        client.latest_by_symbol[code] = datetime(2026, 6, 12, 15, 0)
+        client.existing_by_symbol[code] = _complete_5m_datetimes(trade_date)
+    # 000858 is behind (data only up to 14:45) -> missing tail buckets, placed
+    # last so the old single-aliased-column SQL would have missed it entirely.
+    client.latest_by_symbol["000858"] = datetime(2026, 6, 12, 14, 45)
+    client.existing_by_symbol["000858"] = _complete_5m_datetimes(trade_date, time(14, 45))
+    source = FakeSource()
+
+    result = sync_clickhouse_minute5_kline(
+        client=client,
+        trade_date=trade_date,
+        source=source,
+        symbols=["000001.SZ", "600000.SH", "600519.SH", "000858.SZ"],
+        target_time=time(15, 0),
+    )
+
+    assert result["sync_mode"] == "tail"
+    assert source.calls == ["000858.SZ"]
+    assert result["success"] == 1
+    assert result["inserted_rows"] == 2  # 14:55 and 15:00 bars from FakeSource
+    cache = clickhouse_minute5_sync._get_complete_symbols_cache(trade_date)
+    assert cache == {"000001.SZ", "600000.SH", "600519.SH"}
+    assert "000858.SZ" not in cache
+
+
+def test_tail_sync_marks_all_complete_when_nothing_needs_refresh() -> None:
+    trade_date = date(2026, 6, 12)
+    client = FakeClickHouseClient()
+    for code in ("000001", "600000"):
+        client.latest_by_symbol[code] = datetime(2026, 6, 12, 15, 0)
+        client.existing_by_symbol[code] = _complete_5m_datetimes(trade_date)
+    source = FakeSource()
+
+    result = sync_clickhouse_minute5_kline(
+        client=client,
+        trade_date=trade_date,
+        source=source,
+        symbols=["000001.SZ", "600000.SH"],
+        target_time=time(15, 0),
+    )
+
+    assert result["sync_mode"] == "tail_all_complete"
+    assert source.calls == []
+    assert result["inserted_rows"] == 0
+    assert clickhouse_minute5_sync._get_complete_symbols_cache(trade_date) == {
+        "000001.SZ",
+        "600000.SH",
+    }
+
+
+def test_tail_sync_falls_back_to_full_sync_for_middle_gap() -> None:
+    """A symbol that needs refresh but has all tail buckets has a middle-of-day
+    gap; tail sync cannot fix it, so it must fall back to the full sync path that
+    refills the missing middle bucket."""
+    trade_date = date(2026, 6, 12)
+    client = FakeClickHouseClient()
+    for code in ("000001", "600000", "600519"):
+        client.latest_by_symbol[code] = datetime(2026, 6, 12, 15, 0)
+        client.existing_by_symbol[code] = _complete_5m_datetimes(trade_date)
+    # 000858 has the tail buckets and latest=15:00, but is missing an 11:20 bar.
+    gap_dts = _complete_5m_datetimes(trade_date) - {datetime.combine(trade_date, time(11, 20))}
+    client.latest_by_symbol["000858"] = datetime(2026, 6, 12, 15, 0)
+    client.existing_by_symbol["000858"] = gap_dts
+    source = _FakeMiddleBarSource()
+
+    result = sync_clickhouse_minute5_kline(
+        client=client,
+        trade_date=trade_date,
+        source=source,
+        symbols=["000001.SZ", "600000.SH", "600519.SH", "000858.SZ"],
+        target_time=time(15, 0),
+    )
+
+    # No tail sync_mode -> fell through to the full sync path.
+    assert "sync_mode" not in result
+    assert source.calls == ["000858.SZ"]
+    assert result["success"] == 1
+    assert result["inserted_rows"] == 1  # the missing 11:20 bar refilled
+
+
+def test_completed_5m_bar_time_caps_at_market_close() -> None:
+    """Post-close, the completed bar must cap at 15:00 instead of a future bucket,
+    otherwise every symbol is marked stale and re-fetched uselessly."""
+    cap = clickhouse_minute5_sync._completed_5m_bar_time
+    assert cap(time(16, 19)) == time(15, 0)
+    assert cap(time(15, 3)) == time(15, 0)
+    assert cap(time(15, 0)) == time(15, 0)
+    # In-session values are unaffected.
+    assert cap(time(10, 23)) == time(10, 20)
+    assert cap(time(14, 57)) == time(14, 55)

@@ -89,24 +89,36 @@ def sync_clickhouse_minute5_kline(
         else:
             gap_codes.add(code)
 
-    # Tail-only sync optimization
-    if use_tail_sync and len(symbols_to_fetch) < len(target_symbols) * 0.3 and len(target_symbols) > 0:
-        # Most symbols are complete, use tail-only sync
+    # Tail-only sync optimization: when most symbols are already complete, only the
+    # symbols needing refresh are examined. If all of them are missing tail buckets,
+    # a cheap tail-only sync suffices. If any needs refresh yet already has full tail
+    # buckets (a middle-of-day gap), tail sync cannot fix it -> fall through to the
+    # full sync path below to refill the gap.
+    if use_tail_sync and len(target_symbols) > 0 and len(symbols_to_fetch) < len(target_symbols) * 0.3:
         _report(progress, 10, "tail_sync", f"尾部同步模式：{len(symbols_to_fetch)} 只标的需要更新")
 
-        # Check which symbols are missing tail buckets
-        missing_tail = _check_tail_coverage(clickhouse, trade_date, symbols_to_fetch)
+        missing_tail_symbols = _check_tail_coverage(clickhouse, trade_date, symbols_to_fetch)
+        missing_tail_set = set(missing_tail_symbols)
+        # Symbols that need refresh yet have all tail buckets -> middle-of-day gaps.
+        middle_gap_symbols = [s for s in symbols_to_fetch if s not in missing_tail_set]
 
-        if missing_tail:
-            result = _sync_tail_bars(
-                clickhouse, data_source, missing_tail, trade_date, progress=progress
-            )
+        if not middle_gap_symbols:
+            # Every symbol needing refresh is genuinely missing a tail bucket
+            # (or nothing needs refresh) -> tail sync is sufficient.
+            if missing_tail_symbols:
+                result = _sync_tail_bars(
+                    clickhouse, data_source, missing_tail_symbols, trade_date, progress=progress
+                )
+            else:
+                result = {"success": 0, "failed": 0, "no_data": 0, "inserted_rows": 0}
 
-            # Update cache with newly complete symbols
-            if result["inserted_rows"] > 0 or result["success"] > 0:
-                newly_complete = set(target_symbols) - set(missing_tail)
+            # Only cache symbols confirmed complete this run: those that did not need
+            # refresh. Newly tail-synced symbols are verified complete on the next run,
+            # so a middle gap (which tail sync cannot detect) is never cached away.
+            already_complete = set(target_symbols) - set(symbols_to_fetch)
+            if already_complete:
                 existing_cache = _get_complete_symbols_cache(trade_date)
-                _update_complete_symbols_cache(trade_date, existing_cache | newly_complete)
+                _update_complete_symbols_cache(trade_date, existing_cache | already_complete)
 
             return {
                 "trade_date": trade_date.isoformat(),
@@ -121,26 +133,17 @@ def sync_clickhouse_minute5_kline(
                 "inserted_rows": result["inserted_rows"],
                 "failures": [],
                 "coverage_after": _minute5_coverage(clickhouse),
-                "sync_mode": "tail",
+                "sync_mode": "tail" if missing_tail_symbols else "tail_all_complete",
             }
-        else:
-            # All symbols have tail buckets, update cache
-            _update_complete_symbols_cache(trade_date, set(target_symbols))
-            return {
-                "trade_date": trade_date.isoformat(),
-                "target_datetime": _stringify_dt(target_dt),
-                "target_symbols": len(target_symbols),
-                "skipped": skipped_cached + len(target_symbols),
-                "partial": False,
-                "remaining_symbols": 0,
-                "success": 0,
-                "no_data": 0,
-                "failed": 0,
-                "inserted_rows": 0,
-                "failures": [],
-                "coverage_after": _minute5_coverage(clickhouse),
-                "sync_mode": "tail_all_complete",
-            }
+
+        # Middle-gap symbols present -> tail sync cannot fix them; fall through to
+        # the full sync path below so the missing middle buckets get refilled.
+        _report(
+            progress,
+            12,
+            "tail_sync",
+            f"检测到 {len(middle_gap_symbols)} 只中间缺口标的，回退全量同步",
+        )
 
     remaining_before_batch = len(symbols_to_fetch)
     if max_fetch_symbols and max_fetch_symbols > 0:
@@ -458,7 +461,12 @@ def _target_datetime(trade_date: date, *, target_time: time | None) -> datetime:
 
 def _completed_5m_bar_time(value: time) -> time:
     minute = value.minute - (value.minute % 5)
-    return time(value.hour, minute, 0)
+    completed = time(value.hour, minute, 0)
+    # A-share last 5m bar is 15:00; never target a bucket past market close, or
+    # post-close syncs would mark every symbol stale and re-fetch uselessly.
+    if completed > time(15, 0):
+        return time(15, 0)
+    return completed
 
 
 def _needs_refresh(stats: dict[str, Any] | None, target_dt: datetime, expected_bars: int) -> bool:
@@ -805,15 +813,23 @@ def _check_tail_coverage(
     symbols: list[str],
     tail_buckets: list[str] | None = None,
 ) -> list[str]:
-    """Check which symbols are missing tail buckets.
+    """Return the subset of ``symbols`` missing at least one tail bucket.
 
-    Returns list of symbols that need tail sync.
+    ``symbols`` are suffixed (e.g. ``000001.SZ``); the returned list keeps the
+    same suffix form so callers can pass them straight to the data source.
     """
     if tail_buckets is None:
         tail_buckets = ["14:50", "14:55", "15:00"]
 
-    codes = [symbol.split(".")[0].zfill(6) for symbol in symbols]
-    if not codes:
+    if not symbols:
+        return []
+
+    # Map code -> symbol so the SQL result (codes) can be mapped back to suffixed
+    # symbols, matching the format ``symbols_to_fetch`` and the data source expect.
+    code_to_symbol: dict[str, str] = {}
+    for symbol in symbols:
+        code_to_symbol[symbol.split(".")[0].zfill(6)] = symbol
+    if not code_to_symbol:
         return []
 
     # Build time filter for tail buckets
@@ -823,13 +839,14 @@ def _check_tail_coverage(
         time_conditions.append(f"(toHour(datetime) = {h} AND toMinute(datetime) = {m})")
 
     time_filter = " OR ".join(time_conditions)
+    codes_literal = ", ".join(repr(code) for code in code_to_symbol)
 
     rows = client.execute(
         f"""
         SELECT DISTINCT symbol
         FROM (
             SELECT e.symbol
-            FROM (SELECT {', '.join(f'{repr(c)} AS symbol' for c in codes)}) e
+            FROM (SELECT arrayJoin([{codes_literal}]) AS symbol) e
             LEFT JOIN (
                 SELECT DISTINCT symbol
                 FROM minute5_kline
@@ -842,8 +859,8 @@ def _check_tail_coverage(
         {"trade_date": trade_date},
     )
 
-    missing = [str(row[0]) for row in rows]
-    return missing
+    missing_codes = {str(row[0]) for row in rows}
+    return [symbol for code, symbol in code_to_symbol.items() if code in missing_codes]
 
 
 def _sync_tail_bars(
