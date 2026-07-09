@@ -17,44 +17,29 @@
       </div>
     </div>
 
-    <div class="panel" v-loading="minute5QualityLoading">
-      <div class="quality-grid">
-        <div class="quality-card">
-          <div class="quality-title">
-            <span>整体状态</span>
-            <el-tag :type="qualityTagType(minute5QualitySummary?.status)" effect="plain">
-              {{ minute5QualitySummary?.status ?? '-' }}
-            </el-tag>
-          </div>
-          <strong>{{ formatNumber(minute5QualitySummary?.rows ?? 0) }} 行 / {{ formatNumber(minute5QualitySummary?.symbols ?? 0) }} 只</strong>
-          <small>范围：{{ minute5QualitySummary?.range.start ?? '-' }} / {{ minute5QualitySummary?.range.end ?? '-' }}</small>
-          <small>预期标的：{{ formatNumber(minute5QualitySummary?.expected_symbols ?? 0) }}</small>
+    <div class="date-conclusion-banner" :class="dateConclusionClass">
+      <div class="date-conclusion-main">
+        <h2 class="date-conclusion-title">{{ minute5QualityDate }} 5m 数据</h2>
+        <el-tag :type="qualityTagType(dateConclusionStatus)" effect="plain" size="large">
+          {{ dateConclusionLabel }}
+        </el-tag>
+      </div>
+      <div class="date-conclusion-stats">
+        <div class="stat-item">
+          <span class="stat-label">完整</span>
+          <span class="stat-value">{{ formatNumber(dateConclusionComplete) }}</span>
         </div>
-        <div class="quality-card">
-          <div class="quality-title"><span>当前任务目标桶</span></div>
-          <strong>{{ currentTaskTargetBucket }}</strong>
-          <small>进度：{{ currentTaskProgress }}</small>
-          <small>状态：{{ currentTaskStatus }}</small>
+        <div class="stat-item">
+          <span class="stat-label">部分</span>
+          <span class="stat-value">{{ formatNumber(dateConclusionPartial) }}</span>
         </div>
-        <div class="quality-card">
-          <div class="quality-title"><span>最新完整桶</span></div>
-          <strong>{{ minute5QualitySummary?.latest.complete_bucket ?? '-' }}</strong>
-          <small>原始最新：{{ minute5QualitySummary?.latest.raw_bucket ?? '-' }}</small>
-          <small>覆盖：{{ formatNumber(minute5QualitySummary?.latest.complete_symbols ?? 0) }} / {{ formatNumber(minute5QualitySummary?.latest.complete_threshold ?? 0) }}</small>
+        <div class="stat-item">
+          <span class="stat-label">缺失</span>
+          <span class="stat-value">{{ formatNumber(dateConclusionMissing) }}</span>
         </div>
-        <div class="quality-card">
-          <div class="quality-title"><span>最新交易日覆盖</span></div>
-          <strong>{{ minute5QualitySummary?.latest_day?.trade_date ?? '-' }}</strong>
-          <small>完整：{{ formatNumber(minute5QualitySummary?.latest_day?.complete_symbols ?? 0) }}</small>
-          <small>部分：{{ formatNumber(minute5QualitySummary?.latest_day?.partial_symbols ?? 0) }}</small>
-          <small>缺失：{{ formatNumber(minute5QualitySummary?.latest_day?.missing_symbols ?? 0) }}</small>
-        </div>
-        <div class="quality-card">
-          <div class="quality-title"><span>数据污染</span></div>
-          <strong>重复 {{ formatNumber(minute5QualitySummary?.issues.extra_rows ?? 0) }} 行</strong>
-          <small>异常 OHLC：{{ formatNumber(minute5QualitySummary?.issues.invalid_ohlc ?? 0) }}</small>
-          <small>零成交额：{{ formatNumber(minute5QualitySummary?.issues.zero_amount ?? 0) }}</small>
-          <small>非 5m 边界：{{ formatNumber(minute5QualitySummary?.issues.non_5m_boundary ?? 0) }}，非交易时段：{{ formatNumber(minute5QualitySummary?.issues.non_market_session ?? 0) }}</small>
+        <div class="stat-item">
+          <span class="stat-label">异常</span>
+          <span class="stat-value">{{ formatNumber(dateConclusionInvalid) }}</span>
         </div>
       </div>
     </div>
@@ -264,6 +249,54 @@
         </el-table>
       </div>
     </div>
+
+    <div class="panel full-table-health" v-loading="minute5QualityLoading">
+      <div class="section-header no-top-margin">
+        <div>
+          <h2 class="section-title">全表累计健康</h2>
+          <p class="section-subtitle">minute5_kline 全表统计，供参考。</p>
+        </div>
+      </div>
+      <div class="quality-grid">
+        <div class="quality-card">
+          <div class="quality-title">
+            <span>整体状态</span>
+            <el-tag :type="qualityTagType(minute5QualitySummary?.status)" effect="plain">
+              {{ minute5QualitySummary?.status ?? '-' }}
+            </el-tag>
+          </div>
+          <strong>{{ formatNumber(minute5QualitySummary?.rows ?? 0) }} 行 / {{ formatNumber(minute5QualitySummary?.symbols ?? 0) }} 只</strong>
+          <small>范围：{{ minute5QualitySummary?.range.start ?? '-' }} / {{ minute5QualitySummary?.range.end ?? '-' }}</small>
+          <small>预期标的：{{ formatNumber(minute5QualitySummary?.expected_symbols ?? 0) }}</small>
+        </div>
+        <div class="quality-card">
+          <div class="quality-title"><span>当前任务目标桶</span></div>
+          <strong>{{ currentTaskTargetBucket }}</strong>
+          <small>进度：{{ currentTaskProgress }}</small>
+          <small>状态：{{ currentTaskStatus }}</small>
+        </div>
+        <div class="quality-card">
+          <div class="quality-title"><span>最新完整桶</span></div>
+          <strong>{{ minute5QualitySummary?.latest.complete_bucket ?? '-' }}</strong>
+          <small>原始最新：{{ minute5QualitySummary?.latest.raw_bucket ?? '-' }}</small>
+          <small>覆盖：{{ formatNumber(minute5QualitySummary?.latest.complete_symbols ?? 0) }} / {{ formatNumber(minute5QualitySummary?.latest.complete_threshold ?? 0) }}</small>
+        </div>
+        <div class="quality-card">
+          <div class="quality-title"><span>最新交易日覆盖</span></div>
+          <strong>{{ minute5QualitySummary?.latest_day?.trade_date ?? '-' }}</strong>
+          <small>完整：{{ formatNumber(minute5QualitySummary?.latest_day?.complete_symbols ?? 0) }}</small>
+          <small>部分：{{ formatNumber(minute5QualitySummary?.latest_day?.partial_symbols ?? 0) }}</small>
+          <small>缺失：{{ formatNumber(minute5QualitySummary?.latest_day?.missing_symbols ?? 0) }}</small>
+        </div>
+        <div class="quality-card">
+          <div class="quality-title"><span>数据污染</span></div>
+          <strong>重复 {{ formatNumber(minute5QualitySummary?.issues.extra_rows ?? 0) }} 行</strong>
+          <small>异常 OHLC：{{ formatNumber(minute5QualitySummary?.issues.invalid_ohlc ?? 0) }}</small>
+          <small>零成交额：{{ formatNumber(minute5QualitySummary?.issues.zero_amount ?? 0) }}</small>
+          <small>非 5m 边界：{{ formatNumber(minute5QualitySummary?.issues.non_5m_boundary ?? 0) }}，非交易时段：{{ formatNumber(minute5QualitySummary?.issues.non_market_session ?? 0) }}</small>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -291,6 +324,38 @@ const missingRepairJob = ref<JobRecord | null>(null)
 const repairingInvalidRows = ref(false)
 const repairingMissingRows = ref(false)
 const hasMinute5MissingRows = computed(() => (minute5BackfillPlan.value?.summary.missing_symbols ?? 0) > 0)
+
+const dateConclusionStatus = computed(() => {
+  const plan = minute5BackfillPlan.value
+  const items = plan?.items ?? []
+  const todayItem = items.find((i) => i.trade_date === minute5QualityDate.value)
+  if (!todayItem) return 'info'
+  return todayItem.status
+})
+
+const dateConclusionLabel = computed(() => {
+  const status = dateConclusionStatus.value
+  if (status === 'ok') return '可用'
+  if (status === 'needs_backfill') return '需要回补'
+  return status
+})
+
+const dateConclusionClass = computed(() => {
+  const status = dateConclusionStatus.value
+  if (status === 'ok') return 'conclusion-ok'
+  if (status === 'needs_backfill') return 'conclusion-needs-backfill'
+  return 'conclusion-unknown'
+})
+
+const dateConclusionComplete = computed(() => minute5QualitySummary.value?.latest_day?.complete_symbols ?? 0)
+const dateConclusionPartial = computed(() => minute5QualitySummary.value?.latest_day?.partial_symbols ?? 0)
+const dateConclusionMissing = computed(() => minute5QualitySummary.value?.latest_day?.missing_symbols ?? 0)
+const dateConclusionInvalid = computed(() => {
+  const plan = minute5BackfillPlan.value
+  const items = plan?.items ?? []
+  const todayItem = items.find((i) => i.trade_date === minute5QualityDate.value)
+  return todayItem?.invalid_rows ?? 0
+})
 
 const currentTaskTargetBucket = computed(() => {
   const monitor = minute5Monitor.value
@@ -515,6 +580,60 @@ onMounted(loadMinute5Quality)
 </script>
 
 <style scoped>
+.date-conclusion-banner {
+  background: #f8fafc;
+  border: 1px solid #e4e7ed;
+  border-left: 4px solid #909399;
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.date-conclusion-banner.conclusion-ok {
+  border-left-color: #67c23a;
+}
+
+.date-conclusion-banner.conclusion-needs-backfill {
+  border-left-color: #e6a23c;
+}
+
+.date-conclusion-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.date-conclusion-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.date-conclusion-stats {
+  display: flex;
+  gap: 24px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stat-label {
+  color: #909399;
+  font-size: 12px;
+}
+
+.stat-value {
+  color: #20242a;
+  font-size: 20px;
+  font-weight: 600;
+}
+
 .quality-grid,
 .quality-layout {
   display: grid;
