@@ -52,7 +52,7 @@ def test_datasets_api_lists_local_research_datasets(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", dataset_root=data_root)
+    app = create_app(db_path=tmp_path / "jobs.json", dataset_root=data_root)
     client = TestClient(app)
 
     response = client.get("/api/datasets")
@@ -106,7 +106,7 @@ def test_datasets_api_orders_recent_datasets_first(tmp_path) -> None:
         }),
         encoding="utf-8",
     )
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", dataset_root=data_root)
+    app = create_app(db_path=tmp_path / "jobs.json", dataset_root=data_root)
     client = TestClient(app)
 
     response = client.get("/api/datasets")
@@ -141,7 +141,7 @@ def test_datasets_api_uses_actual_parquet_date_range_over_manifest_target(tmp_pa
         ),
         encoding="utf-8",
     )
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", dataset_root=data_root)
+    app = create_app(db_path=tmp_path / "jobs.json", dataset_root=data_root)
     client = TestClient(app)
 
     response = client.get("/api/datasets")
@@ -162,7 +162,7 @@ def test_datasets_api_returns_dataset_detail_with_symbols(tmp_path) -> None:
             {"date": "2025-01-03", "symbol": "600519.SH", "close": 101.0},
         ]
     ).to_parquet(dataset_path, index=False)
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", dataset_root=data_root)
+    app = create_app(db_path=tmp_path / "jobs.json", dataset_root=data_root)
     client = TestClient(app)
 
     response = client.get("/api/datasets/liquid.parquet")
@@ -177,7 +177,7 @@ def test_datasets_api_returns_dataset_detail_with_symbols(tmp_path) -> None:
 
 
 def test_datasets_api_rejects_unknown_dataset(tmp_path) -> None:
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", dataset_root=tmp_path / "research")
+    app = create_app(db_path=tmp_path / "jobs.json", dataset_root=tmp_path / "research")
     client = TestClient(app)
 
     response = client.get("/api/datasets/missing.parquet")

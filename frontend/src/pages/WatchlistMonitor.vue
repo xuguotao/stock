@@ -192,8 +192,7 @@ function openStockTrend(symbol: string) {
 }
 
 function stockTrendUrl(symbol: string) {
-  const params = new URLSearchParams({ page: 'stock-trend', symbol })
-  return `${window.location.origin}${window.location.pathname}?${params.toString()}`
+  return `/stock-trend/${encodeURIComponent(symbol)}`
 }
 
 function statusLabel(status: WatchlistStatus) {

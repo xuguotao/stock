@@ -104,9 +104,8 @@ def test_stocks_api_returns_items(tmp_path) -> None:
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        stock_list_runner=_runner,
+        db_path=tmp_path / "jobs.json",
+                stock_list_runner=_runner,
     )
     client = TestClient(app)
 
@@ -123,9 +122,8 @@ def test_stocks_api_returns_500_when_clickhouse_unavailable(tmp_path) -> None:
         raise RuntimeError("ClickHouse 未配置")
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        stock_list_runner=_runner,
+        db_path=tmp_path / "jobs.json",
+                stock_list_runner=_runner,
     )
     client = TestClient(app, raise_server_exceptions=False)
 

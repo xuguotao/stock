@@ -21,6 +21,8 @@ def build_default_handlers(
     index_daily_sync_runner: Callable[..., dict[str, Any]] | None = None,
     stock_master_runner: Callable[..., dict[str, Any]] | None = None,
     xdxr_sync_runner: Callable[..., dict[str, Any]] | None = None,
+    stock_readiness_snapshot_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    stock_readiness_repair_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, TaskHandler]:
     if stock_master_runner is None:
         from src.data.clickhouse_stock_master_sync import sync_clickhouse_stock_master
@@ -61,6 +63,14 @@ def build_default_handlers(
         xdxr_sync_runner = lambda client, symbols: sync_clickhouse_xdxr_info(
             client=client, fetch_fn=fetch_xdxr_info, symbols=symbols
         )
+    if stock_readiness_snapshot_runner is None:
+        from src.data.stock_data_readiness import run_readiness_snapshot
+
+        stock_readiness_snapshot_runner = run_readiness_snapshot
+    if stock_readiness_repair_runner is None:
+        from src.data.stock_data_readiness import run_readiness_repair
+
+        stock_readiness_repair_runner = run_readiness_repair
 
     return {
         "stock_master_sync": lambda params: run_stock_master_sync(params, stock_master_runner),
@@ -77,6 +87,8 @@ def build_default_handlers(
             index_daily_sync_runner=index_daily_sync_runner,
         ),
         "xdxr_sync": lambda params: run_xdxr_sync(params, xdxr_sync_runner),
+        "stock_readiness_snapshot": stock_readiness_snapshot_runner,
+        "stock_readiness_repair": stock_readiness_repair_runner,
     }
 
 

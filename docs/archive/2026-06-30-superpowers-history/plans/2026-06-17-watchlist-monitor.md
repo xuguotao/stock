@@ -576,7 +576,7 @@ def test_watchlist_monitor_report_api_returns_items(tmp_path) -> None:
             ],
         }
 
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", watchlist_monitor_runner=fake_runner)
+    app = create_app(db_path=tmp_path / "jobs.legacy_local_db3", watchlist_monitor_runner=fake_runner)
     client = TestClient(app)
 
     response = client.get("/api/watchlist-monitor/report?trade_date=2026-06-17")

@@ -10,7 +10,7 @@ from src.web.backend.app import create_app
 
 
 def test_backtest_api_runs_with_inline_sample_dataset(tmp_path) -> None:
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
+    app = create_app(db_path=tmp_path / "jobs.json", run_jobs_inline=True)
     client = TestClient(app)
 
     response = client.post(
@@ -115,7 +115,7 @@ def test_backtest_api_defaults_to_clickhouse_source(monkeypatch, tmp_path) -> No
             return []
 
     monkeypatch.setattr(backtests, "ClickHouseStockDataSource", FakeClickHouseSource)
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
+    app = create_app(db_path=tmp_path / "jobs.json", run_jobs_inline=True)
     client = TestClient(app)
 
     response = client.post(
@@ -167,7 +167,7 @@ def test_clickhouse_backtest_loader_filters_invalid_ohlcv_rows(monkeypatch) -> N
 
 
 def test_backtest_api_rejects_missing_dataset_when_source_is_dataset(tmp_path) -> None:
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
+    app = create_app(db_path=tmp_path / "jobs.json", run_jobs_inline=True)
     client = TestClient(app)
 
     response = client.post(
@@ -184,7 +184,7 @@ def test_backtest_api_rejects_missing_dataset_when_source_is_dataset(tmp_path) -
 
 
 def test_backtest_api_accepts_legacy_request_field_names(tmp_path) -> None:
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
+    app = create_app(db_path=tmp_path / "jobs.json", run_jobs_inline=True)
     client = TestClient(app)
 
     response = client.post(
@@ -233,7 +233,7 @@ def test_backtest_api_resolves_dataset_id_from_configured_dataset_root(tmp_path)
             )
     pd.DataFrame(rows).to_parquet(dataset_path, index=False)
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         dataset_root=data_root,
         run_jobs_inline=True,
     )
@@ -289,7 +289,7 @@ def test_backtest_api_filters_dataset_to_custom_symbols(tmp_path) -> None:
             )
     pd.DataFrame(rows).to_parquet(dataset_path, index=False)
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         dataset_root=data_root,
         run_jobs_inline=True,
     )
@@ -341,7 +341,7 @@ def test_backtest_api_reports_empty_dataset_filter_context(tmp_path) -> None:
         )
     pd.DataFrame(rows).to_parquet(dataset_path, index=False)
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         dataset_root=data_root,
         run_jobs_inline=True,
     )
@@ -370,7 +370,7 @@ def test_backtest_api_reports_empty_dataset_filter_context(tmp_path) -> None:
 
 def test_backtest_api_rejects_unknown_dataset_id(tmp_path) -> None:
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         dataset_root=tmp_path / "research",
         run_jobs_inline=True,
     )

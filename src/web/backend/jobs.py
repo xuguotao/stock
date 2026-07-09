@@ -1,13 +1,13 @@
-"""SQLite-backed job metadata store."""
+"""File-backed job metadata store."""
 
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 
@@ -44,12 +44,14 @@ class JobRecord:
 
 
 class JobStore:
-    """Persist job state in SQLite."""
+    """Persist job state in a local JSON file."""
 
-    def __init__(self, db_path: str | Path = "data/web/jobs.sqlite3") -> None:
+    def __init__(self, db_path: str | Path = "data/web/jobs.json") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        self._lock = Lock()
+        if not self.db_path.exists():
+            self._write_rows([])
 
     def create_job(self, kind: str, params: dict[str, Any]) -> JobRecord:
         now = _now()
@@ -66,39 +68,25 @@ class JobStore:
             created_at=now,
             updated_at=now,
         )
-        with self._connect() as conn:
-            conn.execute(
-                """
-                insert into jobs (id, kind, status, params, result, error, progress, heartbeat_at, created_at, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job.id,
-                    job.kind,
-                    job.status,
-                    json.dumps(job.params, ensure_ascii=False),
-                    None,
-                    None,
-                    json.dumps(job.progress, ensure_ascii=False),
-                    job.heartbeat_at,
-                    job.created_at,
-                    job.updated_at,
-                ),
-            )
+        with self._lock:
+            rows = self._read_rows()
+            rows.append(_job_to_row(job))
+            self._write_rows(rows)
         return job
 
     def list_jobs(self, limit: int = 50) -> list[JobRecord]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "select * from jobs order by created_at desc limit ?",
-                (limit,),
-            ).fetchall()
-        return [self._row_to_job(row) for row in rows]
+        with self._lock:
+            rows = self._read_rows()
+        rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+        return [self._row_to_job(row) for row in rows[:limit]]
 
     def get_job(self, job_id: str) -> JobRecord | None:
-        with self._connect() as conn:
-            row = conn.execute("select * from jobs where id = ?", (job_id,)).fetchone()
-        return self._row_to_job(row) if row is not None else None
+        with self._lock:
+            rows = self._read_rows()
+        for row in rows:
+            if row.get("id") == job_id:
+                return self._row_to_job(row)
+        return None
 
     def update_job(
         self,
@@ -111,107 +99,89 @@ class JobStore:
     ) -> JobRecord:
         updated_at = _now()
         heartbeat_at = updated_at if status == "running" else None
-        with self._connect() as conn:
-            conn.execute(
-                """
-                update jobs
-                set status = ?,
-                    result = ?,
-                    error = ?,
-                    progress = coalesce(?, progress),
-                    heartbeat_at = coalesce(?, heartbeat_at),
-                    updated_at = ?
-                where id = ?
-                """,
-                (
-                    status,
-                    json.dumps(result, ensure_ascii=False) if result is not None else None,
-                    error,
-                    json.dumps(progress, ensure_ascii=False) if progress is not None else None,
-                    heartbeat_at,
-                    updated_at,
-                    job_id,
-                ),
-            )
-        job = self.get_job(job_id)
-        if job is None:
-            raise KeyError(job_id)
-        return job
+        with self._lock:
+            rows = self._read_rows()
+            for row in rows:
+                if row.get("id") != job_id:
+                    continue
+                row["status"] = status
+                row["result"] = result
+                row["error"] = error
+                if progress is not None:
+                    row["progress"] = progress
+                if heartbeat_at is not None:
+                    row["heartbeat_at"] = heartbeat_at
+                row["updated_at"] = updated_at
+                self._write_rows(rows)
+                return self._row_to_job(row)
+        raise KeyError(job_id)
 
     def mark_running_jobs_interrupted(self, reason: str) -> int:
         """Mark jobs left running by a previous server process as failed."""
         updated_at = _now()
         progress = _progress(100, "interrupted", reason)
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                update jobs
-                set status = 'failed',
-                    result = null,
-                    error = ?,
-                    progress = ?,
-                    heartbeat_at = null,
-                    updated_at = ?
-                where status = 'running'
-                """,
-                (
-                    reason,
-                    json.dumps(progress, ensure_ascii=False),
-                    updated_at,
-                ),
-            )
-            return int(cursor.rowcount)
+        marked = 0
+        with self._lock:
+            rows = self._read_rows()
+            for row in rows:
+                if row.get("status") != "running":
+                    continue
+                row["status"] = "failed"
+                row["result"] = None
+                row["error"] = reason
+                row["progress"] = progress
+                row["heartbeat_at"] = None
+                row["updated_at"] = updated_at
+                marked += 1
+            if marked:
+                self._write_rows(rows)
+        return marked
 
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                create table if not exists jobs (
-                    id text primary key,
-                    kind text not null,
-                    status text not null,
-                    params text not null,
-                    result text,
-                    error text,
-                    progress text,
-                    heartbeat_at text,
-                    created_at text not null,
-                    updated_at text not null
-                )
-                """
-            )
-            columns = {row["name"] for row in conn.execute("pragma table_info(jobs)").fetchall()}
-            if "progress" not in columns:
-                conn.execute("alter table jobs add column progress text")
-                conn.execute(
-                    "update jobs set progress = ? where progress is null",
-                    (json.dumps(_progress(0, "unknown", "历史任务未记录进度"), ensure_ascii=False),),
-                )
-            if "heartbeat_at" not in columns:
-                conn.execute("alter table jobs add column heartbeat_at text")
+    def _read_rows(self) -> list[dict[str, Any]]:
+        try:
+            payload = json.loads(self.db_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        return []
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _write_rows(self, rows: list[dict[str, Any]]) -> None:
+        tmp_path = self.db_path.with_suffix(self.db_path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(self.db_path)
 
-    def _row_to_job(self, row: sqlite3.Row) -> JobRecord:
+    def _row_to_job(self, row: dict[str, Any]) -> JobRecord:
+        status = str(row.get("status") or "")
+        heartbeat_at = row.get("heartbeat_at")
         return JobRecord(
-            id=row["id"],
-            kind=row["kind"],
-            status=row["status"],
-            params=json.loads(row["params"]),
-            result=json.loads(row["result"]) if row["result"] else None,
-            error=row["error"],
-            progress=json.loads(row["progress"]) if row["progress"] else _progress(0, "unknown", "未记录进度"),
-            heartbeat_at=row["heartbeat_at"] if "heartbeat_at" in row.keys() else None,
-            health=_job_health(
-                row["status"],
-                row["heartbeat_at"] if "heartbeat_at" in row.keys() else None,
-            ),
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
+            id=str(row.get("id") or ""),
+            kind=str(row.get("kind") or ""),
+            status=status,
+            params=dict(row.get("params") or {}),
+            result=row.get("result") if isinstance(row.get("result"), dict) else None,
+            error=str(row["error"]) if row.get("error") is not None else None,
+            progress=dict(row.get("progress") or _progress(0, "unknown", "未记录进度")),
+            heartbeat_at=str(heartbeat_at) if heartbeat_at else None,
+            health=_job_health(status, str(heartbeat_at) if heartbeat_at else None),
+            created_at=str(row.get("created_at") or ""),
+            updated_at=str(row.get("updated_at") or ""),
         )
+
+
+def _job_to_row(job: JobRecord) -> dict[str, Any]:
+    return {
+        "id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "params": job.params,
+        "result": job.result,
+        "error": job.error,
+        "progress": job.progress,
+        "heartbeat_at": job.heartbeat_at,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
 
 
 def _now() -> str:

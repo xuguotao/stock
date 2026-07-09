@@ -4,9 +4,9 @@
 
 **Goal:** Build a local FastAPI + Vue + ECharts dashboard MVP that can submit tail-session backtest jobs, view job status, and visualize backtest metrics.
 
-**Architecture:** FastAPI exposes job and backtest APIs backed by a lightweight SQLite metadata store and an in-process background runner. Services wrap existing `src.strategy.tail_session` and `BacktestEngine` modules instead of reimplementing strategy logic. Vue 3 + Vite + ECharts provides a work-focused admin UI with dashboard, jobs, and backtest pages.
+**Architecture:** FastAPI exposes job and backtest APIs backed by a lightweight legacy local DB metadata store and an in-process background runner. Services wrap existing `src.strategy.tail_session` and `BacktestEngine` modules instead of reimplementing strategy logic. Vue 3 + Vite + ECharts provides a work-focused admin UI with dashboard, jobs, and backtest pages.
 
-**Tech Stack:** Python 3.12+, FastAPI, SQLite standard library, pytest, Vue 3, TypeScript, Vite, ECharts, Element Plus.
+**Tech Stack:** Python 3.12+, FastAPI, legacy local DB standard library, pytest, Vue 3, TypeScript, Vite, ECharts, Element Plus.
 
 ---
 
@@ -28,7 +28,7 @@ from src.web.backend.app import create_app
 
 
 def test_jobs_api_creates_and_lists_jobs(tmp_path):
-    app = create_app(db_path=tmp_path / "jobs.sqlite3")
+    app = create_app(db_path=tmp_path / "jobs.legacy_local_db3")
     client = TestClient(app)
 
     created = client.post("/api/jobs", json={"kind": "noop", "params": {"x": 1}}).json()
@@ -46,7 +46,7 @@ Expected: FAIL because `src.web.backend.app` does not exist.
 
 - [ ] **Step 3: Implement job store and API**
 
-Create a SQLite-backed `JobStore` with `create_job`, `list_jobs`, `get_job`, and `update_job`. Create FastAPI routes `POST /api/jobs`, `GET /api/jobs`, and `GET /api/jobs/{job_id}`.
+Create a legacy local DB-backed `JobStore` with `create_job`, `list_jobs`, `get_job`, and `update_job`. Create FastAPI routes `POST /api/jobs`, `GET /api/jobs`, and `GET /api/jobs/{job_id}`.
 
 - [ ] **Step 4: Verify**
 
@@ -69,7 +69,7 @@ from src.web.backend.app import create_app
 
 
 def test_backtest_api_runs_with_inline_sample_dataset(tmp_path):
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", run_jobs_inline=True)
+    app = create_app(db_path=tmp_path / "jobs.legacy_local_db3", run_jobs_inline=True)
     client = TestClient(app)
 
     response = client.post("/api/backtests/tail-session", json={

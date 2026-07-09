@@ -13,6 +13,7 @@ from src.data_ops.models import (
     DataOpsTaskStatus,
     decode_progress_message,
     default_task_configs,
+    encode_progress_message,
     parse_schedule_config,
 )
 
@@ -96,10 +97,26 @@ class ClickHouseDataOpsRepository:
         )
 
     def seed_default_configs(self, *, now: datetime | None = None) -> None:
-        existing = {config.task_key for config in self.list_task_configs()}
+        existing = {config.task_key: config for config in self.list_task_configs()}
         for config in default_task_configs():
-            if config.task_key not in existing:
+            current = existing.get(config.task_key)
+            if current is None:
                 self.upsert_task_config(config, now=now)
+                continue
+            if _should_upgrade_default_config(current, config):
+                self.upsert_task_config(
+                    DataOpsTaskConfig(
+                        task_key=current.task_key,
+                        enabled=current.enabled,
+                        schedule_kind=current.schedule_kind,
+                        schedule_config=config.schedule_config,
+                        max_runtime_seconds=current.max_runtime_seconds,
+                        stale_after_seconds=current.stale_after_seconds,
+                        manual_trigger=current.manual_trigger,
+                        manual_triggered_at=current.manual_triggered_at,
+                    ),
+                    now=now,
+                )
 
     def list_task_configs(self) -> list[DataOpsTaskConfig]:
         if hasattr(self.client, "configs"):
@@ -293,6 +310,26 @@ class ClickHouseDataOpsRepository:
             [(runner_id, task_key, heartbeat_at, status, message)],
         )
 
+    def mark_task_interrupted(
+        self,
+        task_key: str,
+        runner_id: str,
+        message: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        interrupted_at = now or datetime.now()
+        latest_run = self._latest_run(task_key)
+        if latest_run and str(latest_run.get("status")) == "running":
+            self.finish_run(latest_run["run_id"], "failed", {}, message, now=interrupted_at)
+        self.write_heartbeat(
+            runner_id,
+            task_key,
+            "failed",
+            encode_progress_message(percent=100, stage="interrupted", message=message),
+            now=interrupted_at,
+        )
+
     def list_task_statuses(self, *, now: datetime | None = None) -> list[DataOpsTaskStatus]:
         current = now or datetime.now()
         statuses = []
@@ -306,6 +343,8 @@ class ClickHouseDataOpsRepository:
             heartbeat_status = str(heartbeat.get("status") or "") if heartbeat else ""
             if heartbeat_status == "running":
                 status = "running"
+            elif status == "running" and heartbeat_status in {"failed", "success", "skipped"}:
+                status = heartbeat_status
             if (
                 status == "running"
                 and heartbeat_at
@@ -318,6 +357,8 @@ class ClickHouseDataOpsRepository:
             if status == "running" and heartbeat_status == "running":
                 latest_error = ""
                 latest_result = {}
+            if status == "failed" and heartbeat_status == "failed" and not latest_error:
+                latest_error = str(progress.get("message") or heartbeat.get("message") or "")
             statuses.append(
                 DataOpsTaskStatus(
                     task_key=config.task_key,
@@ -412,7 +453,31 @@ class ClickHouseDataOpsRepository:
     def _run_row(self, run_id: str) -> dict[str, Any]:
         if hasattr(self.client, "runs"):
             return self.client.runs[run_id]
-        return self._started_runs.get(run_id, {})
+        if run_id in self._started_runs:
+            return self._started_runs[run_id]
+        rows = self._execute(
+            """
+            select run_id, task_key, status, started_at, finished_at, duration_seconds, result, error
+            from data_ops_task_runs
+            where run_id = %(run_id)s
+            order by (task_key = '') asc, isNull(finished_at) asc, finished_at desc
+            limit 1
+            """,
+            {"run_id": run_id},
+        )
+        if not rows:
+            return {}
+        row = rows[0]
+        return {
+            "run_id": row[0],
+            "task_key": row[1],
+            "status": row[2],
+            "started_at": row[3],
+            "finished_at": row[4],
+            "duration_seconds": row[5],
+            "result": row[6],
+            "error": row[7],
+        }
 
 
 def _config_from_dict(row: dict[str, Any]) -> DataOpsTaskConfig:
@@ -448,3 +513,11 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _should_upgrade_default_config(current: DataOpsTaskConfig, default: DataOpsTaskConfig) -> bool:
+    return (
+        current.task_key == "stock_readiness_snapshot"
+        and current.schedule_config == {"time": "15:40"}
+        and default.schedule_config != current.schedule_config
+    )

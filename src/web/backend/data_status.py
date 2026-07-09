@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import date, datetime, time, timedelta
-from pathlib import Path
 from typing import Any
 
 from src.core.constants import format_symbol, is_st
@@ -13,26 +11,6 @@ from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.clickhouse_table_maintenance import daily_duplicate_stats, minute5_duplicate_stats
 from src.data.strategy_universe import StrategyUniverseOptions, resolve_strategy_universe
 
-
-TABLE_SPECS = {
-    "stocks": {"symbol_col": "symbol"},
-    "trade_calendar": {"date_col": "date"},
-    "daily_kline": {"date_col": "date", "symbol_col": "symbol"},
-    "minute5_kline": {"date_col": "datetime", "symbol_col": "symbol"},
-    "index_daily": {"date_col": "date", "symbol_col": "code"},
-    "financials": {"date_col": "report_date", "symbol_col": "symbol"},
-    "stock_quote_snapshots": {"date_col": "snapshot_at", "symbol_col": "symbol"},
-    "stock_quote_snapshots_1m": {"date_col": "bucket_start", "symbol_col": "symbol"},
-    "stock_quote_snapshots_5m": {"date_col": "bucket_start", "symbol_col": "symbol"},
-    "stock_concept_blocks": {"date_col": "updated_at", "symbol_col": "symbol"},
-    "stock_announcements": {"date_col": "date", "symbol_col": "symbol"},
-    "stock_research_status": {"date_col": "checked_at", "symbol_col": "symbol"},
-    "data_source_health": {"date_col": "checked_at"},
-    "fund_tail_nav": {"date_col": "date", "symbol_col": "fund_code"},
-    "fund_tail_proxy": {"date_col": "date", "symbol_col": "fund_code"},
-    "fund_tail_benchmark": {"date_col": "date"},
-    "fund_watchlist": {"date_col": "updated_at", "symbol_col": "fund_code"},
-}
 
 CLICKHOUSE_TABLE_SPECS = {
     "stocks": {"symbol_col": "symbol", "date_col": "updated_at"},
@@ -52,6 +30,7 @@ CLICKHOUSE_TABLE_SPECS = {
     "fund_tail_proxy": {"date_col": "date", "symbol_col": "fund_code"},
     "fund_tail_benchmark": {"date_col": "date"},
     "fund_watchlist": {"date_col": "updated_at", "symbol_col": "fund_code"},
+    "xdxr_info": {"date_col": "ex_date", "symbol_col": "symbol"},
 }
 
 QUOTE_SNAPSHOT_EXPECTED_INTERVAL_SECONDS = 10
@@ -66,58 +45,6 @@ QUOTE_SNAPSHOT_ROLLUPS = {
     "1m": {"table": "stock_quote_snapshots_1m", "bucket_seconds": 60},
     "5m": {"table": "stock_quote_snapshots_5m", "bucket_seconds": 300},
 }
-
-
-def inspect_stock_database(db_path: str | Path = "data/stock.db") -> dict[str, Any]:
-    """Return read-only coverage metrics for the local stock SQLite database."""
-    path = Path(db_path)
-    database = {
-        "path": str(path),
-        "exists": path.exists(),
-        "size_bytes": path.stat().st_size if path.exists() else 0,
-    }
-    if not path.exists():
-        return {
-            "database": database,
-            "tables": {},
-            "stock_summary": {"stock_count": 0, "non_st_stock_count": 0, "st_stock_count": 0},
-            "health": {"status": "missing_database"},
-        }
-
-    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
-        available_tables = {
-            row[0]
-            for row in conn.execute("select name from sqlite_master where type = 'table'")
-        }
-        tables = {
-            table: _table_status(conn, table, spec)
-            for table, spec in TABLE_SPECS.items()
-            if table in available_tables
-        }
-        stock_summary = _stock_summary(conn) if "stocks" in available_tables else {
-            "stock_count": 0,
-            "non_st_stock_count": 0,
-            "st_stock_count": 0,
-        }
-
-    daily = tables.get("daily_kline", {})
-    minute5 = tables.get("minute5_kline", {})
-    quote_snapshots = tables.get("stock_quote_snapshots", {})
-    health = {
-        "status": "ok",
-        "daily_latest_date": (daily.get("date_range") or {}).get("end"),
-        "daily_symbol_count": daily.get("symbol_count", 0),
-        "minute5_latest_datetime": (minute5.get("date_range") or {}).get("end"),
-        "minute5_symbol_count": minute5.get("symbol_count", 0),
-        "quote_snapshot_latest_datetime": (quote_snapshots.get("date_range") or {}).get("end"),
-        "quote_snapshot_symbol_count": quote_snapshots.get("symbol_count", 0),
-    }
-    return {
-        "database": database,
-        "tables": tables,
-        "stock_summary": stock_summary,
-        "health": health,
-    }
 
 
 def inspect_clickhouse_database(
@@ -307,19 +234,6 @@ def _dataset_health_rows(
             "symbols": expected_all,
             "expected_symbols": expected_all,
             "status": "ok" if tables.get("stocks", {}).get("row_count", 0) else "missing",
-            "issues": [],
-        },
-        {
-            "key": "trade_calendar",
-            "name": "交易日历",
-            "category": "基础数据",
-            "table": "trade_calendar",
-            "source": "ClickHouse / trade_calendar",
-            "update_mechanism": "基础数据同步维护交易日，非交易日采集任务会自动跳过。",
-            "consumer": "日常维护、分钟采集、快照采集、回测交易日判断",
-            "quality_rules": ["基础表存在", "交易日连续性", "最新交易日判断"],
-            "repair_action_keys": [],
-            "status": "ok" if tables.get("trade_calendar", {}).get("row_count", 0) else "missing",
             "issues": [],
         },
         {
@@ -585,30 +499,6 @@ def _dataset_issues(prefix: str, quality: dict[str, Any]) -> list[str]:
     ]
 
 
-def _table_status(conn: sqlite3.Connection, table: str, spec: dict[str, str]) -> dict[str, Any]:
-    row_count = conn.execute(f"select count(*) from {table}").fetchone()[0]
-    result: dict[str, Any] = {"row_count": row_count}
-    date_col = spec.get("date_col")
-    if date_col:
-        start, end = conn.execute(f"select min({date_col}), max({date_col}) from {table}").fetchone()
-        result["date_range"] = {"start": start, "end": end}
-    symbol_col = spec.get("symbol_col")
-    if symbol_col:
-        result["symbol_count"] = conn.execute(f"select count(distinct {symbol_col}) from {table}").fetchone()[0]
-    return result
-
-
-def _stock_summary(conn: sqlite3.Connection) -> dict[str, int]:
-    rows = conn.execute("select symbol, name from stocks").fetchall()
-    stock_count = len(rows)
-    st_stock_count = sum(1 for row in rows if is_st(str(row[1] or "")))
-    return {
-        "stock_count": stock_count,
-        "non_st_stock_count": stock_count - st_stock_count,
-        "st_stock_count": st_stock_count,
-    }
-
-
 def _clickhouse_table_status(client: Any, table: str, spec: dict[str, str]) -> dict[str, Any]:
     selectors = ["count()"]
     date_col = spec.get("date_col")
@@ -853,10 +743,11 @@ def _clickhouse_quality(
         issues.append(f"minute5_kline_duplicate_{minute5_check['extra_rows']}_extra_rows")
         if minute5_check["status"] == "ok":
             minute5_check["status"] = "warning"
+    quote_expected_symbols = strategy_tradable_symbols
     quote_snapshot_check = _quote_snapshot_quality(
         client=client,
         tables=tables,
-        expected_symbols=non_st_count,
+        expected_symbols=quote_expected_symbols,
     )
     issues.extend(quote_snapshot_check["issues"])
     scheduled_checks = _scheduled_data_quality_checks(

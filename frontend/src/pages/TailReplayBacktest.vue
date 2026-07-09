@@ -391,7 +391,7 @@ function stopPolling() {
 
 function openStockTrend(symbol: string) {
   if (!symbol) return
-  window.open(`/?page=stock-trend&symbol=${encodeURIComponent(symbol)}`, '_blank')
+  window.open(`/stock-trend/${encodeURIComponent(symbol)}`, '_blank')
 }
 
 function statusType(status: JobStatus) {

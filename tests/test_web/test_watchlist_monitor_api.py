@@ -43,7 +43,7 @@ def test_watchlist_monitor_report_api_returns_items(tmp_path) -> None:
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         watchlist_monitor_runner=fake_runner,
         auto_start_minute5_monitor=False,
         auto_start_quote_snapshot_monitor=False,

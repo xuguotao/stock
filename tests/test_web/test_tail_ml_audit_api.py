@@ -26,7 +26,7 @@ def test_tail_ml_audit_api_returns_runner_payload(tmp_path) -> None:
             "issues": ["minute5_history_limited_108_days"],
         }
 
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", tail_ml_audit_runner=fake_audit_runner)
+    app = create_app(db_path=tmp_path / "jobs.json", tail_ml_audit_runner=fake_audit_runner)
     client = TestClient(app)
 
     response = client.get("/api/ml/tail/audit")
@@ -42,7 +42,7 @@ def test_tail_ml_audit_api_returns_degraded_payload_when_runner_fails(tmp_path) 
     def failing_audit_runner():
         raise RuntimeError("clickhouse timeout")
 
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", tail_ml_audit_runner=failing_audit_runner)
+    app = create_app(db_path=tmp_path / "jobs.json", tail_ml_audit_runner=failing_audit_runner)
     client = TestClient(app)
 
     response = client.get("/api/ml/tail/audit")
@@ -81,7 +81,7 @@ def test_tail_ml_models_api_lists_model_manifests(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", tail_model_root=model_root)
+    app = create_app(db_path=tmp_path / "jobs.json", tail_model_root=model_root)
     client = TestClient(app)
 
     response = client.get("/api/ml/tail/models")
@@ -137,7 +137,7 @@ def test_tail_ml_train_api_runs_inline_training_job(tmp_path) -> None:
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         tail_model_root=tmp_path / "models",
         tail_ml_sample_builder=fake_sample_builder,
@@ -222,7 +222,7 @@ def test_tail_ml_train_api_drops_unlabeled_latest_samples(tmp_path) -> None:
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         tail_model_root=tmp_path / "models",
         tail_ml_sample_builder=fake_sample_builder,
@@ -253,7 +253,7 @@ def test_tail_ml_promote_api_marks_only_requested_model_promoted(tmp_path) -> No
         json.dumps({"version": "tail-b", "status": "ready", "created_at": "2026-06-25T10:00:00+00:00"}),
         encoding="utf-8",
     )
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", tail_model_root=model_root)
+    app = create_app(db_path=tmp_path / "jobs.json", tail_model_root=model_root)
     client = TestClient(app)
 
     response = client.post("/api/ml/tail/models/tail-b/promote")

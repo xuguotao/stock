@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from typing import Any, Callable
@@ -32,11 +31,9 @@ class Minute5UpdateMonitor:
         self,
         *,
         runner: Callable[..., dict[str, Any]],
-        stock_db_path: Path,
         session_checker: SessionChecker | None = None,
     ) -> None:
         self._runner = runner
-        self._stock_db_path = stock_db_path
         self._session_checker = session_checker or _default_session_checker
         self._lock = Lock()
         self._stop_event = Event()
@@ -135,7 +132,6 @@ class Minute5UpdateMonitor:
             return
         try:
             result = self._runner(
-                db_path=self._stock_db_path,
                 trade_date=trade_date,
                 limit=config.limit,
                 symbols=None,

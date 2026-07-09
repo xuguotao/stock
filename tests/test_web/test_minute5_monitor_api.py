@@ -31,9 +31,8 @@ def test_minute5_monitor_start_status_and_stop(tmp_path) -> None:
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        run_jobs_inline=True,
+        db_path=tmp_path / "jobs.json",
+                run_jobs_inline=True,
         minute5_sync_runner=fake_sync,
         minute5_monitor_session_checker=lambda trade_date: (True, "market_open"),
     )
@@ -72,9 +71,8 @@ def test_minute5_monitor_skips_outside_market_hours(tmp_path) -> None:
         return {"inserted_rows": 1}
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        run_jobs_inline=True,
+        db_path=tmp_path / "jobs.json",
+                run_jobs_inline=True,
         minute5_sync_runner=fake_sync,
         minute5_monitor_session_checker=lambda trade_date: (False, "outside_market_hours"),
     )
@@ -106,9 +104,8 @@ def test_minute5_monitor_auto_starts_on_app_startup_and_skips_when_closed(tmp_pa
         return {"inserted_rows": 1}
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        minute5_sync_runner=fake_sync,
+        db_path=tmp_path / "jobs.json",
+                minute5_sync_runner=fake_sync,
         minute5_monitor_session_checker=lambda trade_date: (False, "outside_market_hours"),
         auto_start_minute5_monitor=True,
         minute5_auto_interval_seconds=30,

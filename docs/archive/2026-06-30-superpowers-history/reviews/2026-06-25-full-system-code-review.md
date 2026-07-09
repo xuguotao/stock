@@ -123,7 +123,7 @@
 
 证据：
 
-- `src/web/backend/jobs.py` 使用 SQLite 保存元数据。
+- `src/web/backend/jobs.py` 使用 legacy local DB 保存元数据。
 - `app.py` 用 FastAPI `BackgroundTasks` 启动耗时任务。
 - `DataOpsScheduler`、`Minute5UpdateMonitor`、`QuoteSnapshotMonitor` 都是进程内 daemon thread。
 - 启动时会把 running job 标记为 interrupted，但无法恢复执行。

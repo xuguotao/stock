@@ -25,7 +25,7 @@
 
 问题：数据中心的股票总览仍用 SQL `upper(name) like '%ST%'` 判断 ST。这个口径会把 `best科技` 这类包含 `st` 字符但不是 ST 前缀的股票误计为 ST，与 `src.core.constants.is_st()` 不一致。
 
-处理：本地 SQLite 与 ClickHouse 的 stock summary 都改为读取 `symbol, name` 后用 `is_st()` 统计。测试覆盖 `*ST测试` 与 `best科技` 边界。
+处理：本地 legacy local DB 与 ClickHouse 的 stock summary 都改为读取 `symbol, name` 后用 `is_st()` 统计。测试覆盖 `*ST测试` 与 `best科技` 边界。
 
 影响：数据中心“非 ST 股票”展示与策略可交易池的最终 Python 判断更一致，减少“页面健康度与策略扫描池对不上”的误差来源。
 

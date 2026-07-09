@@ -3,9 +3,10 @@ from pathlib import Path
 
 def test_tail_live_selection_page_shows_run_history() -> None:
     source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    job_source = Path("frontend/src/features/tail-live/useTailLiveJob.ts").read_text(encoding="utf-8")
 
     assert "运行记录" in source
-    assert "tail_session_live_selection" in source
+    assert "tail_session_live_selection" in job_source
     assert "loadRunHistory" in source
     assert "selectRunHistory" in source
     assert "@row-click=\"selectRunHistory\"" in source
@@ -34,20 +35,20 @@ def test_tail_live_selection_page_defaults_to_full_market_and_fast_refresh_mode(
 
 def test_tail_live_selection_links_symbols_to_stock_trend() -> None:
     source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
-    app_source = Path("frontend/src/App.vue").read_text(encoding="utf-8")
+    links_source = Path("frontend/src/features/tail-live/links.ts").read_text(encoding="utf-8")
+    router_source = Path("frontend/src/router.ts").read_text(encoding="utf-8")
 
     assert "openStockTrend" in source
     assert "@click=\"openStockTrend(row.symbol)\"" in source
     assert "window.open(stockTrendUrl(symbol), '_blank', 'noopener,noreferrer')" in source
-    assert "page: 'stock-trend'" in source
-    assert "granularity: '5m'" in source
-    assert "initialPage" in app_source
-    assert "URLSearchParams" in app_source
-    assert "StockTrend" in app_source
+    assert "/stock-trend/" in links_source
+    assert "granularity: '5m'" in links_source
+    assert "normalizeLegacyPageQuery" in router_source
+    assert "StockTrend" in router_source
 
 
 def test_tail_live_selection_page_explains_new_filter_reasons() -> None:
-    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    source = tail_live_sources()
 
     assert "涨停/近涨停，无法买入" in source
     assert "尾盘冲高回落" in source
@@ -185,7 +186,7 @@ def test_tail_live_selection_limits_large_result_tables() -> None:
 
 
 def test_tail_live_selection_polls_long_running_full_market_jobs() -> None:
-    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    source = Path("frontend/src/features/tail-live/useTailLiveJob.ts").read_text(encoding="utf-8")
 
     assert "JOB_POLL_INTERVAL_MS = 1000" in source
     assert "JOB_POLL_MAX_ATTEMPTS = 900" in source
@@ -237,6 +238,9 @@ def tail_live_sources() -> str:
             Path("frontend/src/pages/TailLiveSelection.vue"),
             Path("frontend/src/pages/tail-live/TailSelectionTable.vue"),
             Path("frontend/src/pages/tail-live/TailDataHealthPanel.vue"),
+            Path("frontend/src/features/tail-live/formatters.ts"),
+            Path("frontend/src/features/tail-live/useTailLiveDataHealth.ts"),
+            Path("frontend/src/features/tail-live/useTailLiveJob.ts"),
         ]
         if path.exists()
     )

@@ -15,7 +15,7 @@ def test_quote_snapshot_monitor_auto_starts_and_skips_when_market_closed(tmp_pat
         return {"inserted_rows": 1}
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         quote_snapshot_sync_runner=fake_sync,
         quote_snapshot_session_checker=lambda: (False, "outside_market_hours"),
         auto_start_quote_snapshot_monitor=True,
@@ -59,7 +59,7 @@ def test_quote_snapshot_monitor_can_run_inline_when_session_open(tmp_path) -> No
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         quote_snapshot_sync_runner=fake_sync,
         quote_snapshot_session_checker=lambda: (True, "market_open"),
         auto_start_quote_snapshot_monitor=False,
@@ -101,7 +101,7 @@ def test_quote_snapshot_monitor_records_slow_cycle_and_reduces_chunk_size(tmp_pa
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         quote_snapshot_sync_runner=fake_sync,
         quote_snapshot_session_checker=lambda: (True, "market_open"),
         auto_start_quote_snapshot_monitor=False,

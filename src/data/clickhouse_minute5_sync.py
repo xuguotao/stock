@@ -11,7 +11,7 @@ import pandas as pd
 from src.core.constants import format_symbol, is_st
 from src.data.akshare_source import AKShareSource
 from src.data.clickhouse_source import ClickHouseStockDataSource
-from src.data.minute5_sync import FallbackIntradaySource
+from src.data.intraday_fallback import FallbackIntradaySource
 from src.data.sina_source import SinaSource
 from src.data.tencent_source import TencentQuoteSource
 
@@ -175,7 +175,8 @@ def sync_clickhouse_minute5_kline(
 
         # Report progress with processed/total for heartbeat
         if progress is not None:
-            progress(
+            _report(
+                progress,
                 5 + int((batch_end / total) * 90),
                 "fetching",
                 f"批次 {batches_completed}/{total_batches} 已提交，目标桶: {target_dt.strftime('%H:%M')}",
@@ -209,6 +210,7 @@ def sync_clickhouse_minute5_history_window(
     limit: int = 0,
     symbols: list[str] | None = None,
     source: Any | None = None,
+    fallback_sources: list[Any] | None = None,
     include_st: bool = False,
     batch_size: int = 500,
     progress: ProgressCallback | None = None,
@@ -223,6 +225,11 @@ def sync_clickhouse_minute5_history_window(
         raise ValueError("end must be greater than or equal to start")
     clickhouse = client or _client(host=host, user=user, password=password, database=database)
     data_source = source or SinaSource(rate_limit=0.0, intraday_datalen=10000, intraday_workers=30)
+    if fallback_sources is None:
+        fallback_sources = [
+            TencentQuoteSource(rate_limit=0.0, intraday_workers=30),
+            AKShareSource(rate_limit=0.2),
+        ] if source is None else []
     window_fetcher = getattr(data_source, "fetch_intraday_bars_window", None)
     if window_fetcher is None:
         raise ValueError("source must provide fetch_intraday_bars_window")
@@ -237,6 +244,7 @@ def sync_clickhouse_minute5_history_window(
     total = len(target_symbols)
     inserted_rows = 0
     no_data = 0
+    no_data_symbols: list[str] = []
     failed = 0
     failures: list[dict[str, str]] = []
 
@@ -252,13 +260,32 @@ def sync_clickhouse_minute5_history_window(
         )
         try:
             bars = window_fetcher(batch_symbols, start, end, "5m")
-            if bars is None or bars.empty:
-                no_data += len(batch_symbols)
-                continue
             rows = _window_bar_rows(bars, start, end)
+            covered_codes = {str(row[0]).zfill(6) for row in rows}
+            missing_symbols = [
+                symbol for symbol in batch_symbols
+                if symbol.split(".")[0].zfill(6) not in covered_codes
+            ]
+            if missing_symbols and fallback_sources:
+                fallback_rows = _fallback_window_bar_rows(
+                    fallback_sources,
+                    missing_symbols,
+                    start,
+                    end,
+                    "5m",
+                )
+                rows = _deduplicate_rows(rows + fallback_rows)
+                covered_codes = {str(row[0]).zfill(6) for row in rows}
             if not rows:
                 no_data += len(batch_symbols)
+                no_data_symbols.extend(batch_symbols)
                 continue
+            batch_no_data_symbols = [
+                symbol for symbol in batch_symbols
+                if symbol.split(".")[0].zfill(6) not in covered_codes
+            ]
+            no_data += len(batch_no_data_symbols)
+            no_data_symbols.extend(batch_no_data_symbols)
             existing = _existing_datetimes_by_symbol_window(
                 clickhouse,
                 start,
@@ -276,6 +303,7 @@ def sync_clickhouse_minute5_history_window(
         "target_symbols": total,
         "inserted_rows": inserted_rows,
         "no_data": no_data,
+        "no_data_symbols": no_data_symbols[:100],
         "failed": failed,
         "failures": failures[:50],
         "coverage_after": _minute5_coverage(clickhouse),
@@ -504,6 +532,40 @@ def _insert_missing_window_rows(
     return len(missing)
 
 
+def _fallback_window_bar_rows(
+    sources: list[Any],
+    symbols: list[str],
+    start: date,
+    end: date,
+    frequency: str,
+) -> list[tuple[Any, ...]]:
+    remaining = list(symbols)
+    rows: list[tuple[Any, ...]] = []
+    for source in sources:
+        if not remaining:
+            break
+        source_rows: list[tuple[Any, ...]] = []
+        for trade_date in _date_range(start, end):
+            batch_frames = _fetch_intraday_bars_batch(source, remaining, trade_date)
+            for symbol in remaining:
+                frame = batch_frames.get(format_symbol(symbol))
+                if frame is None:
+                    continue
+                source_rows.extend(_bar_rows(symbol, frame))
+        if source_rows:
+            rows.extend(source_rows)
+            covered = {str(row[0]).zfill(6) for row in source_rows}
+            remaining = [symbol for symbol in remaining if symbol.split(".")[0].zfill(6) not in covered]
+    return _deduplicate_rows(rows)
+
+
+def _date_range(start: date, end: date) -> Iterable[date]:
+    current = start
+    while current <= end:
+        yield current
+        current += timedelta(days=1)
+
+
 def _expected_5m_bars(target: time) -> int:
     slots = []
     current = datetime.combine(date(2000, 1, 1), time(9, 35))
@@ -546,14 +608,15 @@ def _bar_rows(symbol: str, bars: pd.DataFrame | None) -> list[tuple[Any, ...]]:
     prepared = prepared.dropna(subset=["datetime"])
     rows = []
     for _, row in prepared.iterrows():
+        open_, high, low, close = _normalized_ohlc(row)
         rows.append(
             (
                 code,
                 row["datetime"].to_pydatetime(),
-                float(row.get("open", 0) or 0),
-                float(row.get("high", 0) or 0),
-                float(row.get("low", 0) or 0),
-                float(row.get("close", 0) or 0),
+                open_,
+                high,
+                low,
+                close,
                 float(row.get("volume", 0) or 0),
                 float(row.get("amount", 0) or 0),
             )
@@ -575,19 +638,31 @@ def _window_bar_rows(bars: pd.DataFrame, start: date, end: date) -> list[tuple[A
     rows = []
     for _, row in prepared.sort_values(["symbol", "datetime"]).iterrows():
         code = str(row["symbol"]).split(".")[0].zfill(6)
+        open_, high, low, close = _normalized_ohlc(row)
         rows.append(
             (
                 code,
                 row["datetime"].to_pydatetime(),
-                float(row.get("open", 0) or 0),
-                float(row.get("high", 0) or 0),
-                float(row.get("low", 0) or 0),
-                float(row.get("close", 0) or 0),
+                open_,
+                high,
+                low,
+                close,
                 float(row.get("volume", 0) or 0),
                 float(row.get("amount", 0) or 0),
             )
         )
     return rows
+
+
+def _normalized_ohlc(row: Any) -> tuple[float, float, float, float]:
+    open_ = float(row.get("open", 0) or 0)
+    high = float(row.get("high", 0) or 0)
+    low = float(row.get("low", 0) or 0)
+    close = float(row.get("close", 0) or 0)
+    if open_ > 0 and high > 0 and low > 0 and close > 0:
+        high = max(open_, high, low, close)
+        low = min(open_, high, low, close)
+    return open_, high, low, close
 
 
 def _minute5_coverage(client: Any) -> dict[str, Any]:
@@ -613,6 +688,9 @@ def _stringify_dt(value: Any) -> str | None:
     return str(value)
 
 
-def _report(progress: ProgressCallback | None, percent: int, stage: str, message: str) -> None:
+def _report(progress: ProgressCallback | None, percent: int, stage: str, message: str, **extra: Any) -> None:
     if progress is not None:
-        progress(percent, stage, message)
+        try:
+            progress(percent, stage, message, **extra)
+        except TypeError:
+            progress(percent, stage, message)

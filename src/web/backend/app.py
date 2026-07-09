@@ -12,11 +12,12 @@ from typing import Any, Literal
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_kline
+from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_history_window, sync_clickhouse_minute5_kline
 from src.data.clickhouse_quote_snapshot_sync import sync_clickhouse_quote_snapshots
 from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.clickhouse_table_maintenance import optimize_quote_snapshot_rollups
 from src.data.clickhouse_daily_sync import sync_clickhouse_daily_from_minute5, sync_clickhouse_index_daily
+from src.data.stock_data_readiness import run_readiness_repair, run_readiness_snapshot
 from src.data.fund_tail_market_data import refresh_fund_tail_proxy_quotes
 from src.data.clickhouse_research_dataset import build_clickhouse_research_dataset
 from src.data.fund_tail_repository import ClickHouseFundTailRepository
@@ -30,15 +31,14 @@ from src.ml.tail_model_registry import evaluate_promotion_gate
 from src.ml.tail_rule_baseline import evaluate_tail_rule_baseline
 from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
-from src.web.backend.data_sync import DEFAULT_REMOTE_STOCK_DB, sync_stock_database
 from src.web.backend.data_ops_scheduler import DataOpsScheduler, DataOpsSchedulerConfig
 from src.data_ops.models import DataOpsTaskConfig
 from src.data_ops.repository import ClickHouseDataOpsRepository
 from src.web.backend.data_quality_calendar import DataQualityCalendarService
+from src.web.backend.minute5_quality import Minute5QualityService
 from src.web.backend.data_status import (
     fetch_stock_list,
     inspect_clickhouse_database,
-    inspect_stock_database,
     persist_clickhouse_quality_snapshot,
 )
 from src.web.backend.data_health_repair import build_data_health_repair_plan
@@ -68,6 +68,7 @@ from src.web.backend.jobs import JobRecord, JobStore
 from src.web.backend.minute5_monitor import Minute5MonitorConfig, Minute5UpdateMonitor
 from src.web.backend.quote_snapshot_monitor import QuoteSnapshotMonitor, QuoteSnapshotMonitorConfig
 from src.web.backend.stock_trend import analyze_stock_trend
+from src.web.backend.stock_readiness import build_readiness_summary, parse_dimensions, query_readiness
 from src.web.backend.tail_live import TailLiveSelectionRequest, run_tail_live_selection
 from src.web.backend.tail_replay_backtest import TailReplayBacktestRequest, run_tail_replay_backtest
 from src.web.backend.watchlist_monitor import get_watchlist_config, get_watchlist_report
@@ -80,16 +81,24 @@ class CreateJobRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-class SyncStockDbRequest(BaseModel):
-    remote: str = DEFAULT_REMOTE_STOCK_DB
-    backup: bool = True
-
-
 class SyncMinute5Request(BaseModel):
     trade_date: date
     limit: int = Field(default=0, ge=0)
     symbols: list[str] | None = None
     include_st: bool = False
+
+
+class Minute5InvalidRepairRequest(BaseModel):
+    trade_date: date
+    symbols: list[str] | None = None
+    mode: Literal["refetch", "delete_and_refetch"] = "delete_and_refetch"
+    limit: int = Field(default=1000, ge=1, le=5000)
+
+
+class Minute5MissingRepairRequest(BaseModel):
+    trade_date: date
+    symbols: list[str] | None = None
+    limit: int = Field(default=10000, ge=1, le=10000)
 
 
 class DailyMaintenanceRequest(BaseModel):
@@ -165,9 +174,24 @@ class FundTailProxyRefreshRequest(BaseModel):
     trade_date: date
 
 
+class StockReadinessRepairRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=lambda: ["daily", "minute5"])
+    start: date
+    end: date
+
+
+class StockReadinessSnapshotRequest(BaseModel):
+    dimensions: list[str] = Field(default_factory=lambda: ["daily", "minute5"])
+    start: date
+    end: date
+    symbols: list[str] | None = None
+    limit: int = Field(default=0, ge=0)
+
+
 def create_app(
     *,
-    db_path: str | Path = "data/web/jobs.sqlite3",
+    db_path: str | Path = "data/web/jobs.json",
     dataset_root: str | Path = "data/research",
     fund_tail_data_dir: str | Path = "data/fund_tail",
     fund_tail_report_path: str | Path = "reports/fund_tail_backtest.csv",
@@ -181,7 +205,6 @@ def create_app(
     fund_tail_opportunity_report_path: str | Path = "reports/fund_tail_opportunities.csv",
     fund_tail_opportunity_markdown_path: str | Path = "reports/fund_tail_opportunities/latest.md",
     fund_tail_repository=None,
-    stock_db_path: str | Path = "data/stock.db",
     run_jobs_inline: bool = False,
     tail_live_runner=run_tail_live_selection,
     tail_replay_runner=run_tail_replay_backtest,
@@ -189,8 +212,8 @@ def create_app(
     fund_tail_proxy_refresher: FundTailProxyRefresher | None = None,
     fund_tail_opportunity_refresher: FundTailOpportunityRefresher | None = None,
     fund_tail_metadata_lookup_runner=lookup_fund_metadata,
-    stock_db_sync_runner=sync_stock_database,
     minute5_sync_runner=sync_clickhouse_minute5_kline,
+    minute5_invalid_repair_runner=sync_clickhouse_minute5_history_window,
     minute5_monitor_session_checker=None,
     auto_start_minute5_monitor: bool = False,
     minute5_auto_interval_seconds: int = 60,
@@ -209,6 +232,7 @@ def create_app(
     data_ops_maintenance_runner=None,
     data_ops_repository=None,
     data_quality_calendar_service=None,
+    minute5_quality_service=None,
     clickhouse_dataset_builder=build_clickhouse_research_dataset,
     tail_signal_repository=None,
     tail_ml_audit_runner=audit_tail_ml_data,
@@ -218,6 +242,9 @@ def create_app(
     stock_trend_runner=analyze_stock_trend,
     watchlist_monitor_runner=get_watchlist_report,
     watchlist_config_runner=get_watchlist_config,
+    stock_readiness_client=None,
+    stock_readiness_snapshot_runner=run_readiness_snapshot,
+    stock_readiness_repair_runner=run_readiness_repair,
 ) -> FastAPI:
     """Create a configured FastAPI app."""
     @asynccontextmanager
@@ -272,7 +299,6 @@ def create_app(
     app.state.job_store = store
     app.state.dataset_service = datasets
     app.state.fund_tail_paths = fund_tail_paths
-    app.state.stock_db_path = Path(stock_db_path)
     app.state.run_jobs_inline = run_jobs_inline
     app.state.tail_live_runner = tail_live_runner
     app.state.tail_replay_runner = tail_replay_runner
@@ -289,8 +315,8 @@ def create_app(
         if fund_tail_repository is not None
         else _default_fund_tail_repository(fund_tail_data_dir)
     )
-    app.state.stock_db_sync_runner = stock_db_sync_runner
     app.state.minute5_sync_runner = minute5_sync_runner
+    app.state.minute5_invalid_repair_runner = minute5_invalid_repair_runner
     app.state.quote_snapshot_sync_runner = quote_snapshot_sync_runner
     app.state.data_status_runner = data_status_runner
     app.state.stock_list_runner = stock_list_runner
@@ -307,9 +333,11 @@ def create_app(
     app.state.stock_trend_runner = stock_trend_runner
     app.state.watchlist_monitor_runner = watchlist_monitor_runner
     app.state.watchlist_config_runner = watchlist_config_runner
+    app.state.stock_readiness_client = stock_readiness_client
+    app.state.stock_readiness_snapshot_runner = stock_readiness_snapshot_runner
+    app.state.stock_readiness_repair_runner = stock_readiness_repair_runner
     app.state.minute5_monitor = Minute5UpdateMonitor(
         runner=app.state.minute5_sync_runner,
-        stock_db_path=app.state.stock_db_path,
         session_checker=minute5_monitor_session_checker,
     )
     app.state.auto_start_minute5_monitor = auto_start_minute5_monitor
@@ -323,6 +351,7 @@ def create_app(
     app.state.auto_start_data_ops_scheduler = auto_start_data_ops_scheduler
     app.state.data_ops_repository = data_ops_repository or ClickHouseDataOpsRepository()
     app.state.data_quality_calendar = data_quality_calendar_service or DataQualityCalendarService()
+    app.state.minute5_quality = minute5_quality_service or Minute5QualityService()
 
     def _auto_data_maintenance() -> dict[str, Any]:
         payload = DailyMaintenanceRequest(run_strategy_review=False)
@@ -333,7 +362,6 @@ def create_app(
             app.state.data_status_runner,
             app.state.tail_live_runner,
             app.state.tail_signal_repository,
-            app.state.stock_db_path,
             job.id,
             payload,
             daily_repair_runner=app.state.daily_repair_runner,
@@ -422,9 +450,183 @@ def create_app(
             source_keys=payload.source_keys,
         )
 
+    @app.get("/api/data/minute5-quality/summary")
+    def get_minute5_quality_summary() -> dict[str, Any]:
+        return app.state.minute5_quality.summary()
+
+    @app.get("/api/data/minute5-quality/days")
+    def get_minute5_quality_days(start: date | None = None, end: date | None = None, limit: int = 90) -> dict[str, Any]:
+        return app.state.minute5_quality.days(start=start, end=end, limit=limit)
+
+    @app.get("/api/data/minute5-quality/buckets")
+    def get_minute5_quality_buckets(trade_date: date) -> dict[str, Any]:
+        return app.state.minute5_quality.buckets(trade_date=trade_date)
+
+    @app.get("/api/data/minute5-quality/sample")
+    def get_minute5_quality_sample(
+        trade_date: date | None = None,
+        mode: Literal["random", "invalid", "low_coverage"] = "random",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return app.state.minute5_quality.sample(trade_date=trade_date, mode=mode, limit=limit)
+
+    @app.get("/api/data/minute5-quality/symbol-bars")
+    def get_minute5_quality_symbol_bars(symbol: str, trade_date: date) -> dict[str, Any]:
+        return app.state.minute5_quality.symbol_bars(symbol=symbol, trade_date=trade_date)
+
+    @app.get("/api/data/minute5-quality/missing-symbols")
+    def get_minute5_quality_missing_symbols(
+        trade_date: date,
+        bucket: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        return app.state.minute5_quality.missing_symbols(trade_date=trade_date, bucket=bucket, limit=limit)
+
+    @app.get("/api/data/minute5-quality/invalid-rows")
+    def get_minute5_quality_invalid_rows(trade_date: date, limit: int = 200) -> dict[str, Any]:
+        return app.state.minute5_quality.invalid_rows(trade_date=trade_date, limit=limit)
+
+    @app.get("/api/data/minute5-quality/backfill-plan")
+    def get_minute5_quality_backfill_plan(start: date, end: date, limit: int = 90) -> dict[str, Any]:
+        return app.state.minute5_quality.backfill_plan(start=start, end=end, limit=limit)
+
+    @app.post("/api/data/minute5-quality/repair-invalid")
+    def create_minute5_invalid_repair(
+        payload: Minute5InvalidRepairRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        job = store.create_job("minute5_invalid_repair", payload.model_dump(mode="json"))
+        if app.state.run_jobs_inline:
+            _run_minute5_invalid_repair_job(
+                store,
+                app.state.minute5_quality,
+                app.state.minute5_invalid_repair_runner,
+                job.id,
+                payload,
+            )
+        else:
+            background_tasks.add_task(
+                _run_minute5_invalid_repair_job,
+                store,
+                app.state.minute5_quality,
+                app.state.minute5_invalid_repair_runner,
+                job.id,
+                payload,
+            )
+        return {"job_id": job.id}
+
+    @app.post("/api/data/minute5-quality/repair-missing")
+    def create_minute5_missing_repair(
+        payload: Minute5MissingRepairRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        job = store.create_job("minute5_missing_repair", payload.model_dump(mode="json"))
+        if app.state.run_jobs_inline:
+            _run_minute5_missing_repair_job(
+                store,
+                app.state.minute5_quality,
+                app.state.minute5_invalid_repair_runner,
+                job.id,
+                payload,
+            )
+        else:
+            background_tasks.add_task(
+                _run_minute5_missing_repair_job,
+                store,
+                app.state.minute5_quality,
+                app.state.minute5_invalid_repair_runner,
+                job.id,
+                payload,
+            )
+        return {"job_id": job.id}
+
     @app.get("/api/stocks")
     def list_stocks() -> dict[str, Any]:
         return app.state.stock_list_runner()
+
+    @app.get("/api/stock-readiness/summary")
+    def get_stock_readiness_summary(start: date, end: date, dimensions: str | None = None) -> dict[str, Any]:
+        return build_readiness_summary(
+            _stock_readiness_client(app),
+            start=start,
+            end=end,
+            dimensions=parse_dimensions(dimensions),
+        )
+
+    @app.get("/api/stock-readiness")
+    def get_stock_readiness(
+        start: date,
+        end: date,
+        dimensions: str | None = None,
+        status: str = "all",
+        market: str = "all",
+        board: str = "all",
+        q: str = "",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        return query_readiness(
+            _stock_readiness_client(app),
+            start=start,
+            end=end,
+            dimensions=parse_dimensions(dimensions),
+            status=status,
+            market=market,
+            board=board,
+            q=q,
+            page=page,
+            page_size=page_size,
+        )
+
+    @app.post("/api/stock-readiness/snapshot")
+    def create_stock_readiness_snapshot(
+        payload: StockReadinessSnapshotRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        job = store.create_job("stock_readiness_snapshot", payload.model_dump(mode="json"))
+        if app.state.run_jobs_inline:
+            _run_stock_readiness_snapshot_job(
+                store,
+                app.state.stock_readiness_snapshot_runner,
+                _stock_readiness_client(app),
+                job.id,
+                payload,
+            )
+        else:
+            background_tasks.add_task(
+                _run_stock_readiness_snapshot_job,
+                store,
+                app.state.stock_readiness_snapshot_runner,
+                _stock_readiness_client(app),
+                job.id,
+                payload,
+            )
+        return {"job_id": job.id}
+
+    @app.post("/api/stock-readiness/repair")
+    def create_stock_readiness_repair(
+        payload: StockReadinessRepairRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        job = store.create_job("stock_readiness_repair", payload.model_dump(mode="json"))
+        if app.state.run_jobs_inline:
+            _run_stock_readiness_repair_job(
+                store,
+                app.state.stock_readiness_repair_runner,
+                _stock_readiness_client(app),
+                job.id,
+                payload,
+            )
+        else:
+            background_tasks.add_task(
+                _run_stock_readiness_repair_job,
+                store,
+                app.state.stock_readiness_repair_runner,
+                _stock_readiness_client(app),
+                job.id,
+                payload,
+            )
+        return {"job_id": job.id}
 
     @app.get("/api/data/health-repair-plan")
     def get_data_health_repair_plan() -> dict[str, Any]:
@@ -458,7 +660,6 @@ def create_app(
                 app.state.minute5_sync_runner,
                 app.state.quote_snapshot_sync_runner,
                 app.state.data_status_runner,
-                app.state.stock_db_path,
                 job.id,
                 payload,
                 daily_repair_runner=app.state.daily_repair_runner,
@@ -472,7 +673,6 @@ def create_app(
                 app.state.minute5_sync_runner,
                 app.state.quote_snapshot_sync_runner,
                 app.state.data_status_runner,
-                app.state.stock_db_path,
                 job.id,
                 payload,
                 daily_repair_runner=app.state.daily_repair_runner,
@@ -504,27 +704,6 @@ def create_app(
     def get_watchlist_monitor_config() -> dict[str, Any]:
         return app.state.watchlist_config_runner()
 
-    @app.post("/api/data/sync-stock-db")
-    def create_stock_db_sync(
-        payload: SyncStockDbRequest,
-        background_tasks: BackgroundTasks,
-    ) -> dict[str, Any]:
-        job = store.create_job("stock_db_sync", payload.model_dump(mode="json"))
-
-        if app.state.run_jobs_inline:
-            _run_stock_db_sync_job(store, app.state.stock_db_sync_runner, app.state.stock_db_path, job.id, payload)
-        else:
-            background_tasks.add_task(
-                _run_stock_db_sync_job,
-                store,
-                app.state.stock_db_sync_runner,
-                app.state.stock_db_path,
-                job.id,
-                payload,
-            )
-
-        return {"job_id": job.id}
-
     @app.post("/api/data/sync-minute5")
     def create_minute5_sync(
         payload: SyncMinute5Request,
@@ -536,7 +715,6 @@ def create_app(
             _run_minute5_sync_job(
                 store,
                 app.state.minute5_sync_runner,
-                app.state.stock_db_path,
                 app.state.data_status_runner,
                 job.id,
                 payload,
@@ -546,7 +724,6 @@ def create_app(
                 _run_minute5_sync_job,
                 store,
                 app.state.minute5_sync_runner,
-                app.state.stock_db_path,
                 app.state.data_status_runner,
                 job.id,
                 payload,
@@ -664,7 +841,6 @@ def create_app(
                 app.state.data_status_runner,
                 app.state.tail_live_runner,
                 app.state.tail_signal_repository,
-                app.state.stock_db_path,
                 job.id,
                 payload,
                 daily_repair_runner=app.state.daily_repair_runner,
@@ -679,7 +855,6 @@ def create_app(
                 app.state.data_status_runner,
                 app.state.tail_live_runner,
                 app.state.tail_signal_repository,
-                app.state.stock_db_path,
                 job.id,
                 payload,
                 daily_repair_runner=app.state.daily_repair_runner,
@@ -871,7 +1046,6 @@ def create_app(
                 app.state.tail_live_runner,
                 app.state.minute5_sync_runner,
                 app.state.quote_snapshot_sync_runner,
-                app.state.stock_db_path,
                 app.state.tail_signal_repository,
                 app.state.tail_model_root,
                 job.id,
@@ -884,7 +1058,6 @@ def create_app(
                 app.state.tail_live_runner,
                 app.state.minute5_sync_runner,
                 app.state.quote_snapshot_sync_runner,
-                app.state.stock_db_path,
                 app.state.tail_signal_repository,
                 app.state.tail_model_root,
                 job.id,
@@ -975,6 +1148,12 @@ def create_app(
 
 def _default_fund_tail_repository(fund_tail_data_dir: str | Path):
     return ClickHouseFundTailRepository() if Path(fund_tail_data_dir) == Path("data/fund_tail") else None
+
+
+def _stock_readiness_client(app: FastAPI):
+    if app.state.stock_readiness_client is not None:
+        return app.state.stock_readiness_client
+    return ClickHouseStockDataSource()._client_instance()
 
 
 def _default_fund_tail_proxy_refresher(**kwargs) -> dict[str, Any]:
@@ -1223,7 +1402,6 @@ def _run_tail_live_selection_job(
     runner,
     minute5_runner,
     quote_snapshot_runner,
-    stock_db_path: Path,
     signal_repository,
     tail_model_root: Path,
     job_id: str,
@@ -1276,7 +1454,6 @@ def _run_tail_live_selection_job(
             store.update_job(job_id, status="running", progress=_progress(10, "minute5_sync", "先补齐当前 5m 分钟线"))
             stage_started = perf_counter()
             data_refresh = minute5_runner(
-                db_path=stock_db_path,
                 trade_date=payload.trade_date,
                 limit=payload.limit,
                 symbols=payload.symbols,
@@ -1637,40 +1814,57 @@ def _tail_rule_grade(score: float) -> str:
     return "低"
 
 
-def _run_stock_db_sync_job(
+def _run_stock_readiness_snapshot_job(
     store: JobStore,
     runner,
-    stock_db_path: Path,
+    client,
     job_id: str,
-    payload: SyncStockDbRequest,
+    payload: StockReadinessSnapshotRequest,
 ) -> None:
-    store.update_job(job_id, status="running", progress=_progress(5, "starting", "旧 Stock DB 同步启动"))
+    store.update_job(job_id, status="running", progress=_progress(5, "starting", "策略数据就绪度快照启动"))
     try:
-        sync_result = runner(
-            payload.remote,
-            stock_db_path,
-            payload.backup,
-            progress=lambda percent, stage, message: store.update_job(
+        result = runner({
+            **payload.model_dump(mode="python"),
+            "client": client,
+            "progress": lambda percent, stage, message: store.update_job(
                 job_id,
                 status="running",
                 progress=_progress(percent, stage, message),
             ),
-        )
-        result = {
-            "legacy": True,
-            "sync": sync_result,
-            "status": inspect_stock_database(stock_db_path),
-        }
+        })
     except Exception as exc:
-        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "旧 Stock DB 同步失败"))
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "策略数据就绪度快照失败"))
         return
-    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "旧 Stock DB 同步完成"))
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "策略数据就绪度快照完成"))
+
+
+def _run_stock_readiness_repair_job(
+    store: JobStore,
+    runner,
+    client,
+    job_id: str,
+    payload: StockReadinessRepairRequest,
+) -> None:
+    store.update_job(job_id, status="running", progress=_progress(5, "starting", "策略数据就绪度回补启动"))
+    try:
+        result = runner({
+            **payload.model_dump(mode="python"),
+            "client": client,
+            "progress": lambda percent, stage, message: store.update_job(
+                job_id,
+                status="running",
+                progress=_progress(percent, stage, message),
+            ),
+        })
+    except Exception as exc:
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "策略数据就绪度回补失败"))
+        return
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "策略数据就绪度回补完成"))
 
 
 def _run_minute5_sync_job(
     store: JobStore,
     runner,
-    stock_db_path: Path,
     data_status_runner,
     job_id: str,
     payload: SyncMinute5Request,
@@ -1678,7 +1872,6 @@ def _run_minute5_sync_job(
     store.update_job(job_id, status="running", progress=_progress(5, "starting", "5m 分钟线更新启动"))
     try:
         sync_result = runner(
-            db_path=stock_db_path,
             trade_date=payload.trade_date,
             limit=payload.limit,
             symbols=payload.symbols,
@@ -1699,12 +1892,137 @@ def _run_minute5_sync_job(
     store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "5m 分钟线更新完成"))
 
 
+def _run_minute5_invalid_repair_job(
+    store: JobStore,
+    quality_service,
+    repair_runner,
+    job_id: str,
+    payload: Minute5InvalidRepairRequest,
+) -> None:
+    store.update_job(job_id, status="running", progress=_progress(5, "scanning", "扫描异常 5m 分钟线"))
+    try:
+        before = quality_service.invalid_rows(payload.trade_date, limit=payload.limit)
+        before_items = list(before.get("items") or [])
+        requested = {format_symbol(symbol).split(".")[0] for symbol in (payload.symbols or [])}
+        symbols = []
+        for item in before_items:
+            symbol = format_symbol(str(item.get("symbol") or "")).split(".")[0]
+            if not symbol or (requested and symbol not in requested):
+                continue
+            if symbol not in symbols:
+                symbols.append(symbol)
+
+        if not symbols:
+            result = {
+                "trade_date": payload.trade_date.isoformat(),
+                "mode": payload.mode,
+                "symbols": [],
+                "before": before,
+                "delete": None,
+                "sync": None,
+                "after": before,
+            }
+            store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "没有需要修复的异常分钟线"))
+            return
+
+        delete_result = None
+        if payload.mode == "delete_and_refetch":
+            store.update_job(job_id, status="running", progress=_progress(20, "deleting", f"删除 {len(symbols)} 只异常标的当日分钟线"))
+            delete_result = quality_service.delete_symbol_day_rows(payload.trade_date, symbols)
+
+        def _progress_callback(percent, stage, message, **extra):
+            progress = _progress(25 + int(percent * 0.65), stage, message)
+            progress.update(extra)
+            store.update_job(job_id, status="running", progress=progress)
+
+        sync_result = repair_runner(
+            start=payload.trade_date,
+            end=payload.trade_date,
+            limit=0,
+            symbols=symbols,
+            include_st=True,
+            progress=_progress_callback,
+        )
+        store.update_job(job_id, status="running", progress=_progress(92, "verifying", "复查异常分钟线"))
+        after = quality_service.invalid_rows(payload.trade_date, limit=payload.limit)
+        result = {
+            "trade_date": payload.trade_date.isoformat(),
+            "mode": payload.mode,
+            "symbols": symbols,
+            "before": before,
+            "delete": delete_result,
+            "sync": sync_result,
+            "after": after,
+        }
+    except Exception as exc:
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "异常分钟线修复失败"))
+        return
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "异常分钟线修复完成"))
+
+
+def _run_minute5_missing_repair_job(
+    store: JobStore,
+    quality_service,
+    repair_runner,
+    job_id: str,
+    payload: Minute5MissingRepairRequest,
+) -> None:
+    store.update_job(job_id, status="running", progress=_progress(5, "scanning", "扫描缺口 5m 分钟线"))
+    try:
+        before = quality_service.missing_symbols(payload.trade_date, limit=payload.limit)
+        before_items = list(before.get("items") or [])
+        requested = {format_symbol(symbol).split(".")[0] for symbol in (payload.symbols or [])}
+        symbols = []
+        for item in before_items:
+            symbol = format_symbol(str(item.get("symbol") or "")).split(".")[0]
+            if not symbol or (requested and symbol not in requested):
+                continue
+            if symbol not in symbols:
+                symbols.append(symbol)
+
+        if not symbols:
+            result = {
+                "trade_date": payload.trade_date.isoformat(),
+                "symbols": [],
+                "before": before,
+                "sync": None,
+                "after": before,
+            }
+            store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "没有需要回补的缺口分钟线"))
+            return
+
+        sync_result = repair_runner(
+            start=payload.trade_date,
+            end=payload.trade_date,
+            limit=0,
+            symbols=symbols,
+            include_st=True,
+            progress=lambda percent, stage, message: store.update_job(
+                job_id,
+                status="running",
+                progress=_progress(10 + int(percent * 0.8), stage, message),
+            ),
+        )
+        store.update_job(job_id, status="running", progress=_progress(92, "verifying", "复查缺口分钟线"))
+        after = quality_service.missing_symbols(payload.trade_date, limit=payload.limit)
+        result = {
+            "trade_date": payload.trade_date.isoformat(),
+            "symbols": symbols,
+            "before": before,
+            "sync": sync_result,
+            "after": after,
+        }
+    except Exception as exc:
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "缺口分钟线回补失败"))
+        return
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "缺口分钟线回补完成"))
+
+
 def _run_data_health_repair_job(
     store: JobStore,
     minute5_runner,
     quote_snapshot_runner,
     data_status_runner,
-    stock_db_path: Path,
     job_id: str,
     payload: DataHealthRepairRequest,
     *,
@@ -1738,7 +2056,6 @@ def _run_data_health_repair_job(
                     skipped.append({"key": key, "reason": "缺少可修复的 5m 交易日"})
                     continue
                 result = minute5_runner(
-                    db_path=stock_db_path,
                     trade_date=trade_date,
                     limit=0,
                     symbols=action.get("symbols") or None,
@@ -1803,7 +2120,6 @@ def _run_daily_maintenance_job(
     data_status_runner,
     tail_live_runner,
     signal_repository,
-    stock_db_path: Path,
     job_id: str,
     payload: DailyMaintenanceRequest,
     *,
@@ -1817,7 +2133,6 @@ def _run_daily_maintenance_job(
         trade_date = payload.trade_date or _resolve_trade_date(before_status)
         store.update_job(job_id, status="running", progress=_progress(20, "minute5_sync", f"补齐 {trade_date.isoformat()} 5m 分钟线"))
         sync_result = minute5_runner(
-            db_path=stock_db_path,
             trade_date=trade_date,
             limit=0,
             symbols=None,
@@ -1833,7 +2148,6 @@ def _run_daily_maintenance_job(
         if payload.retry_no_data and retry_symbols:
             store.update_job(job_id, status="running", progress=_progress(75, "retry", f"重试 {len(retry_symbols)} 个缺失标的"))
             retry_result = minute5_runner(
-                db_path=stock_db_path,
                 trade_date=trade_date,
                 limit=0,
                 symbols=retry_symbols,

@@ -91,7 +91,7 @@ Add tests for:
 ```python
 def test_fund_tail_watchlist_api_lists_and_updates_items(tmp_path) -> None:
     repository = FakeFundTailRepository(tmp_path / "fund_tail")
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", fund_tail_repository=repository)
+    app = create_app(db_path=tmp_path / "jobs.legacy_local_db3", fund_tail_repository=repository)
     client = TestClient(app)
 
     response = client.get("/api/fund-tail/watchlist")

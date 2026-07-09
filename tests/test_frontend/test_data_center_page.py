@@ -110,6 +110,11 @@ def test_data_center_page_shows_persisted_data_ops_tasks_after_health_matrix() -
     assert "历史日期优先新浪" in source
     assert "minute5_kline 未达到当前目标时间" in source
     assert "腾讯 ifzq.gtimg.cn" in source
+    assert "除权除息数据同步" in source
+    assert "策略数据就绪度快照" in source
+    assert "策略数据缺口回补" in source
+    assert "stock_data_readiness" in source
+    assert "按近 180 天窗口生成策略所需数据维度的覆盖率快照" in source
     assert "DataOpsTaskStatus" in client
     assert "DataOpsTasksResponse" in client
     assert "DataOpsTaskConfigPayload" in client
@@ -318,6 +323,35 @@ def test_data_center_client_exposes_quality_calendar_api() -> None:
     assert "generateDataQualityCalendar" in client
     assert "/api/data/quality-calendar" in client
     assert "/api/data/quality-calendar/generate" in client
+
+
+def test_minute5_quality_inspector_lives_on_dedicated_page() -> None:
+    source = Path("frontend/src/pages/DataCenter.vue").read_text(encoding="utf-8")
+    page = Path("frontend/src/pages/Minute5Quality.vue").read_text(encoding="utf-8")
+    router = Path("frontend/src/router.ts").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "5m 分钟线质量巡检" not in source
+    assert "minute5QualitySummary" not in source
+    assert "5m质量巡检" in router
+    assert "path: '/minute5-quality'" in router
+    assert "Minute5Quality" in router
+    assert "5m 分钟线质量巡检" in page
+    assert "minute5QualitySummary" in page
+    assert "minute5QualityDays" in page
+    assert "minute5QualityBuckets" in page
+    assert "minute5QualitySamples" in page
+    assert "loadMinute5Quality" in page
+    assert "loadMinute5QualitySample" in page
+    assert "minute5QualityDateInitialized" in page
+    assert "if (!minute5QualityDateInitialized.value)" in page
+    assert "随机抽验" in page
+    assert "getMinute5QualitySummary" in client
+    assert "getMinute5QualityDays" in client
+    assert "getMinute5QualityBuckets" in client
+    assert "getMinute5QualitySample" in client
+    assert "getMinute5QualitySymbolBars" in client
+    assert "/api/data/minute5-quality/summary" in client
 
 
 def test_data_center_page_shows_quality_calendar_between_health_and_tasks() -> None:

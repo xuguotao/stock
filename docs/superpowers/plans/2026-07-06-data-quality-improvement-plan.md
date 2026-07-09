@@ -17,7 +17,7 @@
 | 2 | P0 | xdxr 覆盖率仅 52% (2,896/5,534) | **fetch_xdxr_info 默认 market=0(SZ)**，SH 股票全部取不到数据 | 复权回测不准确 |
 | 3 | P0 | 日线覆盖 6/18 跳降 240 只 | 需进一步排查 | 待确认 |
 | 4 | P0 | 5m 重复 27 条 | ReplacingMergeTree 未 OPTIMIZE | 轻微数据冗余 |
-| 5 | P1 | SQLite 仍然存在 | ClickHouse 已替代，但 web backend 仍传递 stock_db_path | 维护两套数据源 |
+| 5 | P1 | legacy local DB 仍然存在 | ClickHouse 已替代，但 web backend 仍传递 legacy stock DB path | 维护两套数据源 |
 | 6 | P1 | data/ 目录存储必要性 | 需逐个评估 | — |
 | 7 | P2 | minute1_kline 无日期范围 | 无定时同步任务 | 数据量远小于 5m |
 | 8 | P2 | 重新定义研究标的 | 依赖上述改动 | — |
@@ -81,26 +81,26 @@ OPTIMIZE TABLE minute5_kline FINAL
 
 需进一步查看：6/17 和 6/18 之间 stocks 表是否有变化。暂列为待排查项。
 
-### Phase 2: P1 — SQLite 清理 + data/ 目录整理
+### Phase 2: P1 — legacy local DB 清理 + data/ 目录整理
 
-#### 2.1 SQLite 必要性分析
+#### 2.1 legacy local DB 必要性分析
 
-**结论**：SQLite 已被 ClickHouse 完全替代，但以下代码仍引用 `stock.db`：
+**结论**：legacy local DB 已被 ClickHouse 完全替代，但以下代码仍引用 `legacy-stock-store`：
 
 | 文件 | 引用方式 | 是否可移除 |
 |------|----------|------------|
-| `src/data/sqlite_source.py` | SQLiteStockDataSource 类 | ✅ 死代码，可删除 |
-| `src/data/market_enrichment_sync.py` | 写入 stock.db | ✅ 死代码，可删除 |
-| `src/web/backend/data_sync.py` | rsync stock.db | ✅ 旧同步，可删除 |
-| `src/web/backend/app.py` | 传递 stock_db_path ~30 处 | ⚠️ 需重构，移除参数 |
-| `src/web/backend/minute5_monitor.py` | 传递 stock_db_path | ⚠️ 需重构 |
-| `src/web/backend/data_status.py` | inspect_stock_database() | ⚠️ 需重构 |
+| `src/data/legacy_local_db_source.py` | legacy local DBStockDataSource 类 | ✅ 死代码，可删除 |
+| `src/data/market_enrichment_sync.py` | 写入 legacy-stock-store | ✅ 死代码，可删除 |
+| `src/web/backend/data_sync.py` | rsync legacy-stock-store | ✅ 旧同步，可删除 |
+| `src/web/backend/app.py` | 传递 legacy stock DB path ~30 处 | ⚠️ 需重构，移除参数 |
+| `src/web/backend/minute5_monitor.py` | 传递 legacy stock DB path | ⚠️ 需重构 |
+| `src/web/backend/data_status.py` | legacy stock inspection() | ⚠️ 需重构 |
 | `scripts/sync_stock_db.py` | CLI 同步脚本 | ✅ 可删除 |
 | `scripts/sync_minute5_kline.py` | CLI 同步脚本 | ✅ 可删除 |
 | `scripts/sync_market_enrichment.py` | CLI 同步脚本 | ✅ 可删除 |
 | `scripts/check_clickhouse_coverage.py` | 迁移对比工具 | ✅ 迁移完成后可删 |
 
-**注意**：`data/web/jobs.sqlite3`（608 MB）是 Web 任务队列，**不可删除**。
+**注意**：`data/web/jobs.legacy_local_db3`（608 MB）是 Web 任务队列，**不可删除**。
 
 **建议**：本阶段仅做分析报告，实际清理需大规模重构 web backend，建议在独立分支进行。
 
@@ -108,8 +108,8 @@ OPTIMIZE TABLE minute5_kline FINAL
 
 | 目录 | 大小 | 用途 | 保留? |
 |------|------|------|--------|
-| `data/stock.db` | 1.3 GB | 旧 SQLite 存储 | ❌ 可删除（等 Phase 2 清理） |
-| `data/web/jobs.sqlite3` | 608 MB | Web 任务队列 | ✅ 必须保留 |
+| `data/legacy-stock-store` | 1.3 GB | 旧 legacy local DB 存储 | ❌ 可删除（等 Phase 2 清理） |
+| `data/web/jobs.legacy_local_db3` | 608 MB | Web 任务队列 | ✅ 必须保留 |
 | `data/cache/bars/` | 3.2 MB | Parquet bar 缓存 | ✅ 策略回测/实盘使用 |
 | `data/cache/stock_list.parquet` | 127 KB | 股票列表缓存 | ✅ 使用 |
 | `data/cache/financials/` | 空 | 财务数据缓存 | ⚠️ 空目录 |
@@ -145,7 +145,7 @@ OPTIMIZE TABLE minute5_kline FINAL
 3. ✅ **P0-2**：修复 xdxr（改 handler 查询 `symbol || '.' || market`）
 4. ✅ **P0-3**：排查 6/18 跳降 — **结论：非 bug**，ST 股票被 `include_st=False` 设计排除
 5. ✅ **P0-4**：5m 去重（OPTIMIZE TABLE，9→0 条重复）
-6. 🔲 **P1**：输出 SQLite/data 分析报告
+6. 🔲 **P1**：输出 legacy local DB/data 分析报告
 7. 🔲 **P2**：minute1 + 研究标的重定义
 
 ---
@@ -189,11 +189,11 @@ OPTIMIZE TABLE minute5_kline FINAL
 
 ---
 
-## P1: SQLite + data/ 目录分析
+## P1: legacy local DB + data/ 目录分析
 
-### SQLite 现状
+### legacy local DB 现状
 
-**文件**：`data/stock.db`（1,305 MB / 1.3 GB）
+**文件**：`data/legacy-stock-store`（1,305 MB / 1.3 GB）
 **最后写入**：2026-06-15 17:39（21 天前）
 
 **表数据**：
@@ -208,33 +208,33 @@ OPTIMIZE TABLE minute5_kline FINAL
 | stock_quote_snapshots | 2 | — |
 | data_source_health | 4 | 2026-06-15 |
 
-**结论**：SQLite 数据已全部过时（最新到 6/12），ClickHouse 是活跃主库。
+**结论**：legacy local DB 数据已全部过时（最新到 6/12），ClickHouse 是活跃主库。
 
-### 仍引用 SQLite 的代码
+### 仍引用 legacy local DB 的代码
 
 | 分类 | 文件 | 引用方式 | 建议 |
 |------|------|----------|------|
-| **死代码** | `src/data/sqlite_source.py` | `SQLiteStockDataSource` 类 | 可删除 |
-| **死代码** | `src/data/market_enrichment_sync.py` | 写入 stock.db 的同步函数 | 可删除 |
-| **死代码** | `src/web/backend/data_sync.py` | rsync stock.db 的旧同步 | 可删除 |
+| **死代码** | `src/data/legacy_local_db_source.py` | `legacy local DBStockDataSource` 类 | 可删除 |
+| **死代码** | `src/data/market_enrichment_sync.py` | 写入 legacy-stock-store 的同步函数 | 可删除 |
+| **死代码** | `src/web/backend/data_sync.py` | rsync legacy-stock-store 的旧同步 | 可删除 |
 | **死代码** | `scripts/sync_stock_db.py` | CLI 同步脚本 | 可删除 |
-| **死代码** | `scripts/sync_minute5_kline.py` | SQLite 版 5m 同步 | 可删除 |
+| **死代码** | `scripts/sync_minute5_kline.py` | legacy local DB 版 5m 同步 | 可删除 |
 | **死代码** | `scripts/sync_market_enrichment.py` | CLI 同步脚本 | 可删除 |
-| **迁移工具** | `scripts/check_clickhouse_coverage.py` | SQLite vs ClickHouse 对比 | 迁移完成后可删 |
-| **幽灵参数** | `src/web/backend/app.py` | `stock_db_path` 参数传递 ~30 处 | 需重构移除 |
-| **幽灵参数** | `src/web/backend/minute5_monitor.py` | 传递 `stock_db_path` | 需重构移除 |
-| **旧功能** | `src/web/backend/data_status.py` | `inspect_stock_database()` | 需重构移除 |
+| **迁移工具** | `scripts/check_clickhouse_coverage.py` | legacy local DB vs ClickHouse 对比 | 迁移完成后可删 |
+| **幽灵参数** | `src/web/backend/app.py` | `legacy stock DB path` 参数传递 ~30 处 | 需重构移除 |
+| **幽灵参数** | `src/web/backend/minute5_monitor.py` | 传递 `legacy stock DB path` | 需重构移除 |
+| **旧功能** | `src/web/backend/data_status.py` | `legacy stock inspection()` | 需重构移除 |
 
-**关键发现**：`stock_db_path` 参数在 `app.py` 中被传递到 ClickHouse 同步函数，但这些函数根本不接收 `db_path` 参数（实际写入 ClickHouse）。这是幽灵参数，应清理。
+**关键发现**：`legacy stock DB path` 参数在 `app.py` 中被传递到 ClickHouse 同步函数，但这些函数根本不接收 `db_path` 参数（实际写入 ClickHouse）。这是幽灵参数，应清理。
 
-**注意**：`data/web/jobs.sqlite3`（608 MB）是 Web 任务队列（`JobStore`），**不可删除**。
+**注意**：`data/web/jobs.legacy_local_db3`（608 MB）是 Web 任务队列（`JobStore`），**不可删除**。
 
 ### data/ 目录存储评估
 
 | 目录/文件 | 大小 | 用途 | 结论 |
 |-----------|------|------|------|
-| `data/stock.db` | **1.3 GB** | 旧 SQLite 存储，数据过时到 6/12 | ❌ **可删除**（等 P1 清理后） |
-| `data/web/jobs.sqlite3` | 608 MB | Web 任务队列 | ✅ 必须保留 |
+| `data/legacy-stock-store` | **1.3 GB** | 旧 legacy local DB 存储，数据过时到 6/12 | ❌ **可删除**（等 P1 清理后） |
+| `data/web/jobs.legacy_local_db3` | 608 MB | Web 任务队列 | ✅ 必须保留 |
 | `data/cache/bars/` | 3.1 MB | 189 个 parquet 文件，策略回测/实盘缓存 | ✅ 保留 |
 | `data/cache/stock_list.parquet` | 128 KB | 股票列表缓存 | ✅ 保留 |
 | `data/cache/financials/` | 空 | 财务数据缓存（未使用） | ⚠️ 空目录，可清理 |
@@ -244,19 +244,19 @@ OPTIMIZE TABLE minute5_kline FINAL
 | `data/research/` | 空 | 研究数据集目标 | ⚠️ 空目录 |
 | `data/runtime/` | 0 | 日线修复锁文件 | ✅ 保留 |
 
-**总大小**：1.9 GB，其中 stock.db（1.3 GB）+ jobs.sqlite3（608 MB）= 98%
+**总大小**：1.9 GB，其中 legacy-stock-store（1.3 GB）+ jobs.legacy_local_db3（608 MB）= 98%
 
 ### P1 清理建议
 
 **立即可做（低风险）**：
-- 删除 `data/stock.db`（1.3 GB 空间回收）— 等代码清理完成后
+- 删除 `data/legacy-stock-store`（1.3 GB 空间回收）— 等代码清理完成后
 - 删除空目录 `data/cache/financials/`、`data/research/`
 
 **需要重构（中风险）**：
-- 从 `app.py` 移除 `stock_db_path` 参数传递链
-- 删除 `sqlite_source.py`、`market_enrichment_sync.py`、`data_sync.py`
+- 从 `app.py` 移除 `legacy stock DB path` 参数传递链
+- 删除 `legacy_local_db_source.py`、`market_enrichment_sync.py`、`data_sync.py`
 - 删除相关 CLI 脚本
-- 移除 `data_status.py` 中的 `inspect_stock_database()`
+- 移除 `data_status.py` 中的 `legacy stock inspection()`
 
 **建议在独立分支执行**，涉及 ~15 个文件修改。
 
@@ -313,7 +313,7 @@ OPTIMIZE TABLE minute5_kline FINAL
 | 2 | P0 | 修复 xdxr 覆盖率 | ✅ 完成 |
 | 3 | P0 | 排查日线覆盖跳降 | ✅ 完成（非 bug） |
 | 4 | P0 | 5m 去重 | ✅ 完成 |
-| 5 | P1 | SQLite/data 分析报告 | ✅ 完成 |
+| 5 | P1 | legacy local DB/data 分析报告 | ✅ 完成 |
 | 6 | P2 | minute1 + 研究标的重定义 | ✅ 完成 |
 
 ---

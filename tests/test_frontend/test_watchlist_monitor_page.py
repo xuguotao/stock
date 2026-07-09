@@ -20,7 +20,7 @@ def test_watchlist_monitor_page_links_to_stock_trend() -> None:
 
     assert "openStockTrend(row.symbol)" in page
     assert "window.open(stockTrendUrl(symbol), '_blank'" in page
-    assert "page: 'stock-trend'" in page
+    assert "/stock-trend/" in page
 
 
 def test_watchlist_monitor_page_auto_refreshes_from_snapshots() -> None:
@@ -34,7 +34,7 @@ def test_watchlist_monitor_page_auto_refreshes_from_snapshots() -> None:
 
 
 def test_app_registers_watchlist_monitor_page() -> None:
-    app = Path("frontend/src/App.vue").read_text(encoding="utf-8")
+    router = Path("frontend/src/router.ts").read_text(encoding="utf-8")
 
-    assert 'index="watchlist-monitor"' in app
-    assert "WatchlistMonitor" in app
+    assert "name: 'watchlist-monitor'" in router
+    assert "WatchlistMonitor" in router

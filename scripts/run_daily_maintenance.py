@@ -24,8 +24,7 @@ from src.web.backend.tail_live import run_tail_live_selection
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run ClickHouse daily data maintenance.")
     parser.add_argument("--trade-date", help="Trade date, YYYY-MM-DD. Defaults to latest ClickHouse daily date.")
-    parser.add_argument("--jobs-db", default="data/web/jobs.sqlite3", help="Dashboard job store path")
-    parser.add_argument("--stock-db", default="data/stock.db", help="Legacy stock DB path kept for runner compatibility")
+    parser.add_argument("--jobs-db", default="data/web/jobs.json", help="Dashboard job store path")
     parser.add_argument("--no-retry", action="store_true", help="Disable retry for no-data symbols")
     parser.add_argument("--no-strategy-review", action="store_true", help="Disable tail-session strategy review")
     parser.add_argument("--strategy-limit", type=int, default=500, help="Symbols to scan during strategy review")
@@ -47,7 +46,6 @@ def main() -> None:
         inspect_clickhouse_database,
         run_tail_live_selection,
         ClickHouseTailSignalRepository(),
-        Path(args.stock_db),
         job.id,
         request,
         daily_repair_runner=sync_clickhouse_daily_from_minute5,

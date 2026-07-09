@@ -1,5 +1,13 @@
 export type JobStatus = 'pending' | 'running' | 'success' | 'failed'
 
+export interface JobProgress {
+  percent: number
+  stage: string
+  message: string
+  processed?: number
+  total?: number
+}
+
 export interface JobRecord {
   id: string
   kind: string
@@ -8,11 +16,7 @@ export interface JobRecord {
   params: Record<string, unknown>
   result: Record<string, unknown> | null
   error: string | null
-  progress: {
-    percent: number
-    stage: string
-    message: string
-  }
+  progress: JobProgress
   heartbeat_at: string | null
   created_at: string
   updated_at: string
@@ -369,6 +373,115 @@ export interface DataQualityCalendarGeneratePayload {
   source_keys?: string[] | null
 }
 
+export interface Minute5QualitySummary {
+  table: string
+  rows: number
+  symbols: number
+  expected_symbols: number
+  range: { start: string | null; end: string | null }
+  latest: {
+    trade_date: string | null
+    raw_bucket: string | null
+    raw_symbols: number
+    complete_bucket: string | null
+    complete_symbols: number
+    complete_threshold: number
+  }
+  issues: Record<string, number>
+  status: string
+}
+
+export interface Minute5QualityDay {
+  trade_date: string
+  rows: number
+  symbols: number
+  buckets: number
+  first_bucket: string | null
+  latest_bucket: string | null
+  avg_bars_per_symbol: number
+  invalid_rows: number
+  status: string
+}
+
+export interface Minute5QualityBucket {
+  datetime: string
+  rows: number
+  symbols: number
+  coverage_ratio: number
+  invalid_rows: number
+  status: string
+}
+
+export interface Minute5QualitySampleItem {
+  symbol: string
+  name: string
+  bars: number
+  first_bucket: string | null
+  latest_bucket: string | null
+  invalid_rows: number
+}
+
+export interface Minute5QualityBar {
+  datetime: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+  amount: number
+}
+
+export interface Minute5QualityMissingSymbol {
+  symbol: string
+  name: string
+  bars: number
+  latest_bucket: string | null
+  missing_bars: number
+}
+
+export interface Minute5QualityInvalidRow extends Minute5QualityBar {
+  symbol: string
+  name: string
+  reason: string
+}
+
+export interface Minute5QualityBackfillPlanItem {
+  trade_date: string
+  expected_symbols: number
+  expected_buckets: number
+  actual_buckets: number
+  missing_buckets: number
+  missing_symbols: number
+  invalid_rows: number
+  latest_bucket: string | null
+  status: string
+}
+
+export interface Minute5QualityBackfillPlan {
+  range: { start: string; end: string }
+  summary: {
+    days: number
+    needs_backfill_days: number
+    missing_buckets: number
+    missing_symbols: number
+    invalid_rows: number
+  }
+  items: Minute5QualityBackfillPlanItem[]
+}
+
+export interface Minute5InvalidRepairPayload {
+  trade_date: string
+  symbols?: string[] | null
+  mode?: 'refetch' | 'delete_and_refetch'
+  limit?: number
+}
+
+export interface Minute5MissingRepairPayload {
+  trade_date: string
+  symbols?: string[] | null
+  limit?: number
+}
+
 export interface TailMlAuditResponse {
   status: string
   as_of: string
@@ -482,11 +595,6 @@ export interface TailMlTrainPayload {
   symbols?: string[]
 }
 
-export interface StockDbSyncPayload {
-  remote?: string
-  backup?: boolean
-}
-
 export interface Minute5SyncPayload {
   trade_date: string
   limit?: number
@@ -522,7 +630,7 @@ export interface Minute5MonitorStatus {
   next_run_at: string | null
   last_started_at: string | null
   last_finished_at: string | null
-  last_progress: { percent: number; stage: string; message: string } | null
+  last_progress: JobProgress | null
   last_result: Record<string, unknown> | null
   last_error: string | null
 }
@@ -553,7 +661,7 @@ export interface QuoteSnapshotMonitorStatus {
   next_run_at: string | null
   last_started_at: string | null
   last_finished_at: string | null
-  last_progress: { percent: number; stage: string; message: string } | null
+  last_progress: JobProgress | null
   last_result: Record<string, unknown> | null
   last_error: string | null
 }
@@ -1022,6 +1130,62 @@ export interface WatchlistMonitorReport {
   items: WatchlistMonitorItem[]
 }
 
+export interface StockReadinessDimension {
+  status: 'ready' | 'partial' | 'repairable' | 'unrepairable' | 'no_data' | 'snapshot_insufficient' | string
+  coverage_ratio: number
+  covered_days: number
+  expected_days: number
+  checked_days: number
+  query_trade_days: number
+  missing_days: number
+  missing_samples: string[]
+  first_date: string | null
+  latest_date: string | null
+  repair_attempts: number
+  repairable: boolean
+}
+
+export interface StockReadinessItem {
+  symbol: string
+  name: string
+  market: string
+  board: string
+  dimensions: Record<string, StockReadinessDimension>
+}
+
+export interface StockReadinessResponse {
+  start: string
+  end: string
+  dimensions: string[]
+  total: number
+  page: number
+  page_size: number
+  items: StockReadinessItem[]
+}
+
+export interface StockReadinessSummary {
+  start: string
+  end: string
+  total_symbols: number
+  query_trade_days: number
+  dimensions: Record<string, Record<string, number>>
+}
+
+export interface StockReadinessRepairPayload {
+  symbols: string[]
+  dimensions: string[]
+  start: string
+  end: string
+}
+
+export interface StockReadinessSnapshotPayload {
+  dimensions: string[]
+  start: string
+  end: string
+  symbols?: string[] | null
+  limit?: number
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
@@ -1076,8 +1240,40 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : ''
     return request<WatchlistMonitorReport>(`/api/watchlist-monitor/report${suffix}`)
   },
-  syncStockDb(payload: StockDbSyncPayload = {}) {
-    return request<BacktestSubmitResponse>('/api/data/sync-stock-db', {
+  getStockReadinessSummary(params: { start: string; end: string; dimensions?: string[] }) {
+    const search = new URLSearchParams({ start: params.start, end: params.end })
+    if (params.dimensions?.length) search.set('dimensions', params.dimensions.join(','))
+    return request<StockReadinessSummary>(`/api/stock-readiness/summary?${search.toString()}`)
+  },
+  getStockReadiness(params: {
+    start: string
+    end: string
+    dimensions?: string[]
+    status?: string
+    market?: string
+    board?: string
+    q?: string
+    page?: number
+    page_size?: number
+  }) {
+    const search = new URLSearchParams({ start: params.start, end: params.end })
+    if (params.dimensions?.length) search.set('dimensions', params.dimensions.join(','))
+    if (params.status) search.set('status', params.status)
+    if (params.market) search.set('market', params.market)
+    if (params.board) search.set('board', params.board)
+    if (params.q) search.set('q', params.q)
+    if (params.page) search.set('page', String(params.page))
+    if (params.page_size) search.set('page_size', String(params.page_size))
+    return request<StockReadinessResponse>(`/api/stock-readiness?${search.toString()}`)
+  },
+  repairStockReadiness(payload: StockReadinessRepairPayload) {
+    return request<BacktestSubmitResponse>('/api/stock-readiness/repair', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  },
+  generateStockReadinessSnapshot(payload: StockReadinessSnapshotPayload) {
+    return request<BacktestSubmitResponse>('/api/stock-readiness/snapshot', {
       method: 'POST',
       body: JSON.stringify(payload)
     })
@@ -1133,6 +1329,61 @@ export const api = {
   },
   generateDataQualityCalendar(payload: DataQualityCalendarGeneratePayload) {
     return request<{ generated_dates: number; rows: number }>('/api/data/quality-calendar/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  },
+  getMinute5QualitySummary() {
+    return request<Minute5QualitySummary>('/api/data/minute5-quality/summary')
+  },
+  getMinute5QualityDays(params: { start?: string; end?: string; limit?: number } = {}) {
+    const search = new URLSearchParams()
+    if (params.start) search.set('start', params.start)
+    if (params.end) search.set('end', params.end)
+    if (params.limit) search.set('limit', String(params.limit))
+    const suffix = search.toString() ? `?${search.toString()}` : ''
+    return request<{ items: Minute5QualityDay[] }>(`/api/data/minute5-quality/days${suffix}`)
+  },
+  getMinute5QualityBuckets(tradeDate: string) {
+    const params = new URLSearchParams({ trade_date: tradeDate })
+    return request<{ trade_date: string; expected_symbols: number; items: Minute5QualityBucket[] }>(`/api/data/minute5-quality/buckets?${params.toString()}`)
+  },
+  getMinute5QualitySample(params: { trade_date?: string; mode?: string; limit?: number } = {}) {
+    const search = new URLSearchParams()
+    if (params.trade_date) search.set('trade_date', params.trade_date)
+    if (params.mode) search.set('mode', params.mode)
+    if (params.limit) search.set('limit', String(params.limit))
+    const suffix = search.toString() ? `?${search.toString()}` : ''
+    return request<{ trade_date: string | null; mode: string; items: Minute5QualitySampleItem[] }>(`/api/data/minute5-quality/sample${suffix}`)
+  },
+  getMinute5QualitySymbolBars(symbol: string, tradeDate: string) {
+    const params = new URLSearchParams({ symbol, trade_date: tradeDate })
+    return request<{ symbol: string; name: string; trade_date: string; items: Minute5QualityBar[] }>(`/api/data/minute5-quality/symbol-bars?${params.toString()}`)
+  },
+  getMinute5QualityMissingSymbols(params: { trade_date: string; bucket?: string; limit?: number }) {
+    const search = new URLSearchParams({ trade_date: params.trade_date })
+    if (params.bucket) search.set('bucket', params.bucket)
+    if (params.limit) search.set('limit', String(params.limit))
+    return request<{ trade_date: string; bucket: string | null; expected_buckets: number; items: Minute5QualityMissingSymbol[] }>(`/api/data/minute5-quality/missing-symbols?${search.toString()}`)
+  },
+  getMinute5QualityInvalidRows(params: { trade_date: string; limit?: number }) {
+    const search = new URLSearchParams({ trade_date: params.trade_date })
+    if (params.limit) search.set('limit', String(params.limit))
+    return request<{ trade_date: string; items: Minute5QualityInvalidRow[] }>(`/api/data/minute5-quality/invalid-rows?${search.toString()}`)
+  },
+  getMinute5QualityBackfillPlan(params: { start: string; end: string; limit?: number }) {
+    const search = new URLSearchParams({ start: params.start, end: params.end })
+    if (params.limit) search.set('limit', String(params.limit))
+    return request<Minute5QualityBackfillPlan>(`/api/data/minute5-quality/backfill-plan?${search.toString()}`)
+  },
+  repairMinute5InvalidRows(payload: Minute5InvalidRepairPayload) {
+    return request<BacktestSubmitResponse>('/api/data/minute5-quality/repair-invalid', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  },
+  repairMinute5MissingRows(payload: Minute5MissingRepairPayload) {
+    return request<BacktestSubmitResponse>('/api/data/minute5-quality/repair-missing', {
       method: 'POST',
       body: JSON.stringify(payload)
     })

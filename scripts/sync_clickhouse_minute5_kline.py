@@ -35,7 +35,7 @@ def main() -> None:
 
     last_bucket = {"value": -1}
 
-    def report(percent: int, stage: str, message: str) -> None:
+    def report(percent: int, stage: str, message: str, **kwargs) -> None:
         if args.verbose or stage in {"preparing", "completed"}:
             print(f"[{percent:3d}%] {stage}: {message}", flush=True)
             return

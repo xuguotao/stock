@@ -65,7 +65,7 @@ def test_tail_live_selection_api_runs_inline_job(tmp_path) -> None:
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         tail_live_runner=fake_runner,
         tail_signal_repository=repository,
@@ -146,7 +146,7 @@ def test_tail_live_selection_api_enriches_signal_credibility_with_historical_cal
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         tail_live_runner=fake_runner,
         tail_signal_repository=FakeSignalRepository(),
@@ -239,7 +239,7 @@ def test_tail_live_selection_api_reranks_final_selection_with_historical_calibra
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         tail_live_runner=fake_runner,
         tail_signal_repository=FakeSignalRepository(),
@@ -318,7 +318,7 @@ def test_tail_signal_stats_api_returns_repository_metrics(tmp_path) -> None:
             }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         tail_signal_repository=FakeSignalRepository(),
     )
     client = TestClient(app)
@@ -350,7 +350,7 @@ def test_tail_signal_review_outcomes_api_can_compute_pending_dates(tmp_path) -> 
 
     repository = FakeSignalRepository()
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         tail_signal_repository=repository,
     )
     client = TestClient(app)
@@ -371,7 +371,7 @@ def test_tail_signal_review_outcomes_api_can_compute_pending_dates(tmp_path) -> 
 
 def test_tail_signal_review_outcomes_api_requires_signal_date_for_single_date(tmp_path) -> None:
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         tail_signal_repository=object(),
     )
     client = TestClient(app)
@@ -828,7 +828,7 @@ def test_tail_live_selection_job_passes_promoted_model_scorer(monkeypatch, tmp_p
 
     monkeypatch.setattr(app_module, "TailModelInference", FakeScorer)
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         tail_live_runner=fake_tail_runner,
         tail_signal_repository=FakeSignalRepository(),
@@ -890,9 +890,8 @@ def test_tail_live_selection_job_defaults_to_snapshot_refresh_before_scanning(tm
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        run_jobs_inline=True,
+        db_path=tmp_path / "jobs.json",
+                run_jobs_inline=True,
         minute5_sync_runner=fake_minute5_runner,
         quote_snapshot_sync_runner=fake_snapshot_runner,
         tail_live_runner=fake_tail_runner,
@@ -962,9 +961,8 @@ def test_tail_live_selection_auto_mode_skips_snapshot_refresh_when_fresh(monkeyp
         },
     )
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        run_jobs_inline=True,
+        db_path=tmp_path / "jobs.json",
+                run_jobs_inline=True,
         quote_snapshot_sync_runner=fake_snapshot_runner,
         tail_live_runner=fake_tail_runner,
         tail_signal_repository=FakeSignalRepository(),
@@ -1025,9 +1023,8 @@ def test_tail_live_selection_job_can_force_standard_minute5_refresh(tmp_path) ->
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        run_jobs_inline=True,
+        db_path=tmp_path / "jobs.json",
+                run_jobs_inline=True,
         minute5_sync_runner=fake_minute5_runner,
         quote_snapshot_sync_runner=fake_snapshot_runner,
         tail_live_runner=fake_tail_runner,

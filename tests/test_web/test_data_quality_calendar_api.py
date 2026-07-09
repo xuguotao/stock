@@ -231,9 +231,8 @@ def test_list_quality_calendar_returns_matrix_rows() -> None:
 
 def test_data_quality_calendar_api_lists_and_generates(tmp_path) -> None:
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
-        data_quality_calendar_service=FakeQualityCalendarService(),
+        db_path=tmp_path / "jobs.json",
+                data_quality_calendar_service=FakeQualityCalendarService(),
     )
     client = TestClient(app)
 

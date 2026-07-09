@@ -174,6 +174,6 @@ Expected:
 ## 自检
 
 - 计划覆盖了已确认 P0 缺陷。
-- 没有把 Web 拆分、SQLite 清理、`DataAggregator` 收窄等 P1/P2 工作混入本轮。
+- 没有把 Web 拆分、legacy local DB 清理、`DataAggregator` 收窄等 P1/P2 工作混入本轮。
 - 新测试验证默认 handler 真实执行路径，而不是只验证默认配置里存在 `xdxr_sync`。
 - 生产代码变更保持最小，只替换不存在的 ClickHouse client 获取方式。

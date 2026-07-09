@@ -203,7 +203,7 @@ def test_tail_replay_backtest_api_runs_inline_job(tmp_path) -> None:
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         tail_replay_runner=fake_replay_runner,
     )

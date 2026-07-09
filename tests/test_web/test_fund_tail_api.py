@@ -134,7 +134,7 @@ def test_fund_tail_api_lists_universe_with_local_data_status(tmp_path) -> None:
         index=False,
     )
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_data_dir=data_dir,
         fund_tail_repository=FakeFundTailRepository(data_dir),
     )
@@ -160,7 +160,7 @@ def test_fund_tail_read_apis_degrade_when_repository_is_unavailable(tmp_path) ->
     ).to_csv(report_path, index=False)
     markdown_path.write_text("# 本地基金报告\n", encoding="utf-8")
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_report_path=report_path,
         fund_tail_markdown_path=markdown_path,
         fund_tail_repository=BrokenFundTailRepository(),
@@ -189,7 +189,7 @@ def test_fund_tail_watchlist_api_lists_and_updates_items(tmp_path) -> None:
     data_dir.mkdir()
     repository = FakeFundTailRepository(data_dir)
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_repository=repository,
     )
     client = TestClient(app)
@@ -223,7 +223,7 @@ def test_fund_tail_watchlist_api_lists_and_updates_items(tmp_path) -> None:
 
 def test_fund_tail_metadata_api_resolves_unknown_watchlist_code(tmp_path) -> None:
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_metadata_lookup_runner=lambda code: {
             "fund_code": str(code).zfill(6),
             "fund_name": "华夏国证半导体芯片ETF联接C",
@@ -256,7 +256,7 @@ def test_fund_tail_api_loads_latest_report(tmp_path) -> None:
     ).to_csv(report_path, index=False)
     markdown_path.write_text("# 基金尾盘操作建议\n", encoding="utf-8")
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_data_dir=tmp_path / "fund_tail",
         fund_tail_report_path=report_path,
         fund_tail_markdown_path=markdown_path,
@@ -289,7 +289,7 @@ def test_fund_tail_api_prefers_clickhouse_latest_report(tmp_path) -> None:
         metadata={"data_refreshed": True},
     )
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_report_path=report_path,
         fund_tail_markdown_path=markdown_path,
         fund_tail_repository=repository,
@@ -319,7 +319,7 @@ def test_fund_tail_api_loads_latest_opportunities(tmp_path) -> None:
     ).to_csv(report_path, index=False)
     markdown_path.write_text("# 基金尾盘机会发现\n", encoding="utf-8")
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_opportunity_report_path=report_path,
         fund_tail_opportunity_markdown_path=markdown_path,
     )
@@ -345,7 +345,7 @@ def test_fund_tail_api_runs_local_advice_job(tmp_path) -> None:
         nav.to_csv(data_dir / f"{code}_nav.csv", index=False)
         proxy.to_csv(data_dir / f"{code}_proxy.csv", index=False)
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_data_dir=data_dir,
         fund_tail_report_path=tmp_path / "fund_tail_backtest.csv",
         fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
@@ -423,7 +423,7 @@ def test_fund_tail_api_runs_opportunity_discovery_job(tmp_path) -> None:
         pd.DataFrame().to_csv(kwargs["raw_advice_report"], index=False)
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_report_path=daily_advice_report,
         fund_tail_opportunity_candidate_path=candidates,
         fund_tail_opportunity_data_dir=tmp_path / "opportunity_data",
@@ -488,7 +488,7 @@ def test_fund_tail_advice_uses_watchlist_when_codes_are_omitted(tmp_path) -> Non
         },
     ]
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_data_dir=data_dir,
         fund_tail_report_path=tmp_path / "fund_tail_backtest.csv",
         fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
@@ -542,7 +542,7 @@ def test_fund_tail_advice_refreshes_inputs_and_returns_data_status(tmp_path) -> 
         )
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_data_dir=data_dir,
         fund_tail_report_path=tmp_path / "fund_tail_backtest.csv",
         fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
@@ -598,7 +598,7 @@ def test_fund_tail_advice_uses_fast_proxy_refresher_when_available(tmp_path) -> 
 
     repository = FakeFundTailRepository(data_dir)
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_data_dir=data_dir,
         fund_tail_report_path=tmp_path / "fund_tail_backtest.csv",
         fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
@@ -657,7 +657,7 @@ def test_fund_tail_default_proxy_refresher_receives_proxy_specs(tmp_path, monkey
     monkeypatch.setattr(backend_app, "refresh_fund_tail_proxy_quotes", fake_refresh)
     repository = FakeFundTailRepository(data_dir)
     app = backend_app.create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_data_dir=data_dir,
         fund_tail_report_path=tmp_path / "fund_tail_backtest.csv",
         fund_tail_raw_report_path=tmp_path / "fund_tail_backtest_raw.csv",
@@ -727,7 +727,7 @@ def test_fund_tail_refresh_proxy_api_uses_watchlist_codes(tmp_path) -> None:
         },
     ]
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         fund_tail_data_dir=data_dir,
         run_jobs_inline=True,
         fund_tail_repository=repository,

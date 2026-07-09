@@ -2,14 +2,14 @@ from pathlib import Path
 
 
 def test_app_registers_investment_channel_pages() -> None:
-    app = Path("frontend/src/App.vue").read_text(encoding="utf-8")
+    router = Path("frontend/src/router.ts").read_text(encoding="utf-8")
 
-    assert 'index="reits-channel"' in app
-    assert "REITs 配置" in app
-    assert "ReitsChannel" in app
-    assert 'index="options-strategy"' in app
-    assert "期权策略" in app
-    assert "OptionsStrategy" in app
+    assert "name: 'reits-channel'" in router
+    assert "REITs 配置" in router
+    assert "ReitsChannel" in router
+    assert "name: 'options-strategy'" in router
+    assert "期权策略" in router
+    assert "OptionsStrategy" in router
 
 
 def test_reits_channel_page_exposes_screening_framework() -> None:

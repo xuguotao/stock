@@ -492,224 +492,37 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { api, type DataStatusResponse, type JobRecord, type JobStatus, type TailLiveSelectionPayload } from '../api/client'
+import { type JobRecord, type JobStatus, type TailLiveSelectionPayload } from '../api/client'
+import {
+  candidateRankShiftText,
+  credibilityType,
+  dedupeIssues,
+  executionFlagText,
+  executionFlagType,
+  filterReasonText,
+  formatCompactDateTime,
+  formatDateTime,
+  formatPercent,
+  formatScore,
+  isModelEliminated,
+  isModelPromoted,
+  modelDecisionText,
+  modelDecisionType,
+  precheckDataStatusText,
+  precheckStageText,
+  qualityCoverageText,
+  qualityTagType,
+  strategyModeText,
+  v2ActionText,
+  v2LayerText,
+  v2LayerType,
+} from '../features/tail-live/formatters'
+import { stockTrendUrl as buildStockTrendUrl } from '../features/tail-live/links'
+import type { SelectionRow, TailLiveResult } from '../features/tail-live/types'
+import { useTailLiveDataHealth } from '../features/tail-live/useTailLiveDataHealth'
+import { useTailLiveJob } from '../features/tail-live/useTailLiveJob'
 import TailDataHealthPanel from './tail-live/TailDataHealthPanel.vue'
 import TailSelectionTable from './tail-live/TailSelectionTable.vue'
-
-interface SelectionRow {
-  rank?: number
-  raw_rank?: number | null
-  final_candidate_rank?: number | null
-  symbol: string
-  trade_date: string
-  strength: number
-  last_price: number
-  volume_ratio: number
-  tail_return: number
-  tail_high_return?: number
-  pullback_from_high?: number
-  close_position?: number
-  reason: string
-  status?: 'selected' | 'filtered'
-  filter_reason?: string | null
-  v2_score?: number
-  v2_layer?: 'strong' | 'watchlist' | 'weak'
-  v2_action?: 'trade_candidate' | 'observe_next_open' | 'no_trade'
-  v2_explanation?: string
-  v2_risks?: string[]
-  v2_breakdown?: {
-    tail_money: number
-    price_action: number
-    liquidity: number
-    risk_control: number
-  }
-  credibility?: Credibility
-  tradability?: {
-    buyable: boolean
-    reason?: string | null
-    price?: number | null
-    limit_up?: number | null
-    limit_up_distance?: number | null
-    execution_flag?: string | null
-    score?: number | null
-  }
-  next_day_plan?: {
-    entry_policy: string
-    sell_policy?: string
-    gap_stop_return: number | null
-    intraday_stop_return: number | null
-    take_profit_return: number | null
-    rules: string[]
-  }
-  score_breakdown?: {
-    strength: number
-    volume_ratio: number
-    tail_return: number
-    pullback_penalty: number
-    v2_total?: number | null
-  }
-  model?: ModelScore
-}
-
-interface ModelScore {
-  model_version?: string | null
-  model_score?: number | null
-  hit_probability?: number | null
-  expected_high_return?: number | null
-  risk_probability?: number | null
-  feature_snapshot?: ModelFeatureSnapshot[]
-}
-
-interface ModelFeatureSnapshot {
-  feature: string
-  value: number | null
-}
-
-interface Credibility {
-  score: number
-  grade: '高' | '中' | '低'
-  rule_score?: number
-  rule_grade?: '高' | '中' | '低'
-  historical_hit_rate?: number | null
-  historical_avg_return?: number | null
-  sample_size?: number
-  calibrated_probability?: number | null
-  history_status?: string
-  phase: string
-  components: {
-    signal_strength: number
-    volume_quality: number
-    return_quality: number
-    phase_discount: number
-  }
-  confirmation_checks: string[]
-  risks: string[]
-  history: {
-    status: string
-    sample_count: number
-    note: string
-    close_win_rate?: number
-    avg_close_return?: number
-    max_win_rate?: number
-    avg_max_return?: number
-    avg_min_return?: number
-  }
-}
-
-interface PrecheckRow {
-  rank: number
-  symbol: string
-  data_status: 'has_intraday_data' | 'missing_intraday_data'
-  latest_intraday_time: string | null
-  stage: 'waiting_tail_window' | 'waiting_data'
-  filter_reason: string
-  explanation: string
-}
-
-interface StrategyRules {
-  universe: string
-  tail_window: string
-  bar_frequency: string
-  preview_window_bars: number
-  volume_ratio_threshold: number
-  min_tail_return: number
-  confirmations: number
-  top_n: number
-  min_strength: number | null
-  min_market_breadth_above_ma20: number | null
-  ranking: string
-}
-
-interface TailLiveResult {
-  mode?: 'precheck' | 'preview' | 'selection'
-  trade_date: string
-  scanned_count: number
-  candidate_count: number
-  confirmed_count: number
-  selected_count: number
-  preview_count?: number
-  selections: SelectionRow[]
-  preview_signals?: SelectionRow[]
-  ranked_signals?: SelectionRow[]
-  signal_layers?: {
-    strong: number
-    watchlist: number
-    weak: number
-  }
-  watchlist_signals?: SelectionRow[]
-  weak_signals?: SelectionRow[]
-  precheck_rows?: PrecheckRow[]
-  strategy_rules?: StrategyRules
-  files: Record<string, string>
-  market_breadth: { breadth: number; above_count: number; symbol_count: number } | null
-  diagnostics?: {
-    empty_reason: string | null
-    empty_message: string | null
-    scan_universe_preview: string[]
-    has_intraday_data_count: number
-    checked_intraday_count: number
-    missing_intraday_symbols: string[]
-    latest_intraday_time: string | null
-    scan_as_of_time?: string | null
-    scoreable_count: number
-    unscoreable_count: number
-    candidate_count: number
-    confirmed_count: number
-    selected_count: number
-    blocked_by_market_breadth: boolean
-    requested_scan_limit?: number
-    resolved_scan_count?: number
-    data_freshness?: {
-      status: string
-      latest_time: string | null
-      target_time: string | null
-      lag_minutes: number | null
-      tradable: boolean
-    }
-    quote_status?: {
-      status: string
-      requested_symbols: number
-      covered_symbols: number
-      coverage_ratio: number
-      error?: string
-    }
-    minute5_sync?: {
-      trade_date?: string
-      target_symbols?: number
-      skipped?: number
-      success?: number
-      no_data?: number
-      failed?: number
-      inserted_rows?: number
-      latest_datetime?: string | null
-    }
-    data_refresh_mode?: 'auto' | 'snapshot' | 'standard_minute5' | 'none'
-    effective_data_refresh_mode?: 'snapshot' | 'standard_minute5' | 'none'
-    strategy_mode?: 'rule' | 'model' | 'hybrid'
-    quote_snapshot_sync?: {
-      target_symbols?: number
-      inserted_rows?: number
-      skipped?: number
-      failed?: number
-      latest_snapshot_at?: string | null
-      latest_bucket?: string | null
-    }
-    effective_strategy_mode?: 'rule' | 'model' | 'hybrid'
-    model_status?: string
-    model_scored_symbols?: number
-    model_score_rank_limit?: number
-    model_selection_applied?: boolean
-    model_selection_mode?: 'rule' | 'model' | 'hybrid'
-  }
-  stage_timings?: Record<string, number>
-  persistence?: {
-    signals?: {
-      signal_count?: number
-      selected_count?: number
-    }
-  }
-}
 
 const props = defineProps<{
   jobId?: string
@@ -717,8 +530,6 @@ const props = defineProps<{
 
 const today = new Date().toISOString().slice(0, 10)
 const RESULT_TABLE_RENDER_BATCH_SIZE = 120
-const JOB_POLL_INTERVAL_MS = 1000
-const JOB_POLL_MAX_ATTEMPTS = 900
 const form = ref<TailLiveSelectionPayload>({
   trade_date: today,
   symbols: null,
@@ -738,14 +549,24 @@ const form = ref<TailLiveSelectionPayload>({
 })
 
 const manualSymbols = ref<string[]>([])
-const submitting = ref(false)
-const loadingHistory = ref(false)
-const loadingDataHealth = ref(false)
-const activeJobId = ref('')
-const job = ref<JobRecord | null>(null)
-const runHistory = ref<JobRecord[]>([])
-const dataHealth = ref<DataStatusResponse | null>(null)
-const dataHealthLoadedAt = ref('')
+const {
+  activeJobId,
+  job,
+  loadingHistory,
+  runHistory,
+  submitting,
+  loadJob,
+  loadRunHistory,
+  refreshJob,
+  selectRunHistory,
+  submit,
+} = useTailLiveJob(form, manualSymbols)
+const {
+  dataHealth,
+  dataHealthLoadedAt,
+  loadingDataHealth,
+  loadDataHealth,
+} = useTailLiveDataHealth()
 const strategyRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
 const watchlistRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
 const weakRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
@@ -1020,125 +841,16 @@ function stageTimingLabel(value: string) {
   return value
 }
 
-async function submit() {
-  submitting.value = true
-  try {
-    const response = await api.submitTailLiveSelection({
-      ...form.value,
-      symbols: manualSymbols.value.length ? manualSymbols.value : null
-    })
-    activeJobId.value = response.job_id
-    const completed = await pollJobUntilDone(response.job_id)
-    await loadRunHistory()
-    if (completed) ElMessage.success('今日尾盘选股完成')
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '提交失败')
-  } finally {
-    submitting.value = false
-  }
-}
-
-async function loadDataHealth() {
-  loadingDataHealth.value = true
-  try {
-    dataHealth.value = await api.getDataStatus()
-    dataHealthLoadedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载数据健康度失败')
-  } finally {
-    loadingDataHealth.value = false
-  }
-}
-
-async function loadRunHistory() {
-  loadingHistory.value = true
-  try {
-    const response = await api.listJobs(100)
-    runHistory.value = response.items.filter((item) => item.kind === 'tail_session_live_selection')
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载运行记录失败')
-  } finally {
-    loadingHistory.value = false
-  }
-}
-
-async function selectRunHistory(row: JobRecord) {
-  await loadJob(row.id)
-}
-
 function openStockTrend(symbol: string) {
   window.open(stockTrendUrl(symbol), '_blank', 'noopener,noreferrer')
 }
 
 function stockTrendUrl(symbol: string) {
-  const params = new URLSearchParams({ page: 'stock-trend', symbol, granularity: '5m', trade_date: form.value.trade_date })
-  return `${window.location.origin}${window.location.pathname}?${params.toString()}`
-}
-
-async function refreshJob() {
-  if (!activeJobId.value) return
-  job.value = await api.getJob(activeJobId.value)
-}
-
-async function loadJob(jobId: string) {
-  activeJobId.value = jobId
-  await refreshJob()
-}
-
-async function pollJobUntilDone(jobId: string) {
-  for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt += 1) {
-    job.value = await api.getJob(jobId)
-    if (job.value.status === 'success') return true
-    if (job.value.status === 'failed') {
-      ElMessage.error(job.value.error ?? '今日尾盘选股失败')
-      return false
-    }
-    await sleep(JOB_POLL_INTERVAL_MS)
-  }
-  job.value = await api.getJob(jobId)
-  if (job.value.status === 'success') return true
-  ElMessage.warning('任务仍在运行，页面会保留当前任务，可稍后刷新运行记录')
-  return false
+  return buildStockTrendUrl(symbol, { tradeDate: form.value.trade_date })
 }
 
 function statusType(status: JobStatus) {
   return status === 'success' ? 'success' : status === 'failed' ? 'danger' : status === 'running' ? 'warning' : 'info'
-}
-
-function formatScore(value: unknown) {
-  return typeof value === 'number' ? value.toFixed(4) : '-'
-}
-
-function formatPercent(value: unknown) {
-  return typeof value === 'number' ? `${(value * 100).toFixed(2)}%` : '-'
-}
-
-function qualityCoverageText(row?: { covered_symbols: number; missing_symbols: number; coverage_ratio: number }) {
-  if (!row) return '-'
-  return `${row.covered_symbols ?? 0}/${(row.covered_symbols ?? 0) + (row.missing_symbols ?? 0)}，${formatPercent(row.coverage_ratio)}`
-}
-
-function formatCompactDateTime(value: unknown) {
-  if (!value) return '-'
-  const text = String(value)
-  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/)
-  if (!match) return text
-  return match[4] ? `${match[2]}-${match[3]} ${match[4]}:${match[5]}` : `${match[2]}-${match[3]}`
-}
-
-function dedupeIssues(items: string[]) {
-  return Array.from(new Set(items.filter(Boolean)))
-}
-
-function qualityTagType(status?: string) {
-  if (status === 'ok') return 'success'
-  if (status === 'warning' || status === 'partial') return 'warning'
-  if (status === 'error' || status === 'failed' || status === 'missing') return 'danger'
-  return 'info'
-}
-
-function formatDateTime(value: string) {
-  return value ? value.replace('T', ' ').slice(0, 19) : '-'
 }
 
 function runHistorySummary(row: JobRecord) {
@@ -1168,125 +880,6 @@ function resetResultTableLimits() {
   strategyRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
   watchlistRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
   weakRenderLimit.value = RESULT_TABLE_RENDER_BATCH_SIZE
-}
-
-function filterReasonText(value: unknown) {
-  if (value === 'below_candidate_threshold') return '未达候选阈值'
-  if (value === 'below_min_strength') return '低于最小强度'
-  if (value === 'preview_not_final') return '未到14:50最终确认'
-  if (value === 'v2_not_trade_candidate') return 'V2未达交易候选'
-  if (value === 'limit_up_not_buyable') return '涨停/近涨停，无法买入'
-  if (value === 'tail_pullback_risk') return '尾盘冲高回落'
-  if (value === 'outside_historical_calibration_top_n') return '历史校准排名超出 Top N'
-  if (value === 'outside_model_top_n') return '模型未进 Top N'
-  if (value === 'outside_top_n') return '排名超出 Top N'
-  if (value === 'not_selected') return '未入选'
-  return '-'
-}
-
-function strategyModeText(value: unknown) {
-  if (value === 'model') return '模型排序'
-  if (value === 'hybrid') return '混合模式'
-  if (value === 'rule') return '规则优先'
-  return '-'
-}
-
-function modelDecisionText(row: SelectionRow) {
-  if (!row.model) return '规则排序'
-  if (isModelPromoted(row)) return '模型提权'
-  if (isModelEliminated(row)) return '模型淘汰'
-  if (row.status === 'selected') return '规则+模型一致'
-  return '模型观察'
-}
-
-function modelDecisionType(row: SelectionRow) {
-  if (isModelPromoted(row)) return 'success'
-  if (isModelEliminated(row)) return 'danger'
-  if (row.status === 'selected') return 'warning'
-  return 'info'
-}
-
-function isModelPromoted(row: SelectionRow) {
-  return Boolean(
-    row.model
-    && row.status === 'selected'
-    && typeof row.rank === 'number'
-    && typeof row.final_candidate_rank === 'number'
-    && row.rank < row.final_candidate_rank
-  )
-}
-
-function isModelEliminated(row: SelectionRow) {
-  return Boolean(
-    row.model
-    && row.status === 'filtered'
-    && row.final_candidate_rank != null
-    && (row.filter_reason === 'outside_model_top_n' || row.filter_reason === 'outside_top_n')
-  )
-}
-
-function candidateRankShiftText(row: SelectionRow) {
-  const candidateRank = row.final_candidate_rank ?? '-'
-  const finalRank = row.status === 'selected' ? row.rank ?? '-' : '未入选'
-  return `${candidateRank} → ${finalRank}`
-}
-
-function executionFlagText(value: unknown) {
-  if (value === 'blocked_limit_up') return '涨停不可买'
-  if (value === 'near_limit_up') return '接近涨停'
-  if (value === 'executable') return '可执行'
-  return '未知'
-}
-
-function executionFlagType(value: unknown) {
-  if (value === 'blocked_limit_up') return 'danger'
-  if (value === 'near_limit_up') return 'warning'
-  if (value === 'executable') return 'success'
-  return 'info'
-}
-
-function v2LayerText(value: unknown) {
-  if (value === 'strong') return '强确认'
-  if (value === 'watchlist') return '观察'
-  if (value === 'weak') return '弱信号'
-  return '-'
-}
-
-function v2LayerType(value: unknown) {
-  if (value === 'strong') return 'success'
-  if (value === 'watchlist') return 'warning'
-  if (value === 'weak') return 'info'
-  return 'info'
-}
-
-function v2ActionText(value: unknown) {
-  if (value === 'trade_candidate') return '可进入最终交易候选'
-  if (value === 'observe_next_open') return '次日开盘/早盘观察'
-  if (value === 'no_trade') return '不交易，仅解释'
-  return '-'
-}
-
-function credibilityType(value: unknown) {
-  if (typeof value !== 'number') return 'info'
-  if (value >= 75) return 'success'
-  if (value >= 55) return 'warning'
-  return 'danger'
-}
-
-function precheckDataStatusText(value: unknown) {
-  if (value === 'has_intraday_data') return '有分钟数据'
-  if (value === 'missing_intraday_data') return '缺分钟数据'
-  return '-'
-}
-
-function precheckStageText(value: unknown) {
-  if (value === 'waiting_tail_window') return '等待尾盘窗口'
-  if (value === 'waiting_data') return '等待数据'
-  return '-'
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 watch(

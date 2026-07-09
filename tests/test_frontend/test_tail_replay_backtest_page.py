@@ -17,17 +17,17 @@ def test_tail_replay_backtest_page_exposes_cutoff_backtest_controls() -> None:
 
 
 def test_app_adds_tail_replay_backtest_navigation() -> None:
-    source = Path("frontend/src/App.vue").read_text(encoding="utf-8")
+    source = Path("frontend/src/router.ts").read_text(encoding="utf-8")
 
-    assert 'index="tail-replay"' in source
+    assert "name: 'tail-replay'" in source
     assert "TailReplayBacktest" in source
 
 
 def test_app_adds_tail_model_lab_navigation() -> None:
-    source = Path("frontend/src/App.vue").read_text(encoding="utf-8")
+    source = Path("frontend/src/router.ts").read_text(encoding="utf-8")
     client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
 
-    assert 'index="tail-model-lab"' in source
+    assert "name: 'tail-model-lab'" in source
     assert "TailModelLab" in source
     assert "getTailMlModels" in client
     assert "TailMlModelsResponse" in client

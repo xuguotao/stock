@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 引入 tdxrs 作为专用数据同步源（除权除息），清理 mootdx/SQLite 遗留代码。
+**Goal:** 引入 tdxrs 作为专用数据同步源（除权除息），清理 mootdx/legacy local DB 遗留代码。
 
-**Architecture:** tdxrs 通过通达信 TCP 协议获取 HTTP API 无法提供的数据（除权除息、五档盘口、逐笔成交）。**不加入 DataAggregator 优先级链**——只作为离线同步任务的专用源，将除权除息数据写入 ClickHouse `xdxr_info` 表。同时清理从未使用的 mootdx 和 SQLite 遗留代码。
+**Architecture:** tdxrs 通过通达信 TCP 协议获取 HTTP API 无法提供的数据（除权除息、五档盘口、逐笔成交）。**不加入 DataAggregator 优先级链**——只作为离线同步任务的专用源，将除权除息数据写入 ClickHouse `xdxr_info` 表。同时清理从未使用的 mootdx 和 legacy local DB 遗留代码。
 
 **Tech Stack:** Python 3.11+, tdxrs (Rust+PyO3), ClickHouse, existing data_ops framework
 
@@ -17,18 +17,18 @@
 
 ---
 
-### Task 1: 清理 DataAggregator 中的 SQLite 遗留
+### Task 1: 清理 DataAggregator 中的 legacy local DB 遗留
 
 **Files:**
-- Modify: `src/data/aggregator.py:40-43` (移除 SQLite 源加载)
+- Modify: `src/data/aggregator.py:40-43` (移除 legacy local DB 源加载)
 - Modify: `src/data/aggregator.py:61` (更新 `_prefer_source_over_cache`)
 - Test: `tests/test_data/test_aggregator.py`
 
 **Interfaces:**
 - Consumes: 无（清理任务）
-- Produces: `DataAggregator` 不再加载 SQLite 源，优先级链变为 `ClickHouse → Tencent → Sina → AKShare`
+- Produces: `DataAggregator` 不再加载 legacy local DB 源，优先级链变为 `ClickHouse → Tencent → Sina → AKShare`
 
-- [ ] **Step 1: Write failing test for SQLite removal**
+- [ ] **Step 1: Write failing test for legacy local DB removal**
 
 ```python
 # tests/test_data/test_aggregator.py
@@ -36,14 +36,14 @@ from __future__ import annotations
 from pathlib import Path
 from src.data.aggregator import DataAggregator
 
-def test_aggregator_no_sqlite_source():
-    """SQLite should not be in the default source chain."""
+def test_aggregator_no_legacy_local_db_source():
+    """legacy local DB should not be in the default source chain."""
     agg = DataAggregator()
     source_names = [s.name for s in agg.sources]
-    assert "sqlite" not in source_names, f"SQLite should be removed, found: {source_names}"
+    assert "legacy_local_db" not in source_names, f"legacy local DB should be removed, found: {source_names}"
 
-def test_prefer_source_over_cache_no_sqlite():
-    """_prefer_source_over_cache should not check for sqlite."""
+def test_prefer_source_over_cache_no_legacy_local_db():
+    """_prefer_source_over_cache should not check for legacy_local_db."""
     agg = DataAggregator()
     from src.data.clickhouse_source import ClickHouseStockDataSource
     agg.sources = [ClickHouseStockDataSource()]
@@ -52,24 +52,24 @@ def test_prefer_source_over_cache_no_sqlite():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest tests/test_data/test_aggregator.py::test_aggregator_no_sqlite_source -v`
-Expected: FAIL (SQLite still in sources if stock.db exists)
+Run: `pytest tests/test_data/test_aggregator.py::test_aggregator_no_legacy_local_db_source -v`
+Expected: FAIL (legacy local DB still in sources if legacy-stock-store exists)
 
-- [ ] **Step 3: Remove SQLite from aggregator.py**
+- [ ] **Step 3: Remove legacy local DB from aggregator.py**
 
 Edit `src/data/aggregator.py` lines 40-43, remove:
 ```python
-            sqlite_path = Path("data/stock.db")
-            if sqlite_path.exists():
-                from src.data.sqlite_source import SQLiteStockDataSource
-                sources.append(SQLiteStockDataSource(sqlite_path))
+            legacy_local_db_path = Path("data/legacy-stock-store")
+            if legacy_local_db_path.exists():
+                from src.data.legacy_local_db_source import legacy local DBStockDataSource
+                sources.append(legacy local DBStockDataSource(legacy_local_db_path))
 ```
 
 Edit line 61, change:
 ```python
     def _prefer_source_over_cache(self) -> bool:
         return bool(
-            self.sources and getattr(self.sources[0], "name", "") in {"clickhouse", "sqlite"}
+            self.sources and getattr(self.sources[0], "name", "") in {"clickhouse", "legacy_local_db"}
         )
 ```
 to:
@@ -89,10 +89,10 @@ Expected: All tests PASS
 
 ```bash
 git add src/data/aggregator.py tests/test_data/test_aggregator.py
-git commit -m "refactor: remove SQLite from DataAggregator priority chain
+git commit -m "refactor: remove legacy local DB from DataAggregator priority chain
 
 ClickHouse is now the sole authoritative local data source.
-SQLite backup has been fully migrated."
+legacy local DB backup has been fully migrated."
 ```
 
 ---
@@ -661,7 +661,7 @@ Includes xdxr coverage in ClickHouse quality inspection report."
 ┌─────────────────────────────────┐
 │  DataAggregator (简化后)         │
 │  ClickHouse → Tencent → Sina → AKShare │
-│  (无 SQLite, 无 mootdx, 无 tdxrs)     │
+│  (无 legacy local DB, 无 mootdx, 无 tdxrs)     │
 └─────────────────────────────────┘
 ```
 
@@ -669,7 +669,7 @@ Includes xdxr coverage in ClickHouse quality inspection report."
 
 | # | 任务 | 类型 | 文件 |
 |---|------|------|------|
-| 1 | 清理 SQLite 遗留 | 清理 | `aggregator.py` |
+| 1 | 清理 legacy local DB 遗留 | 清理 | `aggregator.py` |
 | 2 | 清理 mootdx 死代码 | 清理 | `aggregator.py`, `pyproject.toml`, `check_data_sources.py`, 删除 2 个文件 |
 | 3 | 创建 tdxrs 同步源 | 新增 | `tdxrs_sync.py` |
 | 4 | 创建 xdxr_info 表 + 同步 | 新增 | `clickhouse_xdxr_sync.py`, `clickhouse_setup.py` |
@@ -679,7 +679,7 @@ Includes xdxr coverage in ClickHouse quality inspection report."
 **删除的代码：**
 - `src/data/mootdx_source.py` (207 行)
 - `tests/test_data/test_mootdx_source.py`
-- aggregator.py 中 SQLite + mootdx 加载逻辑
+- aggregator.py 中 legacy local DB + mootdx 加载逻辑
 - pyproject.toml 中 mootdx 依赖声明
 - check_data_sources.py 中 mootdx 检查逻辑
 

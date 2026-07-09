@@ -125,6 +125,64 @@ class FakeBatchSource:
         return pd.DataFrame()
 
 
+class FakeFutureBucketBatchSource:
+    def fetch_intraday_bars_batch(self, symbols: list[str], trade_date: date, frequency: str = "5m") -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "datetime": pd.Timestamp(f"{trade_date.isoformat()} 15:00:00"),
+                    "symbol": symbol,
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "volume": 1000,
+                    "amount": 10100.0,
+                }
+                for symbol in symbols
+            ]
+            + [
+                {
+                    "datetime": pd.Timestamp(f"{trade_date.isoformat()} 15:05:00"),
+                    "symbol": symbol,
+                    "open": 10.1,
+                    "high": 10.3,
+                    "low": 10.0,
+                    "close": 10.2,
+                    "volume": 1200,
+                    "amount": 12240.0,
+                }
+                for symbol in symbols
+            ]
+        )
+
+
+class FakeDuplicateBatchSource:
+    def fetch_intraday_bars_batch(self, symbols: list[str], trade_date: date, frequency: str = "5m") -> pd.DataFrame:
+        return pd.DataFrame([
+            {
+                "datetime": pd.Timestamp(f"{trade_date.isoformat()} 15:00:00"),
+                "symbol": symbols[0],
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "close": 10.1,
+                "volume": 1000,
+                "amount": 10100.0,
+            },
+            {
+                "datetime": pd.Timestamp(f"{trade_date.isoformat()} 15:00:00"),
+                "symbol": symbols[0],
+                "open": 10.1,
+                "high": 10.3,
+                "low": 10.0,
+                "close": 10.2,
+                "volume": 1200,
+                "amount": 12240.0,
+            },
+        ])
+
+
 class FakeGapSource:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -208,6 +266,69 @@ class FakeWindowSource:
         ])
 
 
+class FakePartialWindowSource:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], date, date, str]] = []
+
+    def fetch_intraday_bars_window(
+        self,
+        symbols: list[str],
+        start: date,
+        end: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        self.calls.append((symbols, start, end, frequency))
+        return pd.DataFrame([
+            {
+                "symbol": "000001.SZ",
+                "datetime": pd.Timestamp("2026-06-10 15:00:00"),
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "close": 10.1,
+                "volume": 1000,
+                "amount": 10100.0,
+            },
+        ])
+
+
+class FakeHistoryFallbackSource:
+    def __init__(self) -> None:
+        self.batch_calls: list[tuple[list[str], date, str]] = []
+
+    def fetch_intraday_bars_batch(
+        self,
+        symbols: list[str],
+        trade_date: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        self.batch_calls.append((symbols, trade_date, frequency))
+        return pd.DataFrame([
+            {
+                "symbol": symbol,
+                "datetime": pd.Timestamp(f"{trade_date.isoformat()} 15:00:00"),
+                "open": 20.0,
+                "high": 20.2,
+                "low": 19.9,
+                "close": 20.1,
+                "volume": 2000,
+                "amount": 40200.0,
+            }
+            for symbol in symbols
+        ])
+
+
+class FakeEmptyWindowSource:
+    def fetch_intraday_bars_window(
+        self,
+        symbols: list[str],
+        start: date,
+        end: date,
+        frequency: str = "5m",
+    ) -> pd.DataFrame:
+        return pd.DataFrame()
+
+
 def _complete_5m_datetimes(trade_date: date, until: time = time(15, 0)) -> set[datetime]:
     values = set()
     current = datetime.combine(trade_date, time(9, 35))
@@ -244,8 +365,6 @@ def test_sync_clickhouse_minute5_kline_inserts_non_st_symbols() -> None:
         [
             ("000001", datetime(2026, 6, 12, 14, 55), 10.0, 10.2, 9.9, 10.1, 1000.0, 10100.0),
             ("000001", datetime(2026, 6, 12, 15, 0), 10.1, 10.3, 10.0, 10.2, 1200.0, 12240.0),
-        ],
-        [
             ("600000", datetime(2026, 6, 12, 14, 55), 10.0, 10.2, 9.9, 10.1, 1000.0, 10100.0),
             ("600000", datetime(2026, 6, 12, 15, 0), 10.1, 10.3, 10.0, 10.2, 1200.0, 12240.0),
         ],
@@ -398,7 +517,7 @@ def test_sync_clickhouse_minute5_kline_reports_no_data() -> None:
     assert client.inserts == []
 
 
-def test_sync_clickhouse_minute5_kline_defaults_to_tencent_before_fallback_sources() -> None:
+def test_sync_clickhouse_minute5_kline_recent_intraday_skips_akshare_fallback() -> None:
     client = FakeClickHouseClient()
     created_sources: list[str] = []
 
@@ -431,7 +550,7 @@ def test_sync_clickhouse_minute5_kline_defaults_to_tencent_before_fallback_sourc
             symbols=["000001.SZ"],
         )
 
-    assert created_sources == ["tencent:0.0", "sina:0.2:10000", "akshare:0.2"]
+    assert created_sources == ["tencent:0.0", "sina:0.2:10000"]
     assert result["success"] == 1
 
 
@@ -489,6 +608,64 @@ def test_sync_clickhouse_minute5_kline_uses_batch_intraday_fetcher_when_availabl
     assert result["inserted_rows"] == 2
 
 
+def test_sync_clickhouse_minute5_kline_batches_clickhouse_inserts_across_symbols() -> None:
+    client = FakeClickHouseClient()
+    source = FakeBatchSource()
+
+    result = sync_clickhouse_minute5_kline(
+        client=client,
+        trade_date=date(2026, 6, 12),
+        source=source,
+        symbols=["000001.SZ", "600000.SH"],
+        target_time=time(15, 0),
+    )
+
+    assert result["success"] == 2
+    assert result["inserted_rows"] == 2
+    assert len(client.inserts) == 1
+    assert client.inserts[0] == [
+        ("000001", datetime(2026, 6, 12, 15, 0), 10.0, 10.2, 9.9, 10.1, 1000.0, 10100.0),
+        ("600000", datetime(2026, 6, 12, 15, 0), 10.0, 10.2, 9.9, 10.1, 1000.0, 10100.0),
+    ]
+
+
+def test_sync_clickhouse_minute5_kline_does_not_insert_future_bucket_rows() -> None:
+    client = FakeClickHouseClient()
+    source = FakeFutureBucketBatchSource()
+
+    result = sync_clickhouse_minute5_kline(
+        client=client,
+        trade_date=date(2026, 6, 12),
+        source=source,
+        symbols=["000001.SZ", "600000.SH"],
+        target_time=time(15, 0),
+    )
+
+    assert result["success"] == 2
+    assert result["inserted_rows"] == 2
+    inserted_datetimes = [row[1] for batch in client.inserts for row in batch]
+    assert inserted_datetimes == [datetime(2026, 6, 12, 15, 0), datetime(2026, 6, 12, 15, 0)]
+
+
+def test_sync_clickhouse_minute5_kline_deduplicates_rows_within_insert_batch() -> None:
+    client = FakeClickHouseClient()
+    source = FakeDuplicateBatchSource()
+
+    result = sync_clickhouse_minute5_kline(
+        client=client,
+        trade_date=date(2026, 6, 12),
+        source=source,
+        symbols=["000001.SZ"],
+        target_time=time(15, 0),
+    )
+
+    assert result["success"] == 1
+    assert result["inserted_rows"] == 1
+    assert client.inserts == [[
+        ("000001", datetime(2026, 6, 12, 15, 0), 10.1, 10.3, 10.0, 10.2, 1200.0, 12240.0),
+    ]]
+
+
 def test_sync_clickhouse_minute5_history_window_fetches_once_and_inserts_missing_rows() -> None:
     client = FakeClickHouseClient()
     client.existing_by_symbol["000001"] = {datetime(2026, 6, 10, 14, 55)}
@@ -509,3 +686,46 @@ def test_sync_clickhouse_minute5_history_window_fetches_once_and_inserts_missing
         ("000001", datetime(2026, 6, 10, 15, 0), 10.1, 10.3, 10.0, 10.2, 1200.0, 12240.0),
         ("600000", datetime(2026, 6, 11, 15, 0), 20.0, 20.5, 19.8, 20.2, 2000.0, 40400.0),
     ]]
+
+
+def test_sync_clickhouse_minute5_history_window_uses_batch_fallback_for_symbols_missing_from_window_source() -> None:
+    client = FakeClickHouseClient()
+    source = FakePartialWindowSource()
+    fallback = FakeHistoryFallbackSource()
+
+    result = sync_clickhouse_minute5_history_window(
+        client=client,
+        start=date(2026, 6, 10),
+        end=date(2026, 6, 10),
+        source=source,
+        fallback_sources=[fallback],
+        symbols=["000001.SZ", "600000.SH"],
+    )
+
+    assert source.calls == [(["000001.SZ", "600000.SH"], date(2026, 6, 10), date(2026, 6, 10), "5m")]
+    assert fallback.batch_calls == [(["600000.SH"], date(2026, 6, 10), "5m")]
+    assert result["target_symbols"] == 2
+    assert result["inserted_rows"] == 2
+    assert result["no_data"] == 0
+    assert client.inserts == [[
+        ("000001", datetime(2026, 6, 10, 15, 0), 10.0, 10.2, 9.9, 10.1, 1000.0, 10100.0),
+        ("600000", datetime(2026, 6, 10, 15, 0), 20.0, 20.2, 19.9, 20.1, 2000.0, 40200.0),
+    ]]
+
+
+def test_sync_clickhouse_minute5_history_window_reports_no_data_symbols() -> None:
+    client = FakeClickHouseClient()
+
+    result = sync_clickhouse_minute5_history_window(
+        client=client,
+        start=date(2026, 6, 10),
+        end=date(2026, 6, 10),
+        source=FakeEmptyWindowSource(),
+        fallback_sources=[],
+        symbols=["000001.SZ", "600000.SH"],
+    )
+
+    assert result["inserted_rows"] == 0
+    assert result["no_data"] == 2
+    assert result["no_data_symbols"] == ["000001.SZ", "600000.SH"]
+    assert client.inserts == []

@@ -116,11 +116,11 @@ ModuleNotFoundError: No module named 'src.clickhouse'
 
 优先级：P1。
 
-### 4. SQLite 遗留路径尚未完全清理
+### 4. legacy local DB 遗留路径尚未完全清理
 
 文件：
 
-- `src/data/sqlite_source.py`
+- `src/data/legacy_local_db_source.py`
 - `src/data/market_enrichment_sync.py`
 - `src/web/backend/data_sync.py`
 - `src/web/backend/app.py`
@@ -132,13 +132,13 @@ ModuleNotFoundError: No module named 'src.clickhouse'
 
 问题：
 
-ClickHouse 已经是主库，但 Web 和脚本层仍保留 `stock_db_path`、SQLite 数据同步和旧检查逻辑。需要注意：`data/web/jobs.sqlite3` 是 Web 任务元数据，不属于应删除的旧行情库。
+ClickHouse 已经是主库，但 Web 和脚本层仍保留 `legacy stock DB path`、legacy local DB 数据同步和旧检查逻辑。需要注意：`data/web/jobs.legacy_local_db3` 是 Web 任务元数据，不属于应删除的旧行情库。
 
 建议方向：
 
-- 分阶段删除旧 SQLite 行情源和同步脚本。
-- 保留或迁移 `JobStore`，不要误删 `data/web/jobs.sqlite3`。
-- 清理 `stock_db_path` 幽灵参数。
+- 分阶段删除旧 legacy local DB 行情源和同步脚本。
+- 保留或迁移 `JobStore`，不要误删 `data/web/jobs.legacy_local_db3`。
+- 清理 `legacy stock DB path` 幽灵参数。
 
 优先级：P1。
 
@@ -181,7 +181,7 @@ ClickHouse 已经是主库，但 Web 和脚本层仍保留 `stock_db_path`、SQL
 
 1. P0：修复 `xdxr_sync` 默认 handler，并补回归测试。
 2. P1：整理 Web 控制面和独立 data ops runner 的边界，逐步下线进程内 scheduler。
-3. P1：制定 SQLite 行情库清理计划，分批删除旧入口和幽灵参数。
+3. P1：制定 legacy local DB 行情库清理计划，分批删除旧入口和幽灵参数。
 4. P2：收窄数据访问接口，减少新业务继续依赖宽泛 `DataAggregator`。
 5. P2：明确回测权重语义，避免研究参数误导。
 

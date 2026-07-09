@@ -32,7 +32,7 @@ frontend/               Vue + ECharts 后台控制台
 Web 后台采用 FastAPI + Vue 3 + Element Plus + ECharts。它是控制面，不应成为长期数据更新任务的唯一运行载体：
 
 - `src.web.backend.app`：FastAPI 应用工厂，提供健康检查、数据中心、任务中心、尾盘选择、基金尾盘和维护 API。
-- `src.web.backend.jobs`：SQLite 任务元数据存储，记录任务参数、状态、结果、错误和时间戳。
+- `src.web.backend.jobs`：legacy local DB 任务元数据存储，记录任务参数、状态、结果、错误和时间戳。
 - `src.web.backend.data_status`：读取 ClickHouse 表状态、质量检查和数据源健康矩阵，服务数据中心页面。
 - `src.web.backend.data_health_repair`：把数据质量告警映射为可执行或手动修复动作。
 - `src.web.backend.backtests`：尾盘回测 API 模型和执行器，复用现有 `BacktestEngine`、`TailSessionFactor` 和 research dataset 读取能力。

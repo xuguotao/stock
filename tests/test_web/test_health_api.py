@@ -8,7 +8,7 @@ from src.web.backend.app import create_app
 
 
 def test_health_endpoint_is_async_so_threadpool_saturation_does_not_block_it(tmp_path) -> None:
-    app = create_app(db_path=tmp_path / "jobs.sqlite3")
+    app = create_app(db_path=tmp_path / "jobs.json")
     route = next(route for route in app.routes if getattr(route, "path", None) == "/api/health")
 
     assert inspect.iscoroutinefunction(route.endpoint)

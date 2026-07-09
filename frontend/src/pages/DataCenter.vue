@@ -538,16 +538,6 @@
           {{ dataStatus?.quality?.status ?? '-' }}
         </el-tag>
       </div>
-      <div v-if="syncJob" class="sync-progress">
-        <div class="sync-progress-header">
-          <span>同步任务：{{ syncJob.progress.message || syncJob.status }}</span>
-          <el-tag :type="jobStatusType(syncJob.status)" effect="plain">{{ syncJob.status }}</el-tag>
-        </div>
-        <el-progress
-          :percentage="syncJob.progress.percent"
-          :status="syncJob.status === 'failed' ? 'exception' : syncJob.status === 'success' ? 'success' : undefined"
-        />
-      </div>
       <div v-if="minute5Job" class="sync-progress">
         <div class="sync-progress-header">
           <span>5分钟线任务：{{ minute5Job.progress.message || minute5Job.status }}</span>
@@ -756,13 +746,6 @@
           <template #default="{ row }">{{ row.date_range ? `${row.date_range.start ?? '-'} / ${row.date_range.end ?? '-'}` : '-' }}</template>
         </el-table-column>
       </el-table>
-      <div class="advanced-maintenance">
-        <div>
-          <div class="operation-title">高级维护</div>
-          <div class="operation-desc">兼容旧 SQLite 数据源，通常不需要日常执行。</div>
-        </div>
-        <el-button plain size="small" :loading="syncing" @click="syncStockDb">同步旧 Stock DB</el-button>
-      </div>
     </div>
 
       </el-collapse-item>
@@ -777,13 +760,11 @@ import { api, type DataHealthRepairPlan, type DataOpsSchedulerStatus, type DataO
 
 const dataStatus = ref<DataStatusResponse | null>(null)
 const loading = ref(false)
-const syncing = ref(false)
 const syncingMinute5 = ref(false)
 const maintaining = ref(false)
 const repairingHealth = ref(false)
 const repairPlanLoading = ref(false)
 const monitorChanging = ref(false)
-const syncJob = ref<JobRecord | null>(null)
 const minute5Job = ref<JobRecord | null>(null)
 const maintenanceJob = ref<JobRecord | null>(null)
 const healthRepairJob = ref<JobRecord | null>(null)
@@ -1391,22 +1372,6 @@ async function stopMinute5Monitor() {
   }
 }
 
-async function syncStockDb() {
-  syncing.value = true
-  try {
-    const response = await api.syncStockDb({ backup: true })
-    const completed = await pollSyncJob(response.job_id)
-    if (completed) {
-      ElMessage.success('旧 Stock DB 同步完成')
-      await loadData()
-    }
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '旧 Stock DB 同步失败')
-  } finally {
-    syncing.value = false
-  }
-}
-
 async function syncMinute5() {
   if (!minute5TradeDate.value) {
     ElMessage.warning('请选择 5分钟线日期')
@@ -1532,20 +1497,6 @@ async function repairDatasetHealth(row: NonNullable<DataStatusResponse['datasets
   }
 }
 
-async function pollSyncJob(jobId: string) {
-  for (let attempt = 0; attempt < 600; attempt += 1) {
-    syncJob.value = await api.getJob(jobId)
-    if (syncJob.value.status === 'success') return true
-    if (syncJob.value.status === 'failed') {
-      ElMessage.error(syncJob.value.error ?? '旧 Stock DB 同步失败')
-      return false
-    }
-    await sleep(1000)
-  }
-  ElMessage.warning('同步仍在运行，请稍后刷新任务状态')
-  return false
-}
-
 async function pollMinute5Job(jobId: string) {
   for (let attempt = 0; attempt < 7200; attempt += 1) {
     minute5Job.value = await api.getJob(jobId)
@@ -1630,7 +1581,10 @@ function dataOpsTaskTitle(taskKey: string) {
     minute5_intraday_sync: '5m 分钟线同步',
     quote_snapshot_capture: '行情快照采集',
     quote_rollup_refresh: '快照聚合刷新',
-    quality_snapshot: '数据质量快照'
+    quality_snapshot: '数据质量快照',
+    xdxr_sync: '除权除息数据同步',
+    stock_readiness_snapshot: '策略数据就绪度快照',
+    stock_readiness_repair: '策略数据缺口回补'
   }
   return titles[taskKey] ?? taskKey
 }
@@ -1684,6 +1638,30 @@ function dataOpsTaskDetail(taskKey: string) {
       dependency: '依赖质量检查 SQL、ClickHouse 读写能力和数据源健康规则。',
       verification: '检查 data_source_health 新增行数、健康矩阵状态和任务 last_result.rows。',
       failure: '质量 SQL 执行失败、ClickHouse 不可用、写入 data_source_health 失败或 runner 心跳超时。'
+    },
+    xdxr_sync: {
+      logic: '同步全市场除权除息信息，为前复权行情、复权口径校验和策略回测价格一致性提供基础数据。',
+      trigger: '交易日按 daily_time 执行，默认 15:30；也支持手动运行一次。',
+      data: '读取 stocks 股票池和外部除权除息数据源；写入 xdxr_info，并记录 data_ops_task_runs、data_ops_task_heartbeats。',
+      dependency: '依赖 ClickHouse stocks、xdxr_info 表、外部除权除息数据接口和网络稳定性。',
+      verification: '检查同步标的数、写入行数、最新除权除息日期和任务心跳；stale 表示上次 running 心跳超过阈值。',
+      failure: '外部数据源无响应、ClickHouse 写入失败、全市场批量同步超时或 runner 异常退出。'
+    },
+    stock_readiness_snapshot: {
+      logic: '按近 180 天窗口生成策略所需数据维度的覆盖率快照，目前默认检查日线和 5m 分钟线是否达到策略可用标准。',
+      trigger: '交易日按 daily_time 执行，默认 15:40；也支持手动运行一次。',
+      data: '读取 stocks、trade_calendar、daily_kline、minute5_kline 等策略输入表；写入 stock_data_readiness 和 stock_data_readiness_gaps。',
+      dependency: '依赖股票池、交易日历、日线/分钟线数据已经完成同步，以及 ClickHouse 就绪度表结构。',
+      verification: '检查 stock_data_readiness 中 query_trade_days、coverage_ratio、missing_days、status 和 repair_supported。',
+      failure: '前置行情数据缺失、交易日历不足、窗口参数不完整、ClickHouse 查询失败或写入快照失败。'
+    },
+    stock_readiness_repair: {
+      logic: '根据 stock_data_readiness_gaps 中可修复缺口，触发日线或 5m 分钟线补齐，并在回补后刷新对应标的的就绪度快照。',
+      trigger: '默认禁用，仅手动运行；适合在就绪度页面发现可回补缺口后定向执行。',
+      data: '读取 stock_data_readiness_gaps、stocks、daily_kline、minute5_kline；写入补齐后的行情表、stock_data_readiness 和 stock_data_readiness_gaps。',
+      dependency: '依赖日线和 5m 补数函数、外部行情源、ClickHouse 写入能力和快照任务的维度定义。',
+      verification: '检查 queued、repaired、failed、remaining_gaps，以及回补后就绪度页面中可回补数量是否下降。',
+      failure: '行情源无法补齐、缺口维度不支持自动回补、单标的补数异常或刷新快照失败。'
     }
   }
   return details[taskKey] ?? {

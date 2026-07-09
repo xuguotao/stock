@@ -58,7 +58,7 @@ python -m src.data_ops.runner
 - 不依赖：
   - Web 后台进程。
   - 前端构建产物。
-  - SQLite `data/web/jobs.sqlite3`。
+  - legacy local DB `data/web/jobs.legacy_local_db3`。
   - 浏览器页面是否打开。
   - 本机绝对路径。
 - 配置通过环境变量或配置文件提供，不能把开发机路径写死。
@@ -444,7 +444,7 @@ pytest tests/test_data_ops/test_handlers.py -q
 - handler 复用现有同步函数。
 - handler 不 import `FastAPI`。
 - handler 不写 Web `JobStore`。
-- handler 不读取前端、Web jobs SQLite 或开发机绝对路径。
+- handler 不读取前端、Web jobs legacy local DB 或开发机绝对路径。
 
 - [ ] **Step 3: 验证 handler 测试通过**
 
@@ -505,7 +505,7 @@ python -m src.data_ops.runner --once
 - 独立部署要求：
   - runner 从 `src.data_ops.config` 加载配置。
   - runner 不 import `src.web.backend.app`。
-  - runner 不创建或读取 `data/web/jobs.sqlite3`。
+  - runner 不创建或读取 `data/web/jobs.legacy_local_db3`。
   - runner 启动日志写入 stdout 和 `DATA_OPS_LOG_DIR`。
   - 退出码能反映启动失败。
 
@@ -781,7 +781,7 @@ DATA_OPS_LOG_DIR=logs python -m src.data_ops.runner --once
 预期：
 
 - 不需要启动 FastAPI。
-- 不需要存在 `data/web/jobs.sqlite3`。
+- 不需要存在 `data/web/jobs.legacy_local_db3`。
 - 日志写入 `logs/data_ops_runner.log`。
 - ClickHouse 中能看到任务配置或运行记录。
 

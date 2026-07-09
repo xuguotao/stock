@@ -1,78 +1,46 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
 
 from fastapi.testclient import TestClient
 
 from src.web.backend.app import _resolve_trade_date, create_app
-from src.web.backend.data_status import inspect_stock_database
 
 
-def _create_stock_db(path) -> None:
-    conn = sqlite3.connect(path)
-    conn.execute(
-        "create table stocks (symbol text, name text, industry text, market text, list_date text, updated_at text)"
-    )
-    conn.execute("create table trade_calendar (date text, is_open integer)")
-    conn.execute(
-        "create table daily_kline (symbol text, date text, open real, high real, low real, close real, volume real, amount real, amplitude real, pct_change real, change real, turnover real)"
-    )
-    conn.execute(
-        "create table minute5_kline (symbol text, datetime text, open real, high real, low real, close real, volume real, amount real)"
-    )
-    conn.executemany(
-        "insert into stocks values (?, ?, ?, ?, ?, ?)",
-        [
-            ("000001", "平安银行", "银行", "SZ", "1991-04-03", "2026-06-12 15:10:00"),
-            ("000004", "*ST国华", "软件", "SZ", "1990-12-01", "2026-06-12 15:10:00"),
-            ("000005", "best科技", "软件", "SZ", "1991-01-01", "2026-06-12 15:10:00"),
-        ],
-    )
-    conn.executemany(
-        "insert into trade_calendar values (?, ?)",
-        [("2026-06-12", 1), ("2026-06-13", 0)],
-    )
-    conn.executemany(
-        "insert into daily_kline values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [
-            ("000001", "2026-06-11", 10, 10.5, 9.9, 10.2, 1000, 10200, 0, 0, 0, 0),
-            ("000001", "2026-06-12", 10.2, 10.8, 10.1, 10.6, 1200, 12600, 0, 0, 0, 0),
-            ("000004", "2026-06-12", 5, 5.1, 4.9, 5.0, 800, 4000, 0, 0, 0, 0),
-        ],
-    )
-    conn.executemany(
-        "insert into minute5_kline values (?, ?, ?, ?, ?, ?, ?, ?)",
-        [
-            ("000001", "2026-06-12 14:55:00", 10.5, 10.7, 10.4, 10.6, 100, 1060),
-            ("000001", "2026-06-12 15:00:00", 10.6, 10.8, 10.5, 10.7, 120, 1284),
-        ],
-    )
-    conn.commit()
-    conn.close()
-
-
-def test_data_status_api_returns_stock_db_coverage(tmp_path) -> None:
-    stock_db = tmp_path / "stock.db"
-    _create_stock_db(stock_db)
+def test_data_status_api_returns_configured_data_status(tmp_path) -> None:
+    status = {
+        "database": {"exists": True, "type": "clickhouse", "size_bytes": 0},
+        "stock_summary": {"stock_count": 3, "non_st_stock_count": 2, "st_stock_count": 1},
+        "tables": {
+            "daily_kline": {
+                "row_count": 3,
+                "date_range": {"start": "2026-06-11", "end": "2026-06-12"},
+                "symbol_count": 2,
+            },
+            "minute5_kline": {
+                "date_range": {"start": "2026-06-12 14:55:00", "end": "2026-06-12 15:00:00"},
+                "symbol_count": 1,
+            },
+        },
+        "health": {
+            "status": "ok",
+            "daily_latest_date": "2026-06-12",
+            "minute5_latest_datetime": "2026-06-12 15:00:00",
+        },
+    }
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=stock_db,
-        data_status_runner=lambda: inspect_stock_database(stock_db),
+        db_path=tmp_path / "jobs.json",
+        data_status_runner=lambda: status,
     )
-    client = TestClient(app)
+    client = TestClient(app, raise_server_exceptions=False)
 
     response = client.get("/api/data/status")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["database"]["exists"] is True
-    assert payload["database"]["path"] == str(stock_db)
-    assert payload["stock_summary"] == {
-        "stock_count": 3,
-        "non_st_stock_count": 2,
-        "st_stock_count": 1,
-    }
+    assert payload["database"]["type"] == "clickhouse"
+    assert payload["stock_summary"] == {"stock_count": 3, "non_st_stock_count": 2, "st_stock_count": 1}
     assert payload["tables"]["daily_kline"]["row_count"] == 3
     assert payload["tables"]["daily_kline"]["date_range"] == {
         "start": "2026-06-11",
@@ -84,74 +52,25 @@ def test_data_status_api_returns_stock_db_coverage(tmp_path) -> None:
     assert payload["health"]["minute5_latest_datetime"] == "2026-06-12 15:00:00"
 
 
-def test_data_status_api_reports_missing_database(tmp_path) -> None:
-    stock_db = tmp_path / "missing.db"
+def test_data_status_api_reports_runner_error(tmp_path) -> None:
+    def failing_status():
+        raise RuntimeError("clickhouse unavailable")
+
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=stock_db,
-        data_status_runner=lambda: inspect_stock_database(stock_db),
+        db_path=tmp_path / "jobs.json",
+        data_status_runner=failing_status,
     )
-    client = TestClient(app)
+    client = TestClient(app, raise_server_exceptions=False)
 
     response = client.get("/api/data/status")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["database"]["exists"] is False
-    assert payload["tables"] == {}
-    assert payload["health"]["status"] == "missing_database"
-
-
-def test_data_sync_api_runs_inline_job_and_returns_refreshed_status(tmp_path) -> None:
-    stock_db = tmp_path / "stock.db"
-    _create_stock_db(stock_db)
-
-    def fake_sync(remote, dest, backup, progress=None):
-        if progress:
-            progress(40, "copying", "同步 stock.db")
-        assert remote == "host:/stock.db"
-        assert dest == stock_db
-        assert backup is True
-        return {
-            "remote": remote,
-            "dest": str(dest),
-            "size_bytes": stock_db.stat().st_size,
-            "integrity": "ok",
-        }
-
-    app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=stock_db,
-        run_jobs_inline=True,
-        stock_db_sync_runner=fake_sync,
-        data_status_runner=lambda: inspect_stock_database(stock_db),
-    )
-    client = TestClient(app)
-
-    response = client.post(
-        "/api/data/sync-stock-db",
-        json={"remote": "host:/stock.db", "backup": True},
-    )
-
-    assert response.status_code == 200
-    job_id = response.json()["job_id"]
-    job = client.get(f"/api/jobs/{job_id}").json()
-    assert job["kind"] == "stock_db_sync"
-    assert job["status"] == "success"
-    assert job["progress"] == {"percent": 100, "stage": "completed", "message": "旧 Stock DB 同步完成"}
-    assert job["result"]["legacy"] is True
-    assert job["result"]["sync"]["integrity"] == "ok"
-    assert job["result"]["status"]["stock_summary"]["stock_count"] == 3
+    assert response.status_code == 500
 
 
 def test_minute5_sync_api_runs_inline_job_and_returns_refreshed_status(tmp_path) -> None:
-    stock_db = tmp_path / "stock.db"
-    _create_stock_db(stock_db)
-
-    def fake_sync(db_path, trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
+    def fake_sync(trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
         if progress:
             progress(65, "fetching", "更新 5m 分钟线")
-        assert db_path == stock_db
         assert trade_date.isoformat() == "2026-06-12"
         assert limit == 0
         assert symbols is None
@@ -166,11 +85,10 @@ def test_minute5_sync_api_runs_inline_job_and_returns_refreshed_status(tmp_path)
         }
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=stock_db,
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         minute5_sync_runner=fake_sync,
-        data_status_runner=lambda: inspect_stock_database(stock_db),
+        data_status_runner=lambda: {"health": {"minute5_symbol_count": 1}},
     )
     client = TestClient(app)
 
@@ -201,7 +119,7 @@ def test_data_health_repair_plan_api_returns_actionable_warnings(tmp_path) -> No
         }
     }
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         data_status_runner=lambda: status,
     )
     client = TestClient(app)
@@ -235,7 +153,7 @@ def test_data_reliability_api_returns_dashboard_report(tmp_path) -> None:
         },
     }
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         data_status_runner=lambda: status,
         auto_start_minute5_monitor=False,
         auto_start_quote_snapshot_monitor=False,
@@ -258,8 +176,6 @@ def test_data_reliability_api_returns_dashboard_report(tmp_path) -> None:
 
 
 def test_data_health_repair_api_runs_inline_auto_repairs(tmp_path) -> None:
-    stock_db = tmp_path / "stock.db"
-    _create_stock_db(stock_db)
     before_status = {
         "quality": {
             "status": "warning",
@@ -298,7 +214,7 @@ def test_data_health_repair_api_runs_inline_auto_repairs(tmp_path) -> None:
     def fake_status():
         return statuses.pop(0) if statuses else after_status
 
-    def fake_minute5(db_path, trade_date, limit, symbols=None, include_st=False, progress=None):
+    def fake_minute5(trade_date, limit, symbols=None, include_st=False, progress=None):
         calls.append(("minute5", trade_date.isoformat(), symbols))
         return {"success": 1}
 
@@ -315,9 +231,8 @@ def test_data_health_repair_api_runs_inline_auto_repairs(tmp_path) -> None:
         return {"inserted_rows": 4}
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=stock_db,
-        run_jobs_inline=True,
+        db_path=tmp_path / "jobs.json",
+                run_jobs_inline=True,
         data_status_runner=fake_status,
         minute5_sync_runner=fake_minute5,
         quote_snapshot_sync_runner=fake_quote_snapshot,
@@ -383,7 +298,7 @@ def test_data_health_repair_api_runs_quote_rollup_optimizer(tmp_path) -> None:
         return {"tables": ["stock_quote_snapshots_1m", "stock_quote_snapshots_5m"]}
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         data_status_runner=fake_status,
         quote_rollup_optimizer=fake_rollup_optimizer,
@@ -403,8 +318,6 @@ def test_data_health_repair_api_runs_quote_rollup_optimizer(tmp_path) -> None:
 
 
 def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None:
-    stock_db = tmp_path / "stock.db"
-    _create_stock_db(stock_db)
     status_calls = [
         {
             "database": {"exists": True, "type": "clickhouse", "size_bytes": 0},
@@ -439,7 +352,7 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
     def fake_status():
         return status_calls[min(len(sync_calls), 1)]
 
-    def fake_sync(db_path, trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
+    def fake_sync(trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
         sync_calls.append({"trade_date": trade_date.isoformat(), "limit": limit, "symbols": symbols})
         if progress:
             progress(50, "fetching", "更新 5m 分钟线")
@@ -498,9 +411,8 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
             return {"signal_date": signal_date.isoformat(), "outcome_count": 0, "missing_symbols": symbols}
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=stock_db,
-        run_jobs_inline=True,
+        db_path=tmp_path / "jobs.json",
+                run_jobs_inline=True,
         minute5_sync_runner=fake_sync,
         data_status_runner=fake_status,
         tail_live_runner=fake_tail_runner,
@@ -550,8 +462,6 @@ def test_daily_maintenance_runs_sync_retry_and_strategy_review(tmp_path) -> None
 
 
 def test_daily_maintenance_prefers_latest_minute5_date_when_daily_is_stale(tmp_path) -> None:
-    stock_db = tmp_path / "stock.db"
-    _create_stock_db(stock_db)
     status = {
         "database": {"exists": True, "type": "clickhouse", "size_bytes": 0},
         "stock_summary": {"stock_count": 2, "non_st_stock_count": 2, "st_stock_count": 0},
@@ -567,7 +477,7 @@ def test_daily_maintenance_prefers_latest_minute5_date_when_daily_is_stale(tmp_p
     sync_dates = []
     repair_dates = []
 
-    def fake_sync(db_path, trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
+    def fake_sync(trade_date, limit, symbols=None, source=None, include_st=False, progress=None):
         sync_dates.append(trade_date.isoformat())
         return {
             "trade_date": trade_date.isoformat(),
@@ -584,9 +494,8 @@ def test_daily_maintenance_prefers_latest_minute5_date_when_daily_is_stale(tmp_p
         return {"trade_date": trade_date.isoformat(), "inserted_rows": 2}
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=stock_db,
-        run_jobs_inline=True,
+        db_path=tmp_path / "jobs.json",
+                run_jobs_inline=True,
         minute5_sync_runner=fake_sync,
         data_status_runner=lambda: status,
         daily_repair_runner=fake_daily_repair,
@@ -650,7 +559,7 @@ def test_data_ops_scheduler_endpoint_can_run_maintenance_once(tmp_path) -> None:
         return {"job_id": "auto-1", "status": "success"}
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         run_jobs_inline=True,
         auto_start_minute5_monitor=False,
         auto_start_quote_snapshot_monitor=False,
@@ -707,7 +616,7 @@ def test_clickhouse_dataset_build_api_runs_inline_job_and_lists_dataset(tmp_path
     from pathlib import Path
 
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
+        db_path=tmp_path / "jobs.json",
         dataset_root=data_root,
         run_jobs_inline=True,
         clickhouse_dataset_builder=fake_builder,

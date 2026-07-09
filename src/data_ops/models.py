@@ -141,6 +141,26 @@ def default_task_configs() -> list[DataOpsTaskConfig]:
             max_runtime_seconds=1800,
             stale_after_seconds=900,
         ),
+        DataOpsTaskConfig(
+            task_key="stock_readiness_snapshot",
+            enabled=True,
+            schedule_kind="daily_time",
+            schedule_config={
+                "time": "15:40",
+                "lookback_days": 180,
+                "dimensions": ["daily", "minute5"],
+            },
+            max_runtime_seconds=3600,
+            stale_after_seconds=900,
+        ),
+        DataOpsTaskConfig(
+            task_key="stock_readiness_repair",
+            enabled=False,
+            schedule_kind="manual",
+            schedule_config={},
+            max_runtime_seconds=3600,
+            stale_after_seconds=900,
+        ),
     ]
 
 

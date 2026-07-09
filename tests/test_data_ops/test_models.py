@@ -25,8 +25,11 @@ def test_default_task_configs_cover_first_runner_tasks() -> None:
         "quote_rollup_refresh",
         "quality_snapshot",
         "xdxr_sync",
+        "stock_readiness_snapshot",
+        "stock_readiness_repair",
     ]
-    assert all(config.enabled for config in configs)
+    assert all(config.enabled for config in configs if config.task_key != "stock_readiness_repair")
+    assert next(config for config in configs if config.task_key == "stock_readiness_repair").enabled is False
     quote_snapshot = next(config for config in configs if config.task_key == "quote_snapshot_capture")
     assert quote_snapshot.schedule_config["chunk_size"] == 500
     assert quote_snapshot.schedule_config["quote_endpoint"] == "sqt_utf8"

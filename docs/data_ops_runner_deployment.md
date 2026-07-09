@@ -15,7 +15,7 @@
 
 - 前端构建产物。
 - FastAPI Web 后台进程。
-- SQLite `data/web/jobs.sqlite3`。
+- legacy local DB `data/web/jobs.legacy_local_db3`。
 
 ## 配置
 
@@ -56,7 +56,7 @@ python -m src.data_ops.runner --once --task-group maintenance
 预期：
 
 - 不需要启动 Web 后台。
-- 不需要存在 `data/web/jobs.sqlite3`。
+- 不需要存在 `data/web/jobs.legacy_local_db3`。
 - ClickHouse 中出现 `data_ops_task_config`、`data_ops_task_runs`、`data_ops_task_heartbeats`。
 - Web 后台连接同一个 ClickHouse 后，可以在数据中心看到任务状态。
 

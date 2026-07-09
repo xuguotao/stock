@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 
 from src.data_ops.models import DataOpsTaskConfig, DataOpsTaskStatus
 from src.data_ops.runner import DataOpsRunner, DataOpsRunnerConfig, default_runner_loop_interval
@@ -233,6 +234,86 @@ def test_intraday_runner_executes_minute5_kline_task() -> None:
 
     assert repo.started == ["minute5_intraday_sync"]
     assert result == {"executed": 1, "failed": 0, "skipped": 0}
+
+
+def test_maintenance_runner_includes_stock_readiness_tasks() -> None:
+    repo = FakeRepository([
+        DataOpsTaskConfig(
+            task_key="stock_readiness_snapshot",
+            enabled=True,
+            schedule_kind="daily_time",
+            schedule_config={"time": "15:40", "lookback_days": 180, "dimensions": ["daily", "minute5"]},
+        ),
+        DataOpsTaskConfig(
+            task_key="stock_readiness_repair",
+            enabled=True,
+            schedule_kind="manual",
+            schedule_config={},
+            manual_trigger=True,
+        ),
+        DataOpsTaskConfig(
+            task_key="quality_snapshot",
+            enabled=True,
+            schedule_kind="interval",
+            schedule_config={"interval_seconds": 0},
+        ),
+    ])
+    runner = DataOpsRunner(
+        repository=repo,
+        handlers={
+            "stock_readiness_snapshot": lambda params: {"snapshot": True},
+            "stock_readiness_repair": lambda params: {"repair": True},
+            "quality_snapshot": lambda params: {"quality": True},
+        },
+        config=DataOpsRunnerConfig(runner_id="runner-maintenance", once=True, task_group="maintenance"),
+        clock=lambda: datetime(2026, 7, 8, 15, 45),
+        is_trading_day=lambda value: True,
+    )
+
+    result = runner.run_once()
+
+    assert repo.started == ["stock_readiness_snapshot", "stock_readiness_repair", "quality_snapshot"]
+    assert result == {"executed": 3, "failed": 0, "skipped": 0}
+
+
+def test_runner_marks_stale_task_heartbeat_as_interrupted_before_skipping() -> None:
+    config = DataOpsTaskConfig(
+        task_key="xdxr_sync",
+        enabled=True,
+        schedule_kind="daily_time",
+        schedule_config={"time": "15:30"},
+        stale_after_seconds=900,
+    )
+    repo = FakeRepository(config)
+    repo.statuses = [
+        DataOpsTaskStatus(
+            task_key="xdxr_sync",
+            enabled=True,
+            status="stale",
+            schedule_kind="daily_time",
+            schedule_config={"time": "15:30"},
+            last_finished_at=datetime(2026, 7, 8, 15, 35),
+            heartbeat_at=datetime(2026, 7, 8, 15, 30) - timedelta(seconds=901),
+            runner_id="old-runner",
+        )
+    ]
+    runner = DataOpsRunner(
+        repository=repo,
+        handlers={"xdxr_sync": lambda params: {"rows": 1}},
+        config=DataOpsRunnerConfig(runner_id="runner-maintenance", once=True, task_group="maintenance"),
+        clock=lambda: datetime(2026, 7, 8, 15, 45),
+        is_trading_day=lambda value: True,
+    )
+
+    result = runner.run_once()
+
+    assert result == {"executed": 0, "failed": 0, "skipped": 1}
+    assert repo.heartbeats[0][:3] == ("runner-maintenance", "xdxr_sync", "failed")
+    assert json.loads(repo.heartbeats[0][3]) == {
+        "percent": 100,
+        "stage": "interrupted",
+        "message": "上次运行心跳超时，已标记为中断",
+    }
 
 
 def test_task_key_filter_still_applies_inside_task_group() -> None:

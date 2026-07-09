@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sqlite3
+import json
 from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -10,7 +10,7 @@ from src.web.backend.jobs import JobStore
 
 
 def test_jobs_api_creates_and_lists_jobs(tmp_path) -> None:
-    app = create_app(db_path=tmp_path / "jobs.sqlite3")
+    app = create_app(db_path=tmp_path / "jobs.json")
     client = TestClient(app)
 
     response = client.post("/api/jobs", json={"kind": "noop", "params": {"x": 1}})
@@ -29,7 +29,7 @@ def test_jobs_api_creates_and_lists_jobs(tmp_path) -> None:
 
 
 def test_jobs_api_returns_one_job(tmp_path) -> None:
-    app = create_app(db_path=tmp_path / "jobs.sqlite3")
+    app = create_app(db_path=tmp_path / "jobs.json")
     client = TestClient(app)
     created = client.post("/api/jobs", json={"kind": "noop", "params": {}}).json()
 
@@ -40,7 +40,7 @@ def test_jobs_api_returns_one_job(tmp_path) -> None:
 
 
 def test_job_store_records_running_heartbeat_and_marks_stale_jobs(tmp_path) -> None:
-    db_path = tmp_path / "jobs.sqlite3"
+    db_path = tmp_path / "jobs.json"
     store = JobStore(db_path)
     job = store.create_job("minute5_sync", {})
 
@@ -55,8 +55,9 @@ def test_job_store_records_running_heartbeat_and_marks_stale_jobs(tmp_path) -> N
     assert running.heartbeat_at is not None
 
     old_heartbeat = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("update jobs set heartbeat_at = ? where id = ?", (old_heartbeat, job.id))
+    payload = json.loads(db_path.read_text(encoding="utf-8"))
+    payload[0]["heartbeat_at"] = old_heartbeat
+    db_path.write_text(json.dumps(payload), encoding="utf-8")
 
     stale = store.get_job(job.id)
 
@@ -67,7 +68,7 @@ def test_job_store_records_running_heartbeat_and_marks_stale_jobs(tmp_path) -> N
 
 
 def test_jobs_api_lists_result_summaries_without_heavy_signal_rows(tmp_path) -> None:
-    db_path = tmp_path / "jobs.sqlite3"
+    db_path = tmp_path / "jobs.json"
     app = create_app(db_path=db_path)
     client = TestClient(app)
     created = client.post("/api/jobs", json={"kind": "tail_session_live_selection", "params": {}}).json()
@@ -96,7 +97,7 @@ def test_jobs_api_lists_result_summaries_without_heavy_signal_rows(tmp_path) -> 
 
 
 def test_job_store_marks_existing_running_jobs_interrupted_on_startup(tmp_path) -> None:
-    db_path = tmp_path / "jobs.sqlite3"
+    db_path = tmp_path / "jobs.json"
     store = JobStore(db_path)
     running = store.create_job("daily_maintenance", {})
     store.update_job(

@@ -397,8 +397,8 @@ class FakeQualityCalendarService:
 
 def test_data_quality_calendar_api_lists_and_generates(tmp_path) -> None:
     app = create_app(
-        db_path=tmp_path / "jobs.sqlite3",
-        stock_db_path=tmp_path / "stock.db",
+        db_path=tmp_path / "jobs.legacy_local_db3",
+        legacy stock DB path=tmp_path / "legacy-stock-store",
         data_quality_calendar_service=FakeQualityCalendarService(),
     )
     client = TestClient(app)

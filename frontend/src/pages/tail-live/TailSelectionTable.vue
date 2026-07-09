@@ -109,68 +109,23 @@
 </template>
 
 <script setup lang="ts">
-interface ModelFeatureSnapshot {
-  feature: string
-  value: number | null
-}
-
-interface TailSelectionRow {
-  rank?: number
-  raw_rank?: number | null
-  final_candidate_rank?: number | null
-  symbol: string
-  strength: number
-  last_price: number
-  volume_ratio: number
-  tail_return: number
-  reason: string
-  status?: 'selected' | 'filtered'
-  filter_reason?: string | null
-  credibility?: {
-    score?: number
-    grade?: string
-    rule_score?: number
-    rule_grade?: string
-    historical_hit_rate?: number | null
-    historical_avg_return?: number | null
-    sample_size?: number
-    calibrated_probability?: number | null
-    history_status?: string
-    phase?: string
-    components?: {
-      signal_strength?: number
-      volume_quality?: number
-      return_quality?: number
-    }
-    confirmation_checks?: string[]
-    risks?: string[]
-    history?: {
-      status?: string
-      sample_count?: number
-      note?: string
-      max_win_rate?: number
-      avg_min_return?: number
-    }
-  }
-  tradability?: {
-    execution_flag?: string | null
-    limit_up_distance?: number | null
-  }
-  next_day_plan?: {
-    sell_policy?: string
-  }
-  model?: {
-    model_version?: string | null
-    model_score?: number | null
-    hit_probability?: number | null
-    expected_high_return?: number | null
-    risk_probability?: number | null
-    feature_snapshot?: ModelFeatureSnapshot[]
-  }
-}
+import {
+  candidateRankShiftText,
+  credibilityType,
+  executionFlagText,
+  executionFlagType,
+  formatPercent,
+  formatPrice,
+  formatScore,
+  modelDecisionText,
+  modelDecisionType,
+  modelFeatureText,
+  sellPolicyText,
+} from '../../features/tail-live/formatters'
+import type { SelectionRow } from '../../features/tail-live/types'
 
 defineProps<{
-  rows: TailSelectionRow[]
+  rows: SelectionRow[]
   emptyText: string
   hasModelScores: boolean
 }>()
@@ -178,128 +133,4 @@ defineProps<{
 defineEmits<{
   openStockTrend: [symbol: string]
 }>()
-
-function formatScore(value: unknown) {
-  return typeof value === 'number' ? value.toFixed(4) : '-'
-}
-
-function formatPrice(value: unknown) {
-  return typeof value === 'number' ? value.toFixed(2) : '-'
-}
-
-function formatPercent(value: unknown) {
-  return typeof value === 'number' ? `${(value * 100).toFixed(2)}%` : '-'
-}
-
-function credibilityType(score: unknown) {
-  if (typeof score !== 'number') return 'info'
-  if (score >= 80) return 'success'
-  if (score >= 60) return 'warning'
-  return 'danger'
-}
-
-function executionFlagText(value: unknown) {
-  if (value === 'blocked_limit_up') return '涨停不可买'
-  if (value === 'near_limit_up') return '接近涨停'
-  if (value === 'executable') return '可执行'
-  return '未知'
-}
-
-function executionFlagType(value: unknown) {
-  if (value === 'blocked_limit_up') return 'danger'
-  if (value === 'near_limit_up') return 'warning'
-  if (value === 'executable') return 'success'
-  return 'info'
-}
-
-function sellPolicyText(value: unknown) {
-  if (value === 'open_or_morning_strength') return '开盘/早盘强弱卖'
-  return value ? String(value) : '-'
-}
-
-function modelDecisionText(row: TailSelectionRow) {
-  if (!row.model) return '规则排序'
-  if (isModelPromoted(row)) return '模型提权'
-  if (isModelEliminated(row)) return '模型淘汰'
-  if (row.status === 'selected') return '规则+模型一致'
-  return '模型观察'
-}
-
-function modelDecisionType(row: TailSelectionRow) {
-  if (isModelPromoted(row)) return 'success'
-  if (isModelEliminated(row)) return 'danger'
-  if (row.status === 'selected') return 'warning'
-  return 'info'
-}
-
-function isModelPromoted(row: TailSelectionRow) {
-  return Boolean(
-    row.model
-    && row.status === 'selected'
-    && typeof row.rank === 'number'
-    && typeof row.final_candidate_rank === 'number'
-    && row.rank < row.final_candidate_rank
-  )
-}
-
-function isModelEliminated(row: TailSelectionRow) {
-  return Boolean(
-    row.model
-    && row.status === 'filtered'
-    && row.final_candidate_rank != null
-    && (row.filter_reason === 'outside_model_top_n' || row.filter_reason === 'outside_top_n')
-  )
-}
-
-function candidateRankShiftText(row: TailSelectionRow) {
-  const candidateRank = row.final_candidate_rank ?? '-'
-  const finalRank = row.status === 'selected' ? row.rank ?? '-' : '未入选'
-  return `${candidateRank} → ${finalRank}`
-}
-
-const modelFeatureLabels: Record<string, string> = {
-  daily_ret_5: '5日涨幅',
-  daily_ret_10: '10日涨幅',
-  daily_ret_20: '20日涨幅',
-  daily_volatility_20: '20日波动',
-  ma5_distance: 'MA5距离',
-  ma20_distance: 'MA20距离',
-  avg_amount_20: '20日成交额',
-  amount_ratio_5_20: '5/20成交额',
-  amount_zscore_20: '成交额热度',
-  tail_return_from_1430: '尾盘涨幅',
-  tail_high_return_from_1430: '尾盘高点',
-  tail_pullback_from_high: '高点回撤',
-  tail_volume_ratio: '尾盘量比',
-  last3_close_slope: '近3根斜率',
-  last6_close_slope: '近6根斜率',
-  market_ret_5: '市场5日',
-  market_ret_20: '市场20日',
-  market_breadth_20: '市场宽度',
-  relative_ret_5: '相对5日',
-  relative_ret_20: '相对20日',
-  industry_ret_5: '行业5日',
-  industry_ret_20: '行业20日',
-  industry_breadth_20: '行业宽度',
-  industry_relative_ret_5: '相对行业5日',
-  industry_relative_ret_20: '相对行业20日',
-}
-
-function modelFeatureText(items?: ModelFeatureSnapshot[]) {
-  if (!items?.length) return '-'
-  return items
-    .filter((item) => typeof item.value === 'number')
-    .slice(0, 8)
-    .map((item) => `${modelFeatureLabels[item.feature] ?? item.feature} ${formatModelFeatureValue(item)}`)
-    .join('，')
-}
-
-function formatModelFeatureValue(item: ModelFeatureSnapshot) {
-  if (typeof item.value !== 'number') return '-'
-  if (item.feature.includes('return') || item.feature.includes('distance') || item.feature.includes('slope') || item.feature.includes('breadth')) {
-    return formatPercent(item.value)
-  }
-  if (item.feature.includes('amount')) return `${(item.value / 100000000).toFixed(2)}亿`
-  return item.value.toFixed(2)
-}
 </script>

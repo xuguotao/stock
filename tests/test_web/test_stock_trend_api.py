@@ -33,7 +33,7 @@ def test_stock_trend_api_returns_symbol_trend(tmp_path) -> None:
             "tail_evidence": {"status": "ok", "volume_ratio": 2.1},
         }
 
-    app = create_app(db_path=tmp_path / "jobs.sqlite3", stock_trend_runner=fake_runner)
+    app = create_app(db_path=tmp_path / "jobs.json", stock_trend_runner=fake_runner)
     client = TestClient(app)
 
     response = client.get("/api/stocks/601899.SH/trend?trade_date=2026-06-16&daily_window=60&granularity=1m")

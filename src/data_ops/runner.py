@@ -21,7 +21,14 @@ from src.trading.scheduler import TradingScheduler
 TASK_GROUPS: dict[str, set[str]] = {
     "realtime": {"quote_snapshot_capture", "quote_rollup_refresh"},
     "intraday": {"minute5_intraday_sync"},
-    "maintenance": {"stock_master_sync", "quality_snapshot", "post_close_maintenance", "xdxr_sync"},
+    "maintenance": {
+        "stock_master_sync",
+        "quality_snapshot",
+        "post_close_maintenance",
+        "xdxr_sync",
+        "stock_readiness_snapshot",
+        "stock_readiness_repair",
+    },
 }
 
 
@@ -68,6 +75,8 @@ class DataOpsRunner:
                 continue
             if self.config.task_key and task_config.task_key != self.config.task_key:
                 continue
+            if statuses.get(task_config.task_key) and statuses[task_config.task_key].status == "stale":
+                self._mark_stale_interrupted(task_config.task_key, now)
             decision = should_run_task(
                 task_config,
                 statuses.get(task_config.task_key),
@@ -139,6 +148,19 @@ class DataOpsRunner:
             )
 
         return report
+
+    def _mark_stale_interrupted(self, task_key: str, now: datetime) -> None:
+        message = "上次运行心跳超时，已标记为中断"
+        if hasattr(self.repository, "mark_task_interrupted"):
+            self.repository.mark_task_interrupted(task_key, self.config.runner_id, message, now=now)
+            return
+        self.repository.write_heartbeat(
+            self.config.runner_id,
+            task_key,
+            "failed",
+            encode_progress_message(percent=100, stage="interrupted", message=message),
+            now=now,
+        )
 
     def run_forever(self) -> None:
         while True:

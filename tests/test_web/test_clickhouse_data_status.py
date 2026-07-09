@@ -185,6 +185,33 @@ class PartiallyBrokenClickHouseClient(FakeClickHouseClient):
         return super().execute(query, params)
 
 
+class XdxrTableClickHouseClient(FakeClickHouseClient):
+    def execute(self, query, params=None):
+        normalized = " ".join(query.lower().split())
+        if "from system.tables" in normalized:
+            return [*super().execute(query, params), ("xdxr_info",)]
+        if "from xdxr_info" in normalized:
+            return [(333448, date(1990, 3, 1), date(2026, 7, 15), 7652)]
+        return super().execute(query, params)
+
+
+class BjQuoteExpectationClickHouseClient(FakeClickHouseClient):
+    def execute(self, query, params=None):
+        normalized = " ".join(query.lower().split())
+        if "select symbol, name from stocks final" in normalized:
+            return [
+                ("000001", "平安银行"),
+                ("600000", "浦发银行"),
+                ("920001", "纬达光电"),
+                ("920002", "万达轴承"),
+            ]
+        if "countif(upper(name)" in normalized:
+            return [(4, 4, 0)]
+        if "from stocks" in normalized and "uniqexact(symbol)" in normalized:
+            return [(4, datetime(2026, 6, 1, 8, 30), datetime(2026, 6, 17, 8, 30), 4)]
+        return super().execute(query, params)
+
+
 def test_quote_snapshot_interval_stats_ignores_non_trading_session_gaps() -> None:
     class FakeSnapshotClient:
         def execute(self, query, params=None):
@@ -207,6 +234,31 @@ def test_quote_snapshot_interval_stats_ignores_non_trading_session_gaps() -> Non
     assert stats["missing_rounds"] == 0
     assert stats["missing_rate"] == 0.0
     assert stats["actual_avg_interval_seconds"] == 10.0
+
+
+def test_inspect_clickhouse_database_includes_xdxr_table_health() -> None:
+    payload = inspect_clickhouse_database(client=XdxrTableClickHouseClient(), as_of=date(2026, 6, 17))
+
+    datasets = {row["key"]: row for row in payload["datasets_health"]}
+
+    assert payload["tables"]["xdxr_info"]["row_count"] == 333448
+    assert datasets["xdxr_info"]["status"] == "ok"
+    assert datasets["xdxr_info"]["rows"] == 333448
+    assert datasets["xdxr_info"]["symbols"] == 7652
+    assert datasets["xdxr_info"]["latest"] == "2026-07-15"
+
+
+def test_quote_snapshot_expected_symbols_excludes_bj_only_gap() -> None:
+    payload = inspect_clickhouse_database(client=BjQuoteExpectationClickHouseClient(), as_of=date(2026, 6, 17))
+
+    datasets = {row["key"]: row for row in payload["datasets_health"]}
+
+    assert payload["quality"]["expected_non_st_symbols"] == 4
+    assert payload["quality"]["expected_strategy_tradable_symbols"] == 2
+    assert payload["quality"]["quote_snapshots"]["expected_symbols"] == 2
+    assert payload["quality"]["quote_snapshots"]["raw"]["missing_symbols"] == 0
+    assert datasets["stock_quote_snapshots"]["expected_symbols"] == 2
+    assert datasets["stock_quote_snapshots"]["status"] == "ok"
 
 
 def test_inspect_clickhouse_database_returns_coverage() -> None:
