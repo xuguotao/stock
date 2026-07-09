@@ -38,8 +38,13 @@ def sync_clickhouse_minute5_kline(
     user: str | None = None,
     password: str | None = None,
     database: str | None = None,
+    use_tail_sync: bool = True,
 ) -> dict[str, Any]:
-    """Fetch 5-minute bars and append missing rows into ClickHouse."""
+    """Fetch 5-minute bars and append missing rows into ClickHouse.
+
+    Args:
+        use_tail_sync: If True and most symbols are complete, only sync tail buckets.
+    """
     clickhouse = client or _client(host=host, user=user, password=password, database=database)
     data_source = source or _default_intraday_source(trade_date)
     _report(progress, 5, "preparing", "准备 ClickHouse 5m 分钟线更新")
@@ -50,6 +55,16 @@ def sync_clickhouse_minute5_kline(
         include_st=include_st,
         limit=limit,
     )
+
+    # Check cache for complete symbols
+    cached_complete = _get_complete_symbols_cache(trade_date)
+    if cached_complete:
+        original_count = len(target_symbols)
+        target_symbols = [s for s in target_symbols if s not in cached_complete]
+        skipped_cached = original_count - len(target_symbols)
+        _report(progress, 6, "cache", f"缓存过滤：跳过 {skipped_cached} 只已完整标的")
+    else:
+        skipped_cached = 0
 
     # Determine initial target datetime
     target_dt = _target_datetime(trade_date, target_time=target_time)
@@ -73,6 +88,59 @@ def sync_clickhouse_minute5_kline(
             incremental_watermarks[code] = latest
         else:
             gap_codes.add(code)
+
+    # Tail-only sync optimization
+    if use_tail_sync and len(symbols_to_fetch) < len(target_symbols) * 0.3 and len(target_symbols) > 0:
+        # Most symbols are complete, use tail-only sync
+        _report(progress, 10, "tail_sync", f"尾部同步模式：{len(symbols_to_fetch)} 只标的需要更新")
+
+        # Check which symbols are missing tail buckets
+        missing_tail = _check_tail_coverage(clickhouse, trade_date, symbols_to_fetch)
+
+        if missing_tail:
+            result = _sync_tail_bars(
+                clickhouse, data_source, missing_tail, trade_date, progress=progress
+            )
+
+            # Update cache with newly complete symbols
+            if result["inserted_rows"] > 0 or result["success"] > 0:
+                newly_complete = set(target_symbols) - set(missing_tail)
+                existing_cache = _get_complete_symbols_cache(trade_date)
+                _update_complete_symbols_cache(trade_date, existing_cache | newly_complete)
+
+            return {
+                "trade_date": trade_date.isoformat(),
+                "target_datetime": _stringify_dt(target_dt),
+                "target_symbols": len(target_symbols),
+                "skipped": skipped_cached + (len(target_symbols) - len(symbols_to_fetch)),
+                "partial": False,
+                "remaining_symbols": 0,
+                "success": result["success"],
+                "no_data": result["no_data"],
+                "failed": result["failed"],
+                "inserted_rows": result["inserted_rows"],
+                "failures": [],
+                "coverage_after": _minute5_coverage(clickhouse),
+                "sync_mode": "tail",
+            }
+        else:
+            # All symbols have tail buckets, update cache
+            _update_complete_symbols_cache(trade_date, set(target_symbols))
+            return {
+                "trade_date": trade_date.isoformat(),
+                "target_datetime": _stringify_dt(target_dt),
+                "target_symbols": len(target_symbols),
+                "skipped": skipped_cached + len(target_symbols),
+                "partial": False,
+                "remaining_symbols": 0,
+                "success": 0,
+                "no_data": 0,
+                "failed": 0,
+                "inserted_rows": 0,
+                "failures": [],
+                "coverage_after": _minute5_coverage(clickhouse),
+                "sync_mode": "tail_all_complete",
+            }
 
     remaining_before_batch = len(symbols_to_fetch)
     if max_fetch_symbols and max_fetch_symbols > 0:
@@ -199,6 +267,13 @@ def sync_clickhouse_minute5_kline(
         "failures": failures[:50],
         "coverage_after": _minute5_coverage(clickhouse),
     }
+
+    # Update cache: mark successfully synced symbols as complete
+    if not result["partial"] and failed == 0:
+        complete_symbols = set(target_symbols) - set(no_data_symbols) - set(f["symbol"] for f in failures)
+        existing_cache = _get_complete_symbols_cache(trade_date)
+        _update_complete_symbols_cache(trade_date, existing_cache | complete_symbols)
+
     _report(progress, 100, "completed", "ClickHouse 5m 分钟线更新完成")
     return result
 
@@ -694,3 +769,143 @@ def _report(progress: ProgressCallback | None, percent: int, stage: str, message
             progress(percent, stage, message, **extra)
         except TypeError:
             progress(percent, stage, message)
+
+
+# ── Incremental sync cache ───────────────────────────────────────────────────
+
+# Global cache: {trade_date: set(complete_symbols)}
+_complete_symbols_cache: dict[date, set[str]] = {}
+_CACHE_TTL_SECONDS = 86400  # 24 hours
+_cache_timestamps: dict[date, datetime] = {}
+
+
+def _get_complete_symbols_cache(trade_date: date) -> set[str]:
+    """Get cached complete symbols for a trade date."""
+    now = datetime.now()
+    cached = _complete_symbols_cache.get(trade_date)
+    ts = _cache_timestamps.get(trade_date)
+
+    if cached is not None and ts is not None:
+        if (now - ts).total_seconds() < _CACHE_TTL_SECONDS:
+            return cached
+
+    # Cache expired or not set, return empty set
+    return set()
+
+
+def _update_complete_symbols_cache(trade_date: date, symbols: set[str]) -> None:
+    """Update cache with newly complete symbols."""
+    _complete_symbols_cache[trade_date] = symbols
+    _cache_timestamps[trade_date] = datetime.now()
+
+
+def _check_tail_coverage(
+    client: Any,
+    trade_date: date,
+    symbols: list[str],
+    tail_buckets: list[str] | None = None,
+) -> list[str]:
+    """Check which symbols are missing tail buckets.
+
+    Returns list of symbols that need tail sync.
+    """
+    if tail_buckets is None:
+        tail_buckets = ["14:50", "14:55", "15:00"]
+
+    codes = [symbol.split(".")[0].zfill(6) for symbol in symbols]
+    if not codes:
+        return []
+
+    # Build time filter for tail buckets
+    time_conditions = []
+    for bucket in tail_buckets:
+        h, m = map(int, bucket.split(":"))
+        time_conditions.append(f"(toHour(datetime) = {h} AND toMinute(datetime) = {m})")
+
+    time_filter = " OR ".join(time_conditions)
+
+    rows = client.execute(
+        f"""
+        SELECT DISTINCT symbol
+        FROM (
+            SELECT e.symbol
+            FROM (SELECT {', '.join(f'{repr(c)} AS symbol' for c in codes)}) e
+            LEFT JOIN (
+                SELECT DISTINCT symbol
+                FROM minute5_kline
+                WHERE toDate(datetime) = %(trade_date)s
+                AND ({time_filter})
+            ) mk ON e.symbol = mk.symbol
+            WHERE mk.symbol IS NULL
+        )
+        """,
+        {"trade_date": trade_date},
+    )
+
+    missing = [str(row[0]) for row in rows]
+    return missing
+
+
+def _sync_tail_bars(
+    client: Any,
+    data_source: Any,
+    symbols: list[str],
+    trade_date: date,
+    tail_buckets: list[str] | None = None,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """Sync only tail bars for symbols missing them."""
+    if tail_buckets is None:
+        tail_buckets = ["14:50", "14:55", "15:00"]
+
+    _report(progress, 10, "tail_sync", f"尾部同步：{len(symbols)} 只标的")
+
+    rows_to_insert: list[tuple[Any, ...]] = []
+    success = 0
+    failed = 0
+    no_data = 0
+
+    for i, symbol in enumerate(symbols):
+        try:
+            bars = data_source.fetch_intraday_bars(symbol, trade_date, "5m")
+            if bars is None or bars.empty:
+                no_data += 1
+                continue
+
+            code = symbol.split(".")[0].zfill(6)
+            all_rows = _bar_rows(symbol, bars)
+
+            # Filter to only tail buckets
+            tail_rows = []
+            for row in all_rows:
+                dt = row[1]
+                time_str = f"{dt.hour:02d}:{dt.minute:02d}"
+                if time_str in tail_buckets:
+                    tail_rows.append(row)
+
+            if tail_rows:
+                # Check which tail rows are missing
+                existing = _existing_datetimes_by_symbol(client, trade_date, [code])
+                existing_dts = existing.get(code, set())
+                missing = [r for r in tail_rows if r[1] not in existing_dts]
+                rows_to_insert.extend(missing)
+                success += 1
+            else:
+                no_data += 1
+
+        except Exception as exc:
+            failed += 1
+
+        if progress and (i + 1) % 100 == 0:
+            _report(progress, 10 + int((i + 1) / len(symbols) * 80), "tail_sync", f"尾部同步：{i + 1}/{len(symbols)}")
+
+    # Insert missing tail rows
+    if rows_to_insert:
+        _insert_rows_batched(client, rows_to_insert, batch_size=50000)
+
+    return {
+        "success": success,
+        "failed": failed,
+        "no_data": no_data,
+        "inserted_rows": len(rows_to_insert),
+    }
