@@ -476,9 +476,23 @@ async function loadMinute5QualitySymbolBars(row: Minute5QualitySampleItem) {
 
 async function repairInvalidRows() {
   if (!minute5QualityDate.value || !minute5InvalidRows.value.length) return
+  const count = minute5InvalidRows.value.length
+  const symbols = Array.from(new Set(minute5InvalidRows.value.map((row) => row.symbol)))
+
+  const { ElMessageBox } = await import('element-plus')
+  try {
+    await ElMessageBox.confirm(
+      `将对 ${minute5QualityDate.value} 修复 ${count} 条异常记录（${symbols.length} 只标的）：\n` +
+      `方式：删除异常行并重新拉取`,
+      '确认修复',
+      { confirmButtonText: '开始修复', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+
   repairingInvalidRows.value = true
   try {
-    const symbols = Array.from(new Set(minute5InvalidRows.value.map((row) => row.symbol)))
     const response = await api.repairMinute5InvalidRows({
       trade_date: minute5QualityDate.value,
       symbols,
@@ -487,7 +501,7 @@ async function repairInvalidRows() {
     })
     const completed = await pollInvalidRepairJob(response.job_id)
     if (completed) {
-      ElMessage.success('异常分钟线修复完成')
+      ElMessage.success(`${minute5QualityDate.value} 异常修复完成`)
       await loadMinute5Quality()
     }
   } catch (error) {
@@ -499,6 +513,24 @@ async function repairInvalidRows() {
 
 async function repairMissingRows() {
   if (!minute5QualityDate.value || !hasMinute5MissingRows.value) return
+  const count = minute5MissingSymbols.value.length
+  const partialCount = minute5MissingSymbols.value.filter((s) => s.bars > 0).length
+  const missingCount = minute5MissingSymbols.value.filter((s) => s.bars === 0).length
+
+  const { ElMessageBox } = await import('element-plus')
+  try {
+    await ElMessageBox.confirm(
+      `将对 ${minute5QualityDate.value} 执行缺口回补：\n` +
+      `- 共 ${count} 只标的缺口\n` +
+      `- 部分缺口（可回补）：${partialCount} 只\n` +
+      `- 完全缺失：${missingCount} 只`,
+      '确认回补',
+      { confirmButtonText: '开始回补', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+
   repairingMissingRows.value = true
   try {
     const response = await api.repairMinute5MissingRows({
@@ -508,7 +540,7 @@ async function repairMissingRows() {
     })
     const completed = await pollMissingRepairJob(response.job_id)
     if (completed) {
-      ElMessage.success('缺口分钟线回补完成')
+      ElMessage.success(`${minute5QualityDate.value} 缺口回补完成`)
       await loadMinute5Quality()
     }
   } catch (error) {
