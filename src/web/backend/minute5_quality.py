@@ -480,6 +480,20 @@ class Minute5QualityService:
                     group by trade_date, symbol
                 ) o on o.trade_date = e.trade_date and o.symbol = e.symbol
                 group by e.trade_date
+            ),
+            missing_symbol_detail as (
+                select
+                    e.trade_date,
+                    countIf(ifNull(o.bars, 0) > 0 and ifNull(o.bars, 0) < %(expected_buckets)s) as partial,
+                    countIf(ifNull(o.bars, 0) = 0) as complete_missing
+                from expected_symbol_rows e
+                left join (
+                    select toDate(datetime) as trade_date, symbol, uniqExact(datetime) as bars
+                    from minute5_kline
+                    where toDate(datetime) >= %(start)s and toDate(datetime) <= %(end)s
+                    group by trade_date, symbol
+                ) o on o.trade_date = e.trade_date and o.symbol = e.symbol
+                group by e.trade_date
             )
             select
                 e.trade_date,
@@ -489,10 +503,13 @@ class Minute5QualityService:
                 greatest(0, %(expected_buckets)s - ifNull(o.actual_buckets, 0)) as missing_buckets,
                 ifNull(c.missing_symbols, e.expected_symbols) as missing_symbols,
                 ifNull(o.invalid_rows, 0) as invalid_rows,
-                o.latest_bucket
+                o.latest_bucket,
+                ifNull(d.partial, 0) as partial_missing,
+                ifNull(d.complete_missing, 0) as complete_missing
             from expected_symbols e
             left join observed o on o.trade_date = e.trade_date
             left join symbol_coverage c on c.trade_date = e.trade_date
+            left join missing_symbol_detail d on d.trade_date = e.trade_date
             order by e.trade_date desc
             limit %(limit)s
             """,
@@ -514,6 +531,8 @@ class Minute5QualityService:
                     "missing_symbols": missing_symbols,
                     "invalid_rows": invalid_rows,
                     "latest_bucket": _format_datetime(row[7]),
+                    "partial_missing": int(row[8] or 0),
+                    "complete_missing": int(row[9] or 0),
                     "status": status,
                 }
             )
@@ -527,6 +546,8 @@ class Minute5QualityService:
                 "missing_buckets": sum(int(item["missing_buckets"]) for item in items),
                 "missing_symbols": sum(int(item["missing_symbols"]) for item in items),
                 "invalid_rows": sum(int(item["invalid_rows"]) for item in items),
+                "partial_missing": sum(int(item["partial_missing"]) for item in items),
+                "complete_missing": sum(int(item["complete_missing"]) for item in items),
             },
         }
 

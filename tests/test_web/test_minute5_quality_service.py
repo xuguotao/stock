@@ -37,8 +37,8 @@ class FakeMinute5Client:
             ]
         if "with candidate_dates as" in normalized and "latest_daily as" in normalized:
             return [
-                (date(2026, 7, 8), 3, 48, 46, 2, 1, 1, datetime(2026, 7, 8, 14, 50)),
-                (date(2026, 7, 7), 3, 48, 48, 0, 0, 0, datetime(2026, 7, 7, 15, 0)),
+                (date(2026, 7, 8), 3, 48, 46, 2, 1, 1, datetime(2026, 7, 8, 14, 50), 1, 0),
+                (date(2026, 7, 7), 3, 48, 48, 0, 0, 0, datetime(2026, 7, 7, 15, 0), 0, 0),
             ]
         return []
 
@@ -160,9 +160,11 @@ def test_minute5_quality_builds_backfill_plan_summary() -> None:
         "missing_symbols": 1,
         "invalid_rows": 1,
         "latest_bucket": "2026-07-08 14:50:00",
+        "partial_missing": 1,
+        "complete_missing": 0,
         "status": "needs_backfill",
     }
-    assert payload["summary"] == {"days": 2, "needs_backfill_days": 1, "missing_buckets": 2, "missing_symbols": 1, "invalid_rows": 1}
+    assert payload["summary"] == {"days": 2, "needs_backfill_days": 1, "missing_buckets": 2, "missing_symbols": 1, "invalid_rows": 1, "partial_missing": 1, "complete_missing": 0}
 
 
 def test_minute5_quality_backfill_plan_avoids_ambiguous_final_group_by() -> None:
