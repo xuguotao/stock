@@ -65,6 +65,8 @@ class Minute5QualityService:
         )
         latest_date = self._latest_date()
         expected_symbols = self._expected_symbols()
+        latest_day_coverage = self._incomplete_symbols_on_latest_date(latest_date)
+        incomplete_symbols = latest_day_coverage["partial"] + latest_day_coverage["missing"]
         latest_raw_bucket, latest_raw_symbols = self._latest_raw_bucket(latest_date)
         complete_bucket, complete_symbols = self._latest_complete_bucket(latest_date, expected_symbols)
         invalid_ohlc = (
@@ -72,7 +74,15 @@ class Minute5QualityService:
             + invalid.get("high_invalid", 0)
             + invalid.get("low_invalid", 0)
         )
-        status = "ok" if duplicate_groups == 0 and invalid_ohlc == 0 and non_5m_boundary == 0 and non_market_session == 0 else "warning"
+        status = (
+            "ok"
+            if duplicate_groups == 0
+            and invalid_ohlc == 0
+            and non_5m_boundary == 0
+            and non_market_session == 0
+            and incomplete_symbols == 0
+            else "warning"
+        )
         return {
             "table": "minute5_kline",
             "rows": int(row[0] or 0),
@@ -86,6 +96,13 @@ class Minute5QualityService:
                 "complete_bucket": _format_datetime(complete_bucket),
                 "complete_symbols": complete_symbols,
                 "complete_threshold": round(expected_symbols * MIN_COMPLETE_BUCKET_COVERAGE),
+            },
+            "latest_day": {
+                "trade_date": _format_date(latest_date),
+                "complete_symbols": latest_day_coverage["complete"],
+                "partial_symbols": latest_day_coverage["partial"],
+                "missing_symbols": latest_day_coverage["missing"],
+                "expected_symbols": expected_symbols,
             },
             "issues": {
                 "duplicate_groups": duplicate_groups,
@@ -648,6 +665,44 @@ class Minute5QualityService:
             """
         )
         return int(rows[0][0] or 0) if rows else 0
+
+    def _incomplete_symbols_on_latest_date(self, trade_date: date | None = None) -> dict[str, int]:
+        target = trade_date or self._latest_date()
+        if target is None:
+            return {"complete": 0, "partial": 0, "missing": 0}
+        rows = self._execute(
+            f"""
+            select
+                countIf(bars >= %(expected)s) as complete,
+                countIf(bars > 0 and bars < %(expected)s) as partial,
+                countIf(bars = 0) as missing
+            from (
+                select e.symbol, ifNull(o.bars, 0) as bars
+                from (
+                    select s.symbol
+                    from stocks AS s
+                    inner join daily_kline AS d
+                        on d.symbol = s.symbol and d.date = (select max(date) from daily_kline)
+                    where upper(s.market) in ('SH', 'SZ')
+                        and {NON_ST_STOCK_PREDICATE}
+                    group by s.symbol
+                ) e
+                left join (
+                    select symbol, uniqExact(datetime) as bars
+                    from minute5_kline
+                    where toDate(datetime) = %(trade_date)s
+                    group by symbol
+                ) o on o.symbol = e.symbol
+            )
+            """,
+            {"trade_date": target, "expected": EXPECTED_FULL_DAY_BUCKETS},
+        )
+        row = rows[0] if rows else (0, 0, 0)
+        return {
+            "complete": int(row[0] or 0),
+            "partial": int(row[1] or 0),
+            "missing": int(row[2] or 0),
+        }
 
 
 def _normalize_symbol(value: str) -> str:

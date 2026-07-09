@@ -24,6 +24,8 @@ class FakeMinute5Client:
             return [(datetime(2026, 7, 8, 11, 20), 3)]
         if "group by datetime" in normalized and "order by datetime desc" in normalized and "limit 1" in normalized:
             return [(datetime(2026, 7, 8, 11, 25), 2)]
+        if "countif(bars >= " in normalized and "countif(bars > 0 and bars < " in normalized:
+            return [(2, 1, 0)]  # 2 complete, 1 partial (000002 has 46 bars), 0 missing
         if "from ( select s.symbol" in normalized and "inner join daily_kline" in normalized:
             return [(3,)]
         if "expected_symbols as (" in normalized and "observed_symbols as (" in normalized:
@@ -97,6 +99,12 @@ def test_minute5_quality_summary_rolls_up_core_integrity_signals() -> None:
     assert payload["latest"]["complete_bucket"] == "2026-07-08 11:20:00"
     assert payload["issues"]["invalid_ohlc"] == 1
     assert payload["status"] == "warning"
+    assert "latest_day" in payload
+    assert payload["latest_day"]["complete_symbols"] == 2
+    assert payload["latest_day"]["partial_symbols"] == 1
+    assert payload["latest_day"]["missing_symbols"] == 0
+    assert payload["latest_day"]["expected_symbols"] == 3
+    assert payload["latest_day"]["trade_date"] == "2026-07-08"
 
 
 def test_minute5_quality_lists_missing_symbols_for_backfill_targeting() -> None:
@@ -207,3 +215,36 @@ def test_minute5_quality_delete_symbol_day_rows_submits_targeted_mutation() -> N
 
     assert result == {"trade_date": "2026-07-08", "deleted_symbols": ["000001", "600000"], "mutation": "submitted"}
     assert client.mutations[0][1] == {"trade_date": date(2026, 7, 8), "symbols": ("000001", "600000")}
+
+
+def test_minute5_quality_summary_status_reflects_incomplete_symbols() -> None:
+    class CleanClient:
+        def execute(self, query, params=None):
+            normalized = " ".join(query.lower().split())
+            if "count(), uniqexact(symbol), min(datetime), max(datetime)" in normalized:
+                return [(120, 3, datetime(2026, 7, 1, 9, 35), datetime(2026, 7, 8, 15, 0))]
+            if "group by symbol, datetime" in normalized and "having count() > 1" in normalized:
+                return [(0, 0)]
+            if "countif(open <= 0" in normalized:
+                return [(0, 0, 0, 0, 0, 0)]  # no invalid
+            if "tominute(datetime) % 5" in normalized:
+                return [(0,)]
+            if "not ((tohour(datetime)" in normalized:
+                return [(0,)]
+            if "max(todate(datetime))" in normalized:
+                return [(date(2026, 7, 8),)]
+            if "covered >= greatest" in normalized:
+                return [(datetime(2026, 7, 8, 15, 0), 3)]
+            if "group by datetime" in normalized and "order by datetime desc" in normalized and "limit 1" in normalized:
+                return [(datetime(2026, 7, 8, 15, 0), 3)]
+            if "countif(bars >= " in normalized:
+                return [(2, 1, 0)]  # 1 incomplete
+            if "from ( select s.symbol" in normalized and "inner join daily_kline" in normalized:
+                return [(3,)]
+            return []
+
+    service = Minute5QualityService(client=CleanClient())
+    payload = service.summary()
+    # invalid_ohlc=0, duplicates=0, boundary=0, session=0, but incomplete=1
+    assert payload["status"] == "warning"
+    assert payload["latest_day"]["partial_symbols"] == 1
