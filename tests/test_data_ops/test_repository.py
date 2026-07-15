@@ -72,6 +72,7 @@ def test_repository_ensures_tables_and_seeds_defaults() -> None:
             "mootdx_stock_catalog_sync",
             "mootdx_daily_kline_sync",
             "mootdx_daily_kline_reconcile",
+            "mootdx_xdxr_sync",
             "stock_universe_profile_refresh",
         }
 
@@ -120,6 +121,31 @@ def test_repository_adds_mootdx_connection_defaults_without_overwriting_schedule
         "limit": 300,
         "rate_limit": 0.02,
         "timeout": 15,
+        "bestip": False,
+    }
+
+
+def test_repository_adds_mootdx_xdxr_connection_defaults_without_overwriting_schedule() -> None:
+    client = FakeClickHouseClient()
+    repo = ClickHouseDataOpsRepository(client=client)
+    repo.upsert_task_config(
+        DataOpsTaskConfig(
+            task_key="mootdx_xdxr_sync",
+            enabled=True,
+            schedule_kind="daily_time",
+            schedule_config={"time": "17:45", "limit": 300},
+        ),
+        now=datetime(2026, 7, 13, 23, 0),
+    )
+
+    repo.seed_default_configs(now=datetime(2026, 7, 13, 23, 1))
+
+    xdxr = repo._get_config("mootdx_xdxr_sync")
+    assert xdxr.schedule_config == {
+        "time": "17:45",
+        "limit": 300,
+        "rate_limit": 0.02,
+        "timeout": 10,
         "bestip": False,
     }
 

@@ -534,6 +534,11 @@ def _should_upgrade_default_config(current: DataOpsTaskConfig, default: DataOpsT
     ):
         return True
     return (
-        current.task_key in {"mootdx_stock_catalog_sync", "mootdx_daily_kline_sync", "mootdx_daily_kline_reconcile"}
+        current.task_key in {
+            "mootdx_stock_catalog_sync",
+            "mootdx_daily_kline_sync",
+            "mootdx_daily_kline_reconcile",
+            "mootdx_xdxr_sync",
+        }
         and any(key not in current.schedule_config for key in ("rate_limit", "timeout", "bestip"))
     )

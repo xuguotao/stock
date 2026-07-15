@@ -78,7 +78,8 @@ def test_mootdx_handlers_run_independent_catalog_daily_and_reconciliation_tasks(
     assert handlers["mootdx_stock_catalog_sync"]({"trade_date": "2026-07-09"})["tasks"] == ["stock_catalog"]
     assert handlers["mootdx_daily_kline_sync"]({"trade_date": "2026-07-09"})["tasks"] == ["stock_kline_daily"]
     assert handlers["mootdx_daily_kline_reconcile"]({"trade_date": "2026-07-09"})["daily_reconcile"] is True
-    assert [call["daily_reconcile"] for call in calls] == [False, False, True]
+    assert handlers["mootdx_xdxr_sync"]({"trade_date": "2026-07-09"})["tasks"] == ["xdxr"]
+    assert [call["daily_reconcile"] for call in calls] == [False, False, True, False]
     assert all(call["trade_date"] == date(2026, 7, 9) for call in calls)
 
 

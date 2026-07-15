@@ -29,6 +29,7 @@ def test_default_task_configs_cover_first_runner_tasks() -> None:
         "mootdx_stock_catalog_sync",
         "mootdx_daily_kline_sync",
         "mootdx_daily_kline_reconcile",
+        "mootdx_xdxr_sync",
         "stock_universe_profile_refresh",
     ]
     assert all(config.enabled for config in configs if config.task_key != "stock_readiness_repair")
@@ -39,9 +40,13 @@ def test_default_task_configs_cover_first_runner_tasks() -> None:
     mootdx_catalog = next(config for config in configs if config.task_key == "mootdx_stock_catalog_sync")
     mootdx_daily = next(config for config in configs if config.task_key == "mootdx_daily_kline_sync")
     mootdx_reconcile = next(config for config in configs if config.task_key == "mootdx_daily_kline_reconcile")
+    mootdx_xdxr = next(config for config in configs if config.task_key == "mootdx_xdxr_sync")
     assert mootdx_catalog.schedule_config == {"time": "08:30", "rate_limit": 0.02, "timeout": 15, "bestip": False}
     assert mootdx_daily.schedule_config == {"time": "15:35", "rate_limit": 0.02, "timeout": 15, "bestip": False}
     assert mootdx_reconcile.schedule_config == {"time": "16:05", "rate_limit": 0.02, "timeout": 15, "bestip": False}
+    assert mootdx_xdxr.schedule_config == {"time": "17:10", "rate_limit": 0.02, "timeout": 10, "bestip": False}
+    assert mootdx_xdxr.max_runtime_seconds == 900
+    assert mootdx_xdxr.stale_after_seconds == 300
     universe_profile = next(config for config in configs if config.task_key == "stock_universe_profile_refresh")
     assert universe_profile.schedule_config["time"] == "16:15"
     assert universe_profile.schedule_config["min_average_amount"] == 10_000_000

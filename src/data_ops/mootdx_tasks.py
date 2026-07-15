@@ -60,6 +60,16 @@ MOOTDX_TASK_DEFINITIONS = (
         daily_reconcile=True,
     ),
     MootdxTaskDefinition(
+        task_key="mootdx_xdxr_sync",
+        label="除权除息同步",
+        description="同步 Mootdx 历史除权除息（XDXR）信息，并保留逐标的同步审计。",
+        sync_task="xdxr",
+        schedule_kind="daily_time",
+        schedule_config={"time": "17:10", "rate_limit": 0.02, "timeout": 10, "bestip": False},
+        max_runtime_seconds=900,
+        stale_after_seconds=300,
+    ),
+    MootdxTaskDefinition(
         task_key="stock_universe_profile_refresh",
         label="可用股票池标签刷新",
         description="按目录与日线事实重算全项目统一的可用股票池与流动性标签。",
