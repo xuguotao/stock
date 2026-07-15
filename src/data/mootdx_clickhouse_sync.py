@@ -208,10 +208,10 @@ def _run_task(
     if task == "index_kline":
         return {"mootdx_index_kline": _index_kline_rows(source, frequencies)}
     if task == "xdxr":
-        rows, xdxr_diagnostics = _xdxr_rows(source, symbols)
+        rows, audit_rows, xdxr_diagnostics = _xdxr_rows(source, symbols, run_id=run_id)
         if diagnostics is not None:
             diagnostics["xdxr"] = xdxr_diagnostics
-        return {"mootdx_xdxr": rows}
+        return {"mootdx_xdxr": rows, "mootdx_xdxr_symbol_runs": audit_rows}
     if task == "finance_snapshot":
         return {"mootdx_finance_snapshot": _finance_rows(source, symbols)}
     if task == "minutes_probe":
@@ -1003,22 +1003,46 @@ def _index_kline_rows(source: Any, frequencies: list[str]) -> list[tuple]:
     return rows
 
 
-def _xdxr_rows(source: Any, symbols: list[str]) -> tuple[list[tuple], dict[str, Any]]:
+def _xdxr_rows(source: Any, symbols: list[str], *, run_id: str = "") -> tuple[list[tuple], list[tuple], dict[str, Any]]:
     ingested_at = _now()
-    rows = []
-    empty_symbols = []
-    failed_symbols = []
+    rows: list[tuple] = []
+    audit_rows: list[tuple] = []
+    empty_symbols: list[str] = []
+    success_symbols: list[str] = []
+    failed_symbols: list[dict[str, str]] = []
     invalid_event_rows = 0
+    request_seconds = 0.0
+    parse_seconds = 0.0
+    consecutive_errors = 0
+    circuit_breaker_triggered = False
     for symbol in symbols:
+        requested_at = _now()
+        request_started = perf_counter()
         try:
             frame = source.fetch_xdxr(symbol)
         except Exception as exc:  # noqa: BLE001 - xdxr diagnostics should keep the batch auditable.
-            failed_symbols.append({"symbol": symbol, "error": str(exc)[:160]})
+            request_ms = (perf_counter() - request_started) * 1000
+            request_seconds += request_ms / 1000
+            error = f"{type(exc).__name__}: {str(exc)[:160]}"
+            failed_symbols.append({"symbol": symbol, "error": error})
+            audit_rows.append((run_id, symbol, requested_at, "error", 0, request_ms, None, error, ""))
+            consecutive_errors += 1
+            if consecutive_errors >= 3:
+                circuit_breaker_triggered = True
+                break
             continue
+        request_ms = (perf_counter() - request_started) * 1000
+        request_seconds += request_ms / 1000
+        parse_started = perf_counter()
         frame = _safe_frame(frame)
         if frame.empty:
             empty_symbols.append(symbol)
+            parse_ms = (perf_counter() - parse_started) * 1000
+            parse_seconds += parse_ms / 1000
+            audit_rows.append((run_id, symbol, requested_at, "empty", 0, request_ms, parse_ms, "", _json(list(frame.columns))))
+            consecutive_errors = 0
             continue
+        symbol_event_rows = 0
         for _, row in _safe_frame(frame).iterrows():
             event_date = _ymd_date(row)
             if event_date is None:
@@ -1041,16 +1065,36 @@ def _xdxr_rows(source: Any, symbols: list[str]) -> tuple[list[tuple], dict[str, 
                 ingested_at,
                 _json(row.to_dict()),
             ))
+            symbol_event_rows += 1
+        parse_ms = (perf_counter() - parse_started) * 1000
+        parse_seconds += parse_ms / 1000
+        success_symbols.append(symbol)
+        audit_rows.append((
+            run_id,
+            symbol,
+            requested_at,
+            "success",
+            symbol_event_rows,
+            request_ms,
+            parse_ms,
+            "",
+            _json(list(frame.columns)),
+        ))
+        consecutive_errors = 0
     diagnostics = {
         "target_symbols": len(symbols),
-        "success_symbols": len(symbols) - len(failed_symbols),
+        "requested_symbols": len(audit_rows),
+        "success_symbols": len(success_symbols),
         "event_rows": len(rows),
         "empty_symbols_count": len(empty_symbols),
         "invalid_event_rows": invalid_event_rows,
         "failed_symbols_count": len(failed_symbols),
         "failed_symbols_sample": failed_symbols[:20],
+        "request_seconds": round(request_seconds, 6),
+        "parse_seconds": round(parse_seconds, 6),
+        "circuit_breaker_triggered": circuit_breaker_triggered,
     }
-    return rows, diagnostics
+    return rows, audit_rows, diagnostics
 
 
 def _finance_rows(source: Any, symbols: list[str]) -> list[tuple]:
@@ -1526,6 +1570,21 @@ MOOTDX_TABLE_SQL = [
     engine = ReplacingMergeTree(ingested_at)
     partition by toYYYYMM(event_date)
     order by (symbol, event_date, category)
+    """,
+    """
+    create table if not exists mootdx_xdxr_symbol_runs (
+        run_id String,
+        symbol String,
+        requested_at DateTime,
+        status LowCardinality(String),
+        event_rows UInt32,
+        request_ms Nullable(Float64),
+        parse_ms Nullable(Float64),
+        error String,
+        raw_columns String
+    )
+    engine = ReplacingMergeTree(requested_at)
+    order by (run_id, symbol)
     """,
     """
     create table if not exists mootdx_finance_snapshot (

@@ -1212,12 +1212,75 @@ def test_xdxr_rows_preserve_nulls_skip_invalid_dates_and_report_diagnostics() ->
     assert rows[0][8] is None
     assert rows[0][9] is None
     assert rows[1][8] is None
-    assert diagnostics["xdxr"] == {
+    assert {key: diagnostics["xdxr"][key] for key in (
+        "target_symbols",
+        "requested_symbols",
+        "success_symbols",
+        "event_rows",
+        "empty_symbols_count",
+        "invalid_event_rows",
+        "failed_symbols_count",
+        "failed_symbols_sample",
+        "circuit_breaker_triggered",
+    )} == {
         "target_symbols": 2,
-        "success_symbols": 2,
+        "requested_symbols": 2,
+        "success_symbols": 1,
         "event_rows": 2,
         "empty_symbols_count": 1,
         "invalid_event_rows": 1,
         "failed_symbols_count": 0,
         "failed_symbols_sample": [],
+        "circuit_breaker_triggered": False,
     }
+    assert diagnostics["xdxr"]["request_seconds"] >= 0
+    assert diagnostics["xdxr"]["parse_seconds"] >= 0
+
+
+def test_xdxr_task_writes_per_symbol_audits_and_stops_after_three_errors() -> None:
+    from src.data.mootdx_clickhouse_sync import _run_task
+
+    class AuditedXdxrSource:
+        def fetch_xdxr(self, symbol):
+            if symbol in {"000003.SZ", "000004.SZ", "000005.SZ"}:
+                raise RuntimeError(f"source unavailable: {symbol}")
+            if symbol == "000002.SZ":
+                return pd.DataFrame()
+            return pd.DataFrame([{
+                "year": 2026,
+                "month": 7,
+                "day": 14,
+                "category": 1,
+                "name": "分红",
+            }])
+
+    diagnostics = {}
+    result = _run_task(
+        task="xdxr",
+        source=AuditedXdxrSource(),
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ", "000005.SZ", "000006.SZ"],
+        run_id="xdxr-audit-run",
+        trade_date=date(2026, 7, 14),
+        frequencies=["daily"],
+        diagnostics=diagnostics,
+    )
+
+    assert [(row[0], row[1], row[3]) for row in result["mootdx_xdxr_symbol_runs"]] == [
+        ("xdxr-audit-run", "000001.SZ", "success"),
+        ("xdxr-audit-run", "000002.SZ", "empty"),
+        ("xdxr-audit-run", "000003.SZ", "error"),
+        ("xdxr-audit-run", "000004.SZ", "error"),
+        ("xdxr-audit-run", "000005.SZ", "error"),
+    ]
+    assert result["mootdx_xdxr_symbol_runs"][0][4] == 1
+    assert result["mootdx_xdxr_symbol_runs"][1][4] == 0
+    assert result["mootdx_xdxr_symbol_runs"][2][7].startswith("RuntimeError: source unavailable")
+    assert diagnostics["xdxr"]["target_symbols"] == 6
+    assert diagnostics["xdxr"]["requested_symbols"] == 5
+    assert diagnostics["xdxr"]["success_symbols"] == 1
+    assert diagnostics["xdxr"]["empty_symbols_count"] == 1
+    assert diagnostics["xdxr"]["failed_symbols_count"] == 3
+    assert diagnostics["xdxr"]["circuit_breaker_triggered"] is True
+    assert diagnostics["xdxr"]["event_rows"] == 1
+    assert diagnostics["xdxr"]["request_seconds"] >= 0
+    assert diagnostics["xdxr"]["parse_seconds"] >= 0
