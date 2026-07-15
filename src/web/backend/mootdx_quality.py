@@ -100,6 +100,12 @@ class MootdxQualityService:
             "status": run["status"],
             "started_at": run["started_at"],
             "finished_at": run["finished_at"],
+            "duration_seconds": run["duration_seconds"],
+            "request_seconds": run["request_seconds"],
+            "parse_seconds": run["parse_seconds"],
+            # XDXR synchronization currently does not persist this timing.  Keep the
+            # explicit null contract so clients never mistake an inferred value for it.
+            "write_seconds": run["write_seconds"],
             "error": run["error"],
             "summary": _xdxr_run_summary(run),
             "items": [_xdxr_symbol_run(row) for row in rows],
@@ -385,7 +391,9 @@ def _xdxr_run_record(row: tuple) -> dict[str, Any]:
         "event_rows": _xdxr_int(diagnostics, "event_rows"),
         "request_seconds": _xdxr_float(diagnostics, "request_seconds"),
         "parse_seconds": _xdxr_float(diagnostics, "parse_seconds"),
+        "write_seconds": None,
         "circuit_breaker_triggered": bool(diagnostics.get("circuit_breaker_triggered", False)),
+        "failed_symbols_sample": _xdxr_failed_symbols_sample(diagnostics.get("failed_symbols_sample")),
     }
 
 
@@ -422,6 +430,19 @@ def _xdxr_float(values: dict[str, Any], key: str) -> float:
         return float(values.get(key) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _xdxr_failed_symbols_sample(value: Any) -> list[str]:
+    """Normalize persisted audit samples without exposing arbitrary JSON values."""
+    if not isinstance(value, list):
+        return []
+    symbols: list[str] = []
+    for item in value:
+        symbol = item.get("symbol") if isinstance(item, dict) else item
+        if not isinstance(symbol, str) or not symbol:
+            continue
+        symbols.append(symbol)
+    return symbols
 
 
 def _xdxr_data_summary(rows: list[tuple]) -> dict[str, Any]:

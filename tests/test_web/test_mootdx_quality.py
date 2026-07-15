@@ -21,6 +21,7 @@ def test_xdxr_quality_keeps_run_health_separate_from_fact_summary() -> None:
                         "target_symbols": 300, "requested_symbols": 300, "success_symbols": 300,
                         "empty_symbols_count": 0, "failed_symbols_count": 0, "event_rows": 15233,
                         "request_seconds": 14.36, "parse_seconds": 0.42,
+                        "failed_symbols_sample": [{"symbol": "000001.SZ"}],
                         "circuit_breaker_triggered": False,
                     }}
                 }, "")]
@@ -36,6 +37,8 @@ def test_xdxr_quality_keeps_run_health_separate_from_fact_summary() -> None:
     assert payload["latest_run"]["status"] == "success"
     assert payload["latest_run"]["success_symbols"] == 300
     assert payload["latest_run"]["duration_seconds"] == 14.78
+    assert payload["latest_run"]["write_seconds"] is None
+    assert payload["latest_run"]["failed_symbols_sample"] == ["000001.SZ"]
     assert payload["runs"][0]["circuit_breaker_triggered"] is False
     assert "task_key = 'xdxr'" in client.queries[0]
     assert payload["data_summary"] == {
@@ -111,7 +114,8 @@ def test_xdxr_run_detail_returns_audits_and_safe_summary() -> None:
 
     assert detail == {
         "run_id": "run-1", "status": "error", "started_at": "2026-07-15 12:00:00",
-        "finished_at": "2026-07-15 12:01:00", "error": "source unavailable",
+        "finished_at": "2026-07-15 12:01:00", "duration_seconds": 60.0,
+        "request_seconds": 0.0, "parse_seconds": 0.0, "write_seconds": None, "error": "source unavailable",
         "summary": {"requested_symbols": 1, "success_symbols": 0, "empty_symbols": 0, "error_symbols": 1, "event_rows": 0},
         "items": [{"symbol": "000001.SZ", "status": "error", "event_rows": 0, "request_ms": 12.5,
                    "parse_ms": 0.3, "error": "source unavailable", "raw_columns": ["year", "category"]}],
@@ -128,6 +132,24 @@ def test_xdxr_run_detail_is_none_when_run_does_not_exist() -> None:
             return []
 
     assert MootdxQualityService(client=EmptyClient()).xdxr_run_detail("missing") is None
+
+
+def test_xdxr_quality_normalizes_json_diagnostics_and_malformed_failed_samples() -> None:
+    from src.web.backend.mootdx_quality import MootdxQualityService
+
+    class FakeClient:
+        def execute(self, query, params=None):
+            if "from mootdx_sync_runs" in query:
+                return [("run-1", datetime(2026, 7, 15, 12), None, "error", '{"diagnostics":{"xdxr":{"failed_symbols_sample":[{"symbol":"000001.SZ"},"000002.SZ",3,{"symbol":null},{}]}}}', "")]
+            if "from mootdx_xdxr final" in query:
+                return []
+            raise AssertionError(query)
+
+    payload = MootdxQualityService(client=FakeClient()).xdxr_quality()
+
+    assert payload["latest_run"]["failed_symbols_sample"] == ["000001.SZ", "000002.SZ"]
+    assert payload["latest_run"]["duration_seconds"] is None
+    assert payload["latest_run"]["write_seconds"] is None
 
 
 def test_classify_missing_block_uses_verified_baostock_no_data() -> None:

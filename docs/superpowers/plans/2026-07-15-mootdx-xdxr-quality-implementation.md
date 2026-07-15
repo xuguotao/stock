@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a read-only, operations-first XDXR quality page that exposes Mootdx XDXR run health, 30-run history, per-symbol audit detail, and a compact fact-table summary.
+**Goal:** Add a read-only, operations-first XDXR quality page that exposes Mootdx XDXR run health, 30-run history, per-symbol audit detail, and a compact fact-table summary. The existing sync result does not persist write duration, so the API returns `write_seconds: null` and the UI renders `—` rather than inferring a value.
 
 **Architecture:** Extend `MootdxQualityService` with isolated `mootdx_*` queries and expose two GET endpoints. Add typed API client methods and a standalone Vue route/page; the page loads a 30-run snapshot, supports status/date filtering, and opens a run-detail drawer. Reuse existing Mootdx monitor formatting and do not create write or legacy-source paths.
 
@@ -76,7 +76,7 @@ and `mootdx_xdxr_symbol_runs final` for per-run rows. Decode `result_json.diagno
 {"latest_run": None, "runs": [], "data_summary": _empty_xdxr_data_summary()}
 ```
 
-Use `max(1, min(limit, 100))` for history and `max(1, min(limit, 1000))` for detail. Apply `start_date`, `end_date`, and `status` with query parameters, never string interpolation.
+Use `max(1, min(limit, 100))` for history and `max(1, min(limit, 1000))` for detail. Apply `start_date`, `end_date`, and `status` with query parameters, never string interpolation. Expose a safe `failed_symbols_sample` string list from diagnostics and explicit `write_seconds: null`: write duration is not persisted by the current sync result.
 
 - [ ] **Step 4: Run focused service tests**
 
