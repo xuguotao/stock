@@ -33,6 +33,7 @@ def ensure_mootdx_tables(client: Any) -> None:
     for sql in MOOTDX_TABLE_SQL:
         client.execute(sql)
     _ensure_mootdx_xdxr_nullable_columns(client)
+    _ensure_mootdx_xdxr_symbol_runs_columns(client)
     _ensure_mootdx_catalog_lifecycle_columns(client)
     client.execute(MOOTDX_DAILY_XDXR_EVENTS_VIEW_SQL)
 
@@ -117,6 +118,8 @@ def sync_mootdx_offline_data(
                     clickhouse.execute("optimize table mootdx_stock_catalog final")
                 if table == "mootdx_stock_kline" and task == "stock_kline_daily":
                     _optimize_stock_kline_partitions(clickhouse, rows)
+            if task == "xdxr" and diagnostics.get("xdxr", {}).get("circuit_breaker_triggered"):
+                failed[task] = "RuntimeError: XDXR circuit breaker triggered after 3 consecutive symbol errors"
             if task == "stock_kline_daily" and reconciliation_diagnostics is not None:
                 diagnostics.setdefault("stock_kline_daily", {})["reconciliation"] = reconciliation_diagnostics
         except Exception as exc:  # noqa: BLE001 - offline sync records per-task failures.
@@ -1023,9 +1026,9 @@ def _xdxr_rows(source: Any, symbols: list[str], *, run_id: str = "") -> tuple[li
         except Exception as exc:  # noqa: BLE001 - xdxr diagnostics should keep the batch auditable.
             request_ms = (perf_counter() - request_started) * 1000
             request_seconds += request_ms / 1000
-            error = f"{type(exc).__name__}: {str(exc)[:160]}"
+            error = f"{type(exc).__name__}: {str(exc)}"[:240]
             failed_symbols.append({"symbol": symbol, "error": error})
-            audit_rows.append((run_id, symbol, requested_at, "error", 0, request_ms, None, error, ""))
+            audit_rows.append((run_id, symbol, requested_at, "error", 0, request_ms, None, error, []))
             consecutive_errors += 1
             if consecutive_errors >= 3:
                 circuit_breaker_triggered = True
@@ -1039,7 +1042,7 @@ def _xdxr_rows(source: Any, symbols: list[str], *, run_id: str = "") -> tuple[li
             empty_symbols.append(symbol)
             parse_ms = (perf_counter() - parse_started) * 1000
             parse_seconds += parse_ms / 1000
-            audit_rows.append((run_id, symbol, requested_at, "empty", 0, request_ms, parse_ms, "", _json(list(frame.columns))))
+            audit_rows.append((run_id, symbol, requested_at, "empty", 0, request_ms, parse_ms, "", list(frame.columns)))
             consecutive_errors = 0
             continue
         symbol_event_rows = 0
@@ -1078,7 +1081,7 @@ def _xdxr_rows(source: Any, symbols: list[str], *, run_id: str = "") -> tuple[li
             request_ms,
             parse_ms,
             "",
-            _json(list(frame.columns)),
+            list(frame.columns),
         ))
         consecutive_errors = 0
     diagnostics = {
@@ -1224,12 +1227,44 @@ def _insert_rows(client: Any, table: str, rows: list[tuple]) -> None:
         for batch in batches.values():
             client.execute(f"insert into {table} values", batch)
         return
+    if table == "mootdx_xdxr_symbol_runs":
+        client.execute(
+            "insert into mootdx_xdxr_symbol_runs "
+            "(run_id, symbol, requested_at, status, event_rows, request_ms, parse_ms, error, raw_columns) values",
+            rows,
+        )
+        return
     client.execute(f"insert into {table} values", rows)
 
 
 def _ensure_mootdx_xdxr_nullable_columns(client: Any) -> None:
     for column in MOOTDX_XDXR_NULLABLE_FLOAT_COLUMNS:
         client.execute(f"alter table mootdx_xdxr modify column {column} Nullable(Float64)")
+
+
+def _ensure_mootdx_xdxr_symbol_runs_columns(client: Any) -> None:
+    columns = client.execute(
+        "select type from system.columns "
+        "where database = currentDatabase() and table = 'mootdx_xdxr_symbol_runs' and name = 'raw_columns'"
+    )
+    column_type = _first_clickhouse_value(columns)
+    if column_type != "String":
+        return
+    # ClickHouse cannot safely MODIFY String to Array(String) in place. Retain legacy
+    # JSON text under a distinct name and add the typed column used by new runs.
+    client.execute("alter table mootdx_xdxr_symbol_runs rename column raw_columns to raw_columns_json")
+    client.execute("alter table mootdx_xdxr_symbol_runs add column if not exists raw_columns Array(String) default []")
+
+
+def _first_clickhouse_value(rows: Any) -> str | None:
+    if not rows:
+        return None
+    first = rows[0]
+    if isinstance(first, dict):
+        return str(first.get("type") or "") or None
+    if isinstance(first, (tuple, list)) and first:
+        return str(first[0])
+    return str(first)
 
 
 def _ensure_mootdx_catalog_lifecycle_columns(client: Any) -> None:
@@ -1581,10 +1616,11 @@ MOOTDX_TABLE_SQL = [
         request_ms Nullable(Float64),
         parse_ms Nullable(Float64),
         error String,
-        raw_columns String
+        raw_columns Array(String)
     )
     engine = ReplacingMergeTree(requested_at)
     order by (run_id, symbol)
+    ttl requested_at + interval 365 day delete
     """,
     """
     create table if not exists mootdx_finance_snapshot (

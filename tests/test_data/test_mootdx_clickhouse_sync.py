@@ -201,6 +201,35 @@ def test_ensure_mootdx_tables_creates_daily_xdxr_events_view() -> None:
     assert "k.symbol = e.symbol and k.trade_date = e.event_date" in view_sql
 
 
+def test_ensure_mootdx_tables_creates_xdxr_symbol_audit_with_array_columns_and_ttl() -> None:
+    from src.data.mootdx_clickhouse_sync import ensure_mootdx_tables
+
+    client = FakeClickHouse()
+    ensure_mootdx_tables(client)
+
+    audit_sql = next(sql.lower() for sql in client.sql if "create table if not exists mootdx_xdxr_symbol_runs" in sql.lower())
+    assert "raw_columns array(string)" in audit_sql
+    assert "ttl requested_at + interval 365 day delete" in audit_sql
+
+
+def test_ensure_mootdx_tables_migrates_legacy_xdxr_audit_string_column_without_data_loss() -> None:
+    from src.data.mootdx_clickhouse_sync import ensure_mootdx_tables
+
+    class LegacyAuditClient(FakeClickHouse):
+        def execute(self, sql: str, params=None):
+            super().execute(sql, params)
+            if "from system.columns" in sql.lower():
+                return [("String",)]
+            return []
+
+    client = LegacyAuditClient()
+    ensure_mootdx_tables(client)
+
+    sql = "\n".join(client.sql).lower()
+    assert "rename column raw_columns to raw_columns_json" in sql
+    assert "add column if not exists raw_columns array(string) default []" in sql
+
+
 def test_daily_sync_backfills_mootdx_miss_from_baostock() -> None:
     from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
 
@@ -1243,7 +1272,7 @@ def test_xdxr_task_writes_per_symbol_audits_and_stops_after_three_errors() -> No
     class AuditedXdxrSource:
         def fetch_xdxr(self, symbol):
             if symbol in {"000003.SZ", "000004.SZ", "000005.SZ"}:
-                raise RuntimeError(f"source unavailable: {symbol}")
+                raise RuntimeError(f"source unavailable: {symbol}; {'x' * 300}")
             if symbol == "000002.SZ":
                 return pd.DataFrame()
             return pd.DataFrame([{
@@ -1275,6 +1304,7 @@ def test_xdxr_task_writes_per_symbol_audits_and_stops_after_three_errors() -> No
     assert result["mootdx_xdxr_symbol_runs"][0][4] == 1
     assert result["mootdx_xdxr_symbol_runs"][1][4] == 0
     assert result["mootdx_xdxr_symbol_runs"][2][7].startswith("RuntimeError: source unavailable")
+    assert len(result["mootdx_xdxr_symbol_runs"][2][7]) == 240
     assert diagnostics["xdxr"]["target_symbols"] == 6
     assert diagnostics["xdxr"]["requested_symbols"] == 5
     assert diagnostics["xdxr"]["success_symbols"] == 1
@@ -1284,3 +1314,43 @@ def test_xdxr_task_writes_per_symbol_audits_and_stops_after_three_errors() -> No
     assert diagnostics["xdxr"]["event_rows"] == 1
     assert diagnostics["xdxr"]["request_seconds"] >= 0
     assert diagnostics["xdxr"]["parse_seconds"] >= 0
+
+
+def test_xdxr_circuit_breaker_marks_outer_sync_and_run_row_failed() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    class FailingXdxrSource(FakeSource):
+        def fetch_xdxr(self, symbol):
+            raise RuntimeError("upstream unavailable")
+
+    client = FakeClickHouse()
+    result = sync_mootdx_offline_data(
+        client=client,
+        source=FailingXdxrSource(),
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+
+    assert "xdxr" in result["failed"]
+    assert "circuit breaker" in result["failed"]["xdxr"].lower()
+    assert result["inserted"]["mootdx_xdxr_symbol_runs"] == 3
+    run_row = next(rows[0] for sql, rows in client.inserts if "insert into mootdx_sync_runs" in sql.lower())
+    assert run_row[4] == "failed"
+
+
+def test_xdxr_sync_writes_event_and_symbol_audit_rows() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    client = FakeClickHouse()
+    result = sync_mootdx_offline_data(
+        client=client,
+        source=FakeSource(),
+        symbols=["000001.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+
+    assert result["inserted"] == {"mootdx_xdxr": 1, "mootdx_xdxr_symbol_runs": 1}
+    assert any("insert into mootdx_xdxr values" in sql.lower() for sql, _ in client.inserts)
+    assert any("insert into mootdx_xdxr_symbol_runs" in sql.lower() for sql, _ in client.inserts)
