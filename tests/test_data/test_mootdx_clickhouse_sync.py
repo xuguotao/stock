@@ -156,6 +156,21 @@ def test_ensure_mootdx_tables_creates_daily_gap_verifications() -> None:
     assert any("create table if not exists mootdx_daily_gap_verifications" in sql.lower() for sql in client.sql)
 
 
+def test_insert_catalog_rows_uses_explicit_lifecycle_column_order() -> None:
+    from src.data.mootdx_clickhouse_sync import _insert_rows
+
+    client = FakeClickHouse()
+    _insert_rows(
+        client,
+        "mootdx_stock_catalog",
+        [(datetime(2026, 7, 15), 0, "000001.SZ", "000001", "平安银行", 0, 1, 0, None, None, None, "mootdx", "{}")],
+    )
+
+    sql, rows = client.inserts[0]
+    assert "insert into mootdx_stock_catalog (captured_at, market, symbol, code, name, is_st, is_active" in sql.lower()
+    assert rows[0][6:8] == (1, 0)
+
+
 def test_ensure_mootdx_tables_makes_xdxr_numeric_fields_nullable() -> None:
     from src.data.mootdx_clickhouse_sync import ensure_mootdx_tables
 

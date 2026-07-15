@@ -1157,6 +1157,14 @@ def _affair_file_rows(source: Any) -> list[tuple]:
 
 
 def _insert_rows(client: Any, table: str, rows: list[tuple]) -> None:
+    if table == "mootdx_stock_catalog":
+        client.execute(
+            "insert into mootdx_stock_catalog "
+            "(captured_at, market, symbol, code, name, is_st, is_active, missing_catalog_runs, "
+            "last_seen_at, deactivated_at, reactivated_at, source, raw_json) values",
+            rows,
+        )
+        return
     if table in {"mootdx_stock_kline", "mootdx_index_kline"}:
         batches: dict[tuple[Any, Any], list[tuple]] = {}
         for row in rows:
