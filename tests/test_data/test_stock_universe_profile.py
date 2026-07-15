@@ -58,6 +58,13 @@ def test_refresh_profiles_writes_complete_snapshot_and_audit() -> None:
             ):
                 self.ddl.append(query)
                 return []
+            if "from system.columns" in normalized and "mootdx_xdxr_symbol_runs" in normalized:
+                return []
+            if normalized.startswith("alter table mootdx_xdxr_symbol_runs add column if not exists") or normalized.startswith(
+                "alter table mootdx_xdxr_symbol_runs modify ttl"
+            ):
+                self.ddl.append(query)
+                return []
             if "from trade_calendar" in normalized:
                 return [(date(2026, 7, 10),)]
             if "mootdx_stock_catalog final" in normalized:
