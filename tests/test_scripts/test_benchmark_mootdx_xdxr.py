@@ -80,7 +80,19 @@ def test_write_mode_invokes_only_xdxr_sync_for_selected_symbols(capsys) -> None:
 
     def fake_sync(**kwargs):
         calls.append(kwargs)
-        return {"inserted": {"mootdx_xdxr": 2}, "failed": {}, "diagnostics": {"xdxr": {"success": 1}}}
+        return {
+            "inserted": {"mootdx_xdxr": 2},
+            "failed": {},
+            "diagnostics": {
+                "xdxr": {
+                    "success_symbols": 1,
+                    "empty_symbols_count": 1,
+                    "failed_symbols_count": 0,
+                    "event_rows": 2,
+                    "request_seconds": 0.123,
+                }
+            },
+        }
 
     assert benchmark_mootdx_xdxr.main(
         ["--sample-size", "2", "--write"],
@@ -96,7 +108,15 @@ def test_write_mode_invokes_only_xdxr_sync_for_selected_symbols(capsys) -> None:
         "tasks": ["xdxr"],
         "ensure_tables": True,
     }]
-    assert payload["sync"] == {"inserted": {"mootdx_xdxr": 2}, "failed": {}, "diagnostics": {"xdxr": {"success": 1}}}
+    assert payload["success_count"] == 1
+    assert payload["empty_count"] == 1
+    assert payload["error_count"] == 0
+    assert payload["event_rows"] == 2
+    assert payload["request_seconds"] == 0.123
+    assert payload["p50_ms"] is None
+    assert payload["p95_ms"] is None
+    assert payload["p99_ms"] is None
+    assert payload["sync"]["inserted"] == {"mootdx_xdxr": 2}
 
 
 def test_select_symbols_round_robins_stable_buckets() -> None:

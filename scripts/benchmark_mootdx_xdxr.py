@@ -57,6 +57,10 @@ def main(
 
     if args.write:
         sync_result = sync_fn(source=source, symbols=symbols, tasks=["xdxr"], ensure_tables=True)
+        # The sync path exposes aggregate XDXR diagnostics, not each request's
+        # latency samples. Keep its benchmark counters at the top level and
+        # make unavailable percentile metrics explicit JSON null values.
+        result.update(_write_diagnostics(sync_result))
         result["sync"] = sync_result
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 1 if sync_result.get("failed") else 0
@@ -126,6 +130,24 @@ def _read_only_diagnostics(source: Any, symbols: list[str]) -> dict[str, Any]:
         "p50_ms": p50,
         "p95_ms": p95,
         "p99_ms": p99,
+    }
+
+
+def _write_diagnostics(sync_result: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = sync_result.get("diagnostics") or {}
+    xdxr = diagnostics.get("xdxr") or {}
+    return {
+        "success_count": int(xdxr.get("success_symbols") or 0),
+        "empty_count": int(xdxr.get("empty_symbols_count") or 0),
+        "error_count": int(xdxr.get("failed_symbols_count") or 0),
+        "event_rows": int(xdxr.get("event_rows") or 0),
+        "request_seconds": float(xdxr.get("request_seconds") or 0.0),
+        "p50": None,
+        "p95": None,
+        "p99": None,
+        "p50_ms": None,
+        "p95_ms": None,
+        "p99_ms": None,
     }
 
 
