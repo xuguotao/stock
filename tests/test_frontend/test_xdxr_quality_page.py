@@ -15,3 +15,16 @@ def test_xdxr_quality_frontend_wiring_exposes_the_independent_read_only_page() -
     assert "MootdxXdxrRunDetail" in client_text
     assert "XDXR 质量" in monitor_text
     assert "router.push({ name: 'mootdx-xdxr-quality' })" in monitor_text
+
+
+def test_xdxr_quality_page_has_operations_content_and_safe_error_state() -> None:
+    source = Path("frontend/src/pages/XdxrQuality.vue").read_text(encoding="utf-8")
+
+    assert "尚无 XDXR 运行记录" in source
+    assert "circuit_breaker_triggered" in source
+    assert "failed_symbols_sample" in source
+    assert "data_summary" in source
+    assert "getMootdxXdxrRunDetail" in source
+    assert "detailStatusOptions" in source
+    assert "snapshot.value = null; loadError.value" in source
+    assert "getMootdxXdxrQuality({ limit: 30" in source
