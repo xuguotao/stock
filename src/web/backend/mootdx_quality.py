@@ -30,6 +30,81 @@ class MootdxQualityService:
             "universe_profile": self.universe_profile_quality(),
         }
 
+    def xdxr_quality(
+        self,
+        *,
+        limit: int = 30,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        """Return Mootdx XDXR run health separately from fact-table coverage."""
+        clauses = ["task_key = 'xdxr'"]
+        params: dict[str, Any] = {"limit": max(1, min(limit, 100))}
+        if start_date is not None:
+            clauses.append("started_at >= %(start_date)s")
+            params["start_date"] = start_date
+        if end_date is not None:
+            clauses.append("started_at < %(end_date)s + interval 1 day")
+            params["end_date"] = end_date
+        if status:
+            clauses.append("status = %(status)s")
+            params["status"] = status
+        runs = self._query(
+            "select run_id, started_at, finished_at, status, result_json, error "
+            "from mootdx_sync_runs where " + " and ".join(clauses) + " "
+            "order by started_at desc limit %(limit)s",
+            params,
+        )
+        run_records = [_xdxr_run_record(row) for row in runs]
+        fact_rows = self._query(
+            "select uniqExact(symbol), count(), max(ingested_at), countIf(isNull(suogu)) "
+            "from mootdx_xdxr final"
+        )
+        return {
+            "latest_run": run_records[0] if run_records else None,
+            "runs": run_records,
+            "data_summary": _xdxr_data_summary(fact_rows),
+        }
+
+    def xdxr_run_detail(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any] | None:
+        """Return one XDXR run and its per-symbol Mootdx audit records."""
+        run_rows = self._query(
+            "select run_id, started_at, finished_at, status, result_json, error "
+            "from mootdx_sync_runs where run_id = %(run_id)s and task_key = 'xdxr' "
+            "order by started_at desc limit 1",
+            {"run_id": run_id},
+        )
+        if not run_rows:
+            return None
+        run = _xdxr_run_record(run_rows[0])
+        clauses = ["run_id = %(run_id)s"]
+        params: dict[str, Any] = {"run_id": run_id, "limit": max(1, min(limit, 1000))}
+        if status:
+            clauses.append("status = %(status)s")
+            params["status"] = status
+        rows = self._query(
+            "select symbol, status, event_rows, request_ms, parse_ms, error, raw_columns "
+            "from mootdx_xdxr_symbol_runs final where " + " and ".join(clauses) + " "
+            "order by symbol asc limit %(limit)s",
+            params,
+        )
+        return {
+            "run_id": run["run_id"],
+            "status": run["status"],
+            "started_at": run["started_at"],
+            "finished_at": run["finished_at"],
+            "error": run["error"],
+            "summary": _xdxr_run_summary(run),
+            "items": [_xdxr_symbol_run(row) for row in rows],
+        }
+
     def catalog_change_events(
         self,
         *,
@@ -289,6 +364,97 @@ def _catalog_summary(rows: list[tuple]) -> dict[str, Any]:
         "markets": {"SZ": int(row[1]), "SH": int(row[2]), "BJ": int(row[3])},
         "st_symbols": int(row[4]),
         "captured_at": _iso(row[5]),
+    }
+
+
+def _xdxr_run_record(row: tuple) -> dict[str, Any]:
+    result = _json_object(row[4] if len(row) > 4 else {})
+    diagnostics = _xdxr_diagnostics(result)
+    return {
+        "run_id": str(row[0]),
+        "started_at": _iso(row[1]),
+        "finished_at": _iso(row[2]),
+        "duration_seconds": _xdxr_duration_seconds(result, row[1], row[2]),
+        "status": str(row[3]),
+        "error": str(row[5] or "") if len(row) > 5 else "",
+        "target_symbols": _xdxr_int(diagnostics, "target_symbols"),
+        "requested_symbols": _xdxr_int(diagnostics, "requested_symbols"),
+        "success_symbols": _xdxr_int(diagnostics, "success_symbols"),
+        "empty_symbols": _xdxr_int(diagnostics, "empty_symbols_count"),
+        "error_symbols": _xdxr_int(diagnostics, "failed_symbols_count"),
+        "event_rows": _xdxr_int(diagnostics, "event_rows"),
+        "request_seconds": _xdxr_float(diagnostics, "request_seconds"),
+        "parse_seconds": _xdxr_float(diagnostics, "parse_seconds"),
+        "circuit_breaker_triggered": bool(diagnostics.get("circuit_breaker_triggered", False)),
+    }
+
+
+def _xdxr_duration_seconds(result: dict[str, Any], started_at: Any, finished_at: Any) -> float | None:
+    value = result.get("duration_seconds")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return _duration_seconds(started_at, finished_at)
+
+
+def _duration_seconds(started_at: Any, finished_at: Any) -> float | None:
+    if not isinstance(started_at, datetime) or not isinstance(finished_at, datetime):
+        return None
+    return max(0.0, round((finished_at - started_at).total_seconds(), 3))
+
+
+def _xdxr_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = result.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return {}
+    xdxr = diagnostics.get("xdxr")
+    return xdxr if isinstance(xdxr, dict) else {}
+
+
+def _xdxr_int(values: dict[str, Any], key: str) -> int:
+    try:
+        return int(values.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _xdxr_float(values: dict[str, Any], key: str) -> float:
+    try:
+        return float(values.get(key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _xdxr_data_summary(rows: list[tuple]) -> dict[str, Any]:
+    if not rows:
+        return {"symbols": 0, "events": 0, "latest_ingested_at": None, "null_suogu": 0}
+    row = rows[0]
+    return {
+        "symbols": int(row[0] or 0),
+        "events": int(row[1] or 0),
+        "latest_ingested_at": _iso(row[2]),
+        "null_suogu": int(row[3] or 0),
+    }
+
+
+def _xdxr_run_summary(run: dict[str, Any]) -> dict[str, int]:
+    return {
+        "requested_symbols": int(run["requested_symbols"]),
+        "success_symbols": int(run["success_symbols"]),
+        "empty_symbols": int(run["empty_symbols"]),
+        "error_symbols": int(run["error_symbols"]),
+        "event_rows": int(run["event_rows"]),
+    }
+
+
+def _xdxr_symbol_run(row: tuple) -> dict[str, Any]:
+    return {
+        "symbol": str(row[0]),
+        "status": str(row[1]),
+        "event_rows": int(row[2] or 0),
+        "request_ms": float(row[3]) if row[3] is not None else None,
+        "parse_ms": float(row[4]) if row[4] is not None else None,
+        "error": str(row[5] or ""),
+        "raw_columns": list(row[6] or []),
     }
 
 
