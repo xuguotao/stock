@@ -1248,12 +1248,12 @@ def _ensure_mootdx_xdxr_symbol_runs_columns(client: Any) -> None:
         "where database = currentDatabase() and table = 'mootdx_xdxr_symbol_runs' and name = 'raw_columns'"
     )
     column_type = _first_clickhouse_value(columns)
-    if column_type != "String":
-        return
-    # ClickHouse cannot safely MODIFY String to Array(String) in place. Retain legacy
-    # JSON text under a distinct name and add the typed column used by new runs.
-    client.execute("alter table mootdx_xdxr_symbol_runs rename column raw_columns to raw_columns_json")
+    if column_type == "String":
+        # ClickHouse cannot safely MODIFY String to Array(String) in place. Retain legacy
+        # JSON text under a distinct name and add the typed column used by new runs.
+        client.execute("alter table mootdx_xdxr_symbol_runs rename column raw_columns to raw_columns_json")
     client.execute("alter table mootdx_xdxr_symbol_runs add column if not exists raw_columns Array(String) default []")
+    client.execute("alter table mootdx_xdxr_symbol_runs modify ttl requested_at + interval 365 day delete")
 
 
 def _first_clickhouse_value(rows: Any) -> str | None:

@@ -210,6 +210,10 @@ def test_ensure_mootdx_tables_creates_xdxr_symbol_audit_with_array_columns_and_t
     audit_sql = next(sql.lower() for sql in client.sql if "create table if not exists mootdx_xdxr_symbol_runs" in sql.lower())
     assert "raw_columns array(string)" in audit_sql
     assert "ttl requested_at + interval 365 day delete" in audit_sql
+    assert any(
+        "alter table mootdx_xdxr_symbol_runs modify ttl requested_at + interval 365 day delete" in sql.lower()
+        for sql in client.sql
+    )
 
 
 def test_ensure_mootdx_tables_migrates_legacy_xdxr_audit_string_column_without_data_loss() -> None:
@@ -228,6 +232,18 @@ def test_ensure_mootdx_tables_migrates_legacy_xdxr_audit_string_column_without_d
     sql = "\n".join(client.sql).lower()
     assert "rename column raw_columns to raw_columns_json" in sql
     assert "add column if not exists raw_columns array(string) default []" in sql
+
+
+def test_ensure_mootdx_tables_adds_typed_xdxr_audit_column_after_interrupted_migration() -> None:
+    from src.data.mootdx_clickhouse_sync import ensure_mootdx_tables
+
+    client = FakeClickHouse()
+    ensure_mootdx_tables(client)
+
+    assert any(
+        "alter table mootdx_xdxr_symbol_runs add column if not exists raw_columns array(string) default []" in sql.lower()
+        for sql in client.sql
+    )
 
 
 def test_daily_sync_backfills_mootdx_miss_from_baostock() -> None:
@@ -1337,6 +1353,31 @@ def test_xdxr_circuit_breaker_marks_outer_sync_and_run_row_failed() -> None:
     assert result["inserted"]["mootdx_xdxr_symbol_runs"] == 3
     run_row = next(rows[0] for sql, rows in client.inserts if "insert into mootdx_sync_runs" in sql.lower())
     assert run_row[4] == "failed"
+
+
+def test_xdxr_individual_errors_below_circuit_threshold_keep_outer_sync_successful() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    class PartiallyFailingXdxrSource(FakeSource):
+        def fetch_xdxr(self, symbol):
+            if symbol in {"000001.SZ", "000003.SZ"}:
+                raise RuntimeError("single symbol unavailable")
+            return super().fetch_xdxr(symbol)
+
+    client = FakeClickHouse()
+    result = sync_mootdx_offline_data(
+        client=client,
+        source=PartiallyFailingXdxrSource(),
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+
+    assert result["failed"] == {}
+    assert result["diagnostics"]["xdxr"]["failed_symbols_count"] == 2
+    assert result["diagnostics"]["xdxr"]["circuit_breaker_triggered"] is False
+    run_row = next(rows[0] for sql, rows in client.inserts if "insert into mootdx_sync_runs" in sql.lower())
+    assert run_row[4] == "success"
 
 
 def test_xdxr_sync_writes_event_and_symbol_audit_rows() -> None:
