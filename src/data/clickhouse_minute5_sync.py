@@ -56,8 +56,12 @@ def sync_clickhouse_minute5_kline(
         limit=limit,
     )
 
+    # Determine initial target datetime. The complete-symbol cache is scoped to
+    # this target bucket; a symbol complete at 10:00 is not complete at 13:05.
+    target_dt = _target_datetime(trade_date, target_time=target_time)
+
     # Check cache for complete symbols
-    cached_complete = _get_complete_symbols_cache(trade_date)
+    cached_complete = _get_complete_symbols_cache(trade_date, target_dt)
     if cached_complete:
         original_count = len(target_symbols)
         target_symbols = [s for s in target_symbols if s not in cached_complete]
@@ -66,8 +70,6 @@ def sync_clickhouse_minute5_kline(
     else:
         skipped_cached = 0
 
-    # Determine initial target datetime
-    target_dt = _target_datetime(trade_date, target_time=target_time)
     target_expected_bars = _expected_5m_bars(target_dt.time())
     stats_by_code = _bar_stats(clickhouse, trade_date, [symbol.split(".")[0] for symbol in target_symbols])
 
@@ -117,8 +119,8 @@ def sync_clickhouse_minute5_kline(
             # so a middle gap (which tail sync cannot detect) is never cached away.
             already_complete = set(target_symbols) - set(symbols_to_fetch)
             if already_complete:
-                existing_cache = _get_complete_symbols_cache(trade_date)
-                _update_complete_symbols_cache(trade_date, existing_cache | already_complete)
+                existing_cache = _get_complete_symbols_cache(trade_date, target_dt)
+                _update_complete_symbols_cache(trade_date, target_dt, existing_cache | already_complete)
 
             return {
                 "trade_date": trade_date.isoformat(),
@@ -274,8 +276,8 @@ def sync_clickhouse_minute5_kline(
     # Update cache: mark successfully synced symbols as complete
     if not result["partial"] and failed == 0:
         complete_symbols = set(target_symbols) - set(no_data_symbols) - set(f["symbol"] for f in failures)
-        existing_cache = _get_complete_symbols_cache(trade_date)
-        _update_complete_symbols_cache(trade_date, existing_cache | complete_symbols)
+        existing_cache = _get_complete_symbols_cache(trade_date, target_dt)
+        _update_complete_symbols_cache(trade_date, target_dt, existing_cache | complete_symbols)
 
     _report(progress, 100, "completed", "ClickHouse 5m 分钟线更新完成")
     return result
@@ -781,17 +783,23 @@ def _report(progress: ProgressCallback | None, percent: int, stage: str, message
 
 # ── Incremental sync cache ───────────────────────────────────────────────────
 
-# Global cache: {trade_date: set(complete_symbols)}
-_complete_symbols_cache: dict[date, set[str]] = {}
+# Global cache: {(trade_date, target_datetime): set(complete_symbols)}
+_complete_symbols_cache: dict[tuple[date, datetime], set[str]] = {}
 _CACHE_TTL_SECONDS = 86400  # 24 hours
-_cache_timestamps: dict[date, datetime] = {}
+_cache_timestamps: dict[tuple[date, datetime], datetime] = {}
 
 
-def _get_complete_symbols_cache(trade_date: date) -> set[str]:
-    """Get cached complete symbols for a trade date."""
+def _complete_symbols_cache_key(trade_date: date, target_dt: datetime) -> tuple[date, datetime]:
+    return trade_date, target_dt.replace(microsecond=0)
+
+
+def _get_complete_symbols_cache(trade_date: date, target_dt: datetime) -> set[str]:
+    """Get cached complete symbols for a trade date and target bucket."""
     now = datetime.now()
-    cached = _complete_symbols_cache.get(trade_date)
-    ts = _cache_timestamps.get(trade_date)
+    _prune_complete_symbols_cache(now)
+    key = _complete_symbols_cache_key(trade_date, target_dt)
+    cached = _complete_symbols_cache.get(key)
+    ts = _cache_timestamps.get(key)
 
     if cached is not None and ts is not None:
         if (now - ts).total_seconds() < _CACHE_TTL_SECONDS:
@@ -801,10 +809,24 @@ def _get_complete_symbols_cache(trade_date: date) -> set[str]:
     return set()
 
 
-def _update_complete_symbols_cache(trade_date: date, symbols: set[str]) -> None:
+def _update_complete_symbols_cache(trade_date: date, target_dt: datetime, symbols: set[str]) -> None:
     """Update cache with newly complete symbols."""
-    _complete_symbols_cache[trade_date] = symbols
-    _cache_timestamps[trade_date] = datetime.now()
+    _prune_complete_symbols_cache(datetime.now())
+    key = _complete_symbols_cache_key(trade_date, target_dt)
+    _complete_symbols_cache[key] = symbols
+    _cache_timestamps[key] = datetime.now()
+
+
+def _prune_complete_symbols_cache(now: datetime) -> None:
+    """Remove expired complete-symbol cache buckets from both cache maps."""
+    expired_keys = [
+        key
+        for key, timestamp in _cache_timestamps.items()
+        if (now - timestamp).total_seconds() >= _CACHE_TTL_SECONDS
+    ]
+    for key in expired_keys:
+        _complete_symbols_cache.pop(key, None)
+        _cache_timestamps.pop(key, None)
 
 
 def _check_tail_coverage(

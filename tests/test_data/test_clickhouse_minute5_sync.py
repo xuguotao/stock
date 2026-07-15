@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from unittest.mock import patch
 
 import pandas as pd
@@ -123,6 +123,27 @@ class FakeSource:
                     "volume": 1200,
                     "amount": 12240.0,
                 },
+            ]
+        )
+
+
+class FakeEarlyAfternoonSource:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def fetch_intraday_bars(self, symbol: str, trade_date: date, frequency: str = "5m") -> pd.DataFrame:
+        self.calls.append(symbol)
+        return pd.DataFrame(
+            [
+                {
+                    "datetime": pd.Timestamp(f"{trade_date.isoformat()} 13:05:00"),
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "volume": 1000,
+                    "amount": 10100.0,
+                }
             ]
         )
 
@@ -834,7 +855,7 @@ def test_tail_sync_fills_missing_tail_bucket_and_caches_only_complete() -> None:
     assert source.calls == ["000858.SZ"]
     assert result["success"] == 1
     assert result["inserted_rows"] == 2  # 14:55 and 15:00 bars from FakeSource
-    cache = clickhouse_minute5_sync._get_complete_symbols_cache(trade_date)
+    cache = clickhouse_minute5_sync._get_complete_symbols_cache(trade_date, datetime(2026, 6, 12, 15, 0))
     assert cache == {"000001.SZ", "600000.SH", "600519.SH"}
     assert "000858.SZ" not in cache
 
@@ -858,10 +879,56 @@ def test_tail_sync_marks_all_complete_when_nothing_needs_refresh() -> None:
     assert result["sync_mode"] == "tail_all_complete"
     assert source.calls == []
     assert result["inserted_rows"] == 0
-    assert clickhouse_minute5_sync._get_complete_symbols_cache(trade_date) == {
+    assert clickhouse_minute5_sync._get_complete_symbols_cache(trade_date, datetime(2026, 6, 12, 15, 0)) == {
         "000001.SZ",
         "600000.SH",
     }
+
+
+def test_complete_symbols_cache_is_scoped_to_target_datetime() -> None:
+    trade_date = date(2026, 6, 12)
+    client = FakeClickHouseClient()
+    for code in ("000001", "600000"):
+        client.latest_by_symbol[code] = datetime(2026, 6, 12, 10, 0)
+        client.existing_by_symbol[code] = _complete_5m_datetimes(trade_date, time(10, 0))
+
+    clickhouse_minute5_sync._update_complete_symbols_cache(
+        trade_date,
+        datetime(2026, 6, 12, 10, 0),
+        {"000001.SZ", "600000.SH"},
+    )
+    source = FakeEarlyAfternoonSource()
+
+    result = sync_clickhouse_minute5_kline(
+        client=client,
+        trade_date=trade_date,
+        source=source,
+        symbols=["000001.SZ", "600000.SH"],
+        target_time=time(13, 5),
+    )
+
+    assert source.calls == ["000001.SZ", "600000.SH"]
+    assert result["target_datetime"] == "2026-06-12 13:05:00"
+    assert result["success"] == 2
+    assert result["inserted_rows"] == 2
+
+
+def test_complete_symbols_cache_prunes_expired_time_buckets() -> None:
+    trade_date = date(2026, 6, 12)
+    expired_target = datetime(2026, 6, 12, 10, 0)
+    fresh_target = datetime(2026, 6, 12, 13, 5)
+    expired_key = clickhouse_minute5_sync._complete_symbols_cache_key(trade_date, expired_target)
+    fresh_key = clickhouse_minute5_sync._complete_symbols_cache_key(trade_date, fresh_target)
+    clickhouse_minute5_sync._complete_symbols_cache[expired_key] = {"000001.SZ"}
+    clickhouse_minute5_sync._cache_timestamps[expired_key] = datetime.now() - timedelta(
+        seconds=clickhouse_minute5_sync._CACHE_TTL_SECONDS + 1
+    )
+    clickhouse_minute5_sync._complete_symbols_cache[fresh_key] = {"600000.SH"}
+    clickhouse_minute5_sync._cache_timestamps[fresh_key] = datetime.now()
+
+    assert clickhouse_minute5_sync._get_complete_symbols_cache(trade_date, fresh_target) == {"600000.SH"}
+    assert expired_key not in clickhouse_minute5_sync._complete_symbols_cache
+    assert expired_key not in clickhouse_minute5_sync._cache_timestamps
 
 
 def test_tail_sync_falls_back_to_full_sync_for_middle_gap() -> None:
