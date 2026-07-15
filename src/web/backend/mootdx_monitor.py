@@ -152,6 +152,8 @@ def _audit_record(row: tuple, *, include_diagnostics: bool) -> dict[str, Any]:
 def _audit_label(task_key: str, params: dict[str, Any]) -> str:
     if task_key == "stock_catalog":
         return MOOTDX_TASK_BY_KEY["mootdx_stock_catalog_sync"].label
+    if task_key == "xdxr":
+        return MOOTDX_TASK_BY_KEY["mootdx_xdxr_sync"].label
     if task_key == "stock_universe_profile":
         return MOOTDX_TASK_BY_KEY["stock_universe_profile_refresh"].label
     if params.get("daily_reconcile"):

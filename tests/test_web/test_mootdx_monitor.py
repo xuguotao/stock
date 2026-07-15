@@ -91,6 +91,27 @@ def test_mootdx_monitor_normalizes_legacy_known_no_data_reconciliation_audit() -
     assert snapshot["audits"][0]["audit"] == {"status": "healthy", "reasons": []}
 
 
+def test_mootdx_monitor_labels_xdxr_audits_as_xdxr_sync() -> None:
+    class XdxrAuditClickHouse(FakeClickHouse):
+        def execute(self, query, params=None):
+            if "from mootdx_sync_runs" in query:
+                return [(
+                    "run-xdxr",
+                    "xdxr",
+                    datetime(2026, 7, 15, 17, 10),
+                    datetime(2026, 7, 15, 17, 10, 5),
+                    "success",
+                    json.dumps({}),
+                    json.dumps({"diagnostics": {"xdxr": {"audit": {"status": "healthy", "reasons": []}}}}),
+                    "",
+                )]
+            return super().execute(query, params)
+
+    snapshot = MootdxMonitorService(repository=FakeRepository(), client=XdxrAuditClickHouse()).snapshot()
+
+    assert snapshot["audits"][0]["task_label"] == "除权除息同步"
+
+
 def test_mootdx_monitor_keeps_task_definitions_when_task_store_is_unavailable() -> None:
     class BrokenRepository:
         def list_task_statuses(self):
@@ -98,7 +119,7 @@ def test_mootdx_monitor_keeps_task_definitions_when_task_store_is_unavailable() 
 
     snapshot = MootdxMonitorService(repository=BrokenRepository(), client=FakeClickHouse()).snapshot()
 
-    assert [item["status"] for item in snapshot["tasks"]] == ["unavailable", "unavailable", "unavailable", "unavailable"]
+    assert [item["status"] for item in snapshot["tasks"]] == ["unavailable", "unavailable", "unavailable", "unavailable", "unavailable"]
     assert snapshot["tasks"][0]["last_error"] == "OSError: ClickHouse unavailable"
     assert snapshot["health"]["daily"]["symbols"] == 4994
 
