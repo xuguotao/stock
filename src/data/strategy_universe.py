@@ -45,7 +45,8 @@ def resolve_strategy_universe(
     symbols_only: bool = False,
 ) -> list[StrategyUniverseRow] | list[str]:
     """Resolve the strategy-tradable universe using one canonical filter set."""
-    rows = _daily_candidates(client, options)
+    profile_symbols = _eligible_profile_symbols(client)
+    rows = _daily_candidates(client, options, symbols=profile_symbols)
     minute5_codes = _minute5_codes(client, options, rows) if options.require_minute5 else set()
     result = []
     for row in rows:
@@ -85,10 +86,11 @@ def resolve_strategy_universe(
     return result
 
 
-def _daily_candidates(client: Any, options: StrategyUniverseOptions) -> list[tuple]:
+def _daily_candidates(client: Any, options: StrategyUniverseOptions, *, symbols: tuple[str, ...] | None = None) -> list[tuple]:
     start = options.lookback_start or (options.trade_date - timedelta(days=365))
+    profile_filter = "and d.symbol in %(symbols)s" if symbols is not None else ""
     rows = client.execute(
-        """
+        f"""
         select
             d.symbol as symbol,
             any(s.name) as name,
@@ -106,6 +108,7 @@ def _daily_candidates(client: Any, options: StrategyUniverseOptions) -> list[tup
             and d.high > 0
             and d.low > 0
             and d.close > 0
+            {profile_filter}
         group by d.symbol
         having bars >= %(min_daily_bars)s
         order by avg_amount desc, avg_volume desc, d.symbol asc
@@ -115,9 +118,19 @@ def _daily_candidates(client: Any, options: StrategyUniverseOptions) -> list[tup
             "end": options.trade_date,
             "min_amount": options.min_amount,
             "min_daily_bars": options.min_daily_bars,
+            **({"symbols": symbols} if symbols is not None else {}),
         },
     )
     return list(rows)
+
+
+def _eligible_profile_symbols(client: Any) -> tuple[str, ...] | None:
+    """Use the shared profile when present; tolerate databases not migrated yet."""
+    try:
+        rows = client.execute("select symbol from stock_universe_profiles final where universe_eligible = 1 order by symbol")
+    except Exception:  # noqa: BLE001 - profile migration must not block live strategy execution.
+        return None
+    return tuple(str(row[0]).split(".", 1)[0].zfill(6) for row in rows) or None
 
 
 def _minute5_codes(

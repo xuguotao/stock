@@ -52,6 +52,30 @@ def test_data_status_api_returns_configured_data_status(tmp_path) -> None:
     assert payload["health"]["minute5_latest_datetime"] == "2026-06-12 15:00:00"
 
 
+def test_data_status_api_passes_as_of_date_to_runner(tmp_path) -> None:
+    calls = []
+
+    def data_status_runner(*, as_of=None):
+        calls.append(as_of)
+        return {
+            "database": {"exists": True, "type": "clickhouse", "size_bytes": 0},
+            "stock_summary": {"stock_count": 0, "non_st_stock_count": 0, "st_stock_count": 0},
+            "tables": {},
+            "health": {"status": "ok"},
+        }
+
+    app = create_app(
+        db_path=tmp_path / "jobs.json",
+        data_status_runner=data_status_runner,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/api/data/status?as_of=2026-07-14")
+
+    assert response.status_code == 200
+    assert calls == [datetime(2026, 7, 14).date()]
+
+
 def test_data_status_api_reports_runner_error(tmp_path) -> None:
     def failing_status():
         raise RuntimeError("clickhouse unavailable")

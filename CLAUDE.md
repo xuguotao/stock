@@ -18,21 +18,13 @@
 
 # Python 运行环境
 
-本项目由 `uv` 管理,Python 解释器在 `.venv/bin/python` (3.13.5)。
-
-**所有 Python 执行一律用 `uv run` 前缀**,不要直接 `python` / `python3`:
+直接使用系统 zsh,Python 解释器为 conda base(`/opt/anaconda3/bin/python`)。`.zshrc` 已将 `/opt/anaconda3/bin` 加入 PATH,`python` / `python3` 默认即指向 conda base(已含项目依赖,不使用项目 `.venv` / `uv run`)。
 
 ```bash
 # 对
-uv run python xxx.py
-uv run pytest tests/
-uv run pip install something
-
-# 错(会跑到 IDF 的 python 环境)
 python xxx.py
-python3 -m pytest
+pytest tests/
+
+# 若 python 误指向其他环境(如 ESP-IDF),用绝对路径兜底
+/opt/anaconda3/bin/python xxx.py
 ```
-
-原因:父 shell 的 `PATH` 里有 ESP-IDF 的路径排在前面,直接调 `python` 会指向 `~/.espressif/python_env/idf5.5_py3.13_env/bin/python`。`uv run` 自动使用项目的 `.venv`,无视 PATH 顺序。
-
-> 注:`uv run` 首次运行或 `pyproject.toml` 依赖变更后会自动同步环境,可能较慢。日常开发可用 `uv run --no-sync python ...` 跳过同步。

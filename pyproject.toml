@@ -35,6 +35,7 @@ timesfm = [
 ]
 market = [
     "mootdx==0.11.7",
+    "baostock==0.9.3",
 ]
 
 [tool.pytest.ini_options]

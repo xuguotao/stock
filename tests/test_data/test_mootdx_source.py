@@ -141,6 +141,26 @@ def test_normalizers_return_empty_frame_for_missing_datetime_or_code() -> None:
     assert normalize_mootdx_quotes(pd.DataFrame([{"price": 1.0}])).empty
 
 
+def test_normalize_mootdx_bars_coerces_denormal_zero_turnover_noise() -> None:
+    frame = pd.DataFrame([
+        {
+            "datetime": "2026-07-09 15:00",
+            "open": 2.36,
+            "high": 2.36,
+            "low": 2.36,
+            "close": 2.36,
+            "vol": 5.877471754111438e-39,
+            "volume": 5.877471754111438e-39,
+            "amount": 5.877471754111438e-39,
+        }
+    ])
+
+    bars = normalize_mootdx_bars(frame, "000008.SZ")
+
+    assert bars.iloc[0]["volume"] == 0
+    assert bars.iloc[0]["amount"] == 0.0
+
+
 def test_lazy_import_reports_optional_dependency_when_missing() -> None:
     source = MootdxSource(quotes_factory=lambda **kwargs: (_ for _ in ()).throw(ModuleNotFoundError("mootdx")))
 

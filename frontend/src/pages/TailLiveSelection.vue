@@ -528,7 +528,7 @@ const props = defineProps<{
   jobId?: string
 }>()
 
-const today = new Date().toISOString().slice(0, 10)
+const today = formatLocalDate(new Date())
 const RESULT_TABLE_RENDER_BATCH_SIZE = 120
 const form = ref<TailLiveSelectionPayload>({
   trade_date: today,
@@ -566,7 +566,7 @@ const {
   dataHealthLoadedAt,
   loadingDataHealth,
   loadDataHealth,
-} = useTailLiveDataHealth()
+} = useTailLiveDataHealth(computed(() => form.value.trade_date))
 const strategyRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
 const watchlistRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
 const weakRenderLimit = ref(RESULT_TABLE_RENDER_BATCH_SIZE)
@@ -827,6 +827,13 @@ const dataHealthIssues = computed(() => {
     ...(quality?.scheduled_checks?.issues ?? [])
   ]).slice(0, 6)
 })
+
+function formatLocalDate(value: Date) {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 
 function stageTimingLabel(value: string) {
   if (value === 'minute5_sync') return '补数据'

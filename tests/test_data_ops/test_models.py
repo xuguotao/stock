@@ -24,15 +24,27 @@ def test_default_task_configs_cover_first_runner_tasks() -> None:
         "quote_snapshot_capture",
         "quote_rollup_refresh",
         "quality_snapshot",
-        "xdxr_sync",
         "stock_readiness_snapshot",
         "stock_readiness_repair",
+        "mootdx_stock_catalog_sync",
+        "mootdx_daily_kline_sync",
+        "mootdx_daily_kline_reconcile",
+        "stock_universe_profile_refresh",
     ]
     assert all(config.enabled for config in configs if config.task_key != "stock_readiness_repair")
     assert next(config for config in configs if config.task_key == "stock_readiness_repair").enabled is False
     quote_snapshot = next(config for config in configs if config.task_key == "quote_snapshot_capture")
     assert quote_snapshot.schedule_config["chunk_size"] == 500
     assert quote_snapshot.schedule_config["quote_endpoint"] == "sqt_utf8"
+    mootdx_catalog = next(config for config in configs if config.task_key == "mootdx_stock_catalog_sync")
+    mootdx_daily = next(config for config in configs if config.task_key == "mootdx_daily_kline_sync")
+    mootdx_reconcile = next(config for config in configs if config.task_key == "mootdx_daily_kline_reconcile")
+    assert mootdx_catalog.schedule_config == {"time": "08:30", "rate_limit": 0.02, "timeout": 15, "bestip": False}
+    assert mootdx_daily.schedule_config == {"time": "15:35", "rate_limit": 0.02, "timeout": 15, "bestip": False}
+    assert mootdx_reconcile.schedule_config == {"time": "16:05", "rate_limit": 0.02, "timeout": 15, "bestip": False}
+    universe_profile = next(config for config in configs if config.task_key == "stock_universe_profile_refresh")
+    assert universe_profile.schedule_config["time"] == "16:15"
+    assert universe_profile.schedule_config["min_average_amount"] == 10_000_000
 
 
 def test_schedule_config_serializes_stably() -> None:

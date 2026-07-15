@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 from src.web.backend.data_status import (
     _quote_snapshot_interval_stats,
+    _quote_snapshot_quality,
     inspect_clickhouse_database,
     persist_clickhouse_quality_snapshot,
 )
@@ -234,6 +235,37 @@ def test_quote_snapshot_interval_stats_ignores_non_trading_session_gaps() -> Non
     assert stats["missing_rounds"] == 0
     assert stats["missing_rate"] == 0.0
     assert stats["actual_avg_interval_seconds"] == 10.0
+
+
+def test_quote_snapshot_quality_warns_when_latest_snapshot_is_before_as_of_date() -> None:
+    tables = {
+        "stock_quote_snapshots": {
+            "row_count": 12,
+            "symbol_count": 2,
+            "date_range": {"end": "2026-06-17 14:59:45"},
+        },
+        "stock_quote_snapshots_1m": {
+            "row_count": 12,
+            "symbol_count": 2,
+            "date_range": {"end": "2026-06-17 14:59:00"},
+        },
+        "stock_quote_snapshots_5m": {
+            "row_count": 12,
+            "symbol_count": 2,
+            "date_range": {"end": "2026-06-17 14:55:00"},
+        },
+    }
+
+    quality = _quote_snapshot_quality(
+        client=FakeClickHouseClient(),
+        tables=tables,
+        expected_symbols=2,
+        as_of=date(2026, 6, 18),
+    )
+
+    assert quality["status"] == "warning"
+    assert quality["raw"]["status"] == "warning"
+    assert "stock_quote_snapshots_stale_1_days" in quality["issues"]
 
 
 def test_inspect_clickhouse_database_includes_xdxr_table_health() -> None:

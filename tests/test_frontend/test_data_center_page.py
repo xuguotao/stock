@@ -110,7 +110,7 @@ def test_data_center_page_shows_persisted_data_ops_tasks_after_health_matrix() -
     assert "历史日期优先新浪" in source
     assert "minute5_kline 未达到当前目标时间" in source
     assert "腾讯 ifzq.gtimg.cn" in source
-    assert "除权除息数据同步" in source
+    assert "除权除息数据同步" not in source
     assert "策略数据就绪度快照" in source
     assert "策略数据缺口回补" in source
     assert "stock_data_readiness" in source
@@ -206,7 +206,7 @@ def test_data_center_header_keeps_only_primary_actions() -> None:
     assert "更新 5分钟线" not in header
     assert "停止持续更新" not in header
     assert "同步旧 Stock DB" not in header
-    assert "高级维护" in source
+    assert "高级诊断" in source
     assert "manual-minute5-control" in source
     assert "dataset-build-control" not in source
     assert "本地 Research Datasets" not in source

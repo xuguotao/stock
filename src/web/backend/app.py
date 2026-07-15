@@ -17,6 +17,7 @@ from src.data.clickhouse_quote_snapshot_sync import sync_clickhouse_quote_snapsh
 from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data.clickhouse_table_maintenance import optimize_quote_snapshot_rollups
 from src.data.clickhouse_daily_sync import sync_clickhouse_daily_from_minute5, sync_clickhouse_index_daily
+from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data, verify_mootdx_daily_gaps
 from src.data.stock_data_readiness import run_readiness_repair, run_readiness_snapshot
 from src.data.fund_tail_market_data import refresh_fund_tail_proxy_quotes
 from src.data.clickhouse_research_dataset import build_clickhouse_research_dataset
@@ -32,6 +33,8 @@ from src.ml.tail_rule_baseline import evaluate_tail_rule_baseline
 from src.trading.scheduler import TradingScheduler
 from src.web.backend.backtests import TailBacktestRequest, run_tail_backtest
 from src.web.backend.data_ops_scheduler import DataOpsScheduler, DataOpsSchedulerConfig
+from src.web.backend.mootdx_monitor import MootdxMonitorService
+from src.web.backend.mootdx_quality import MootdxQualityService
 from src.data_ops.models import DataOpsTaskConfig
 from src.data_ops.repository import ClickHouseDataOpsRepository
 from src.web.backend.data_quality_calendar import DataQualityCalendarService
@@ -74,6 +77,13 @@ from src.web.backend.tail_replay_backtest import TailReplayBacktestRequest, run_
 from src.web.backend.watchlist_monitor import get_watchlist_config, get_watchlist_report
 
 TAIL_RESULT_ENRICHMENT_RANK_LIMIT = 300
+_STOCK_UNIVERSE_RULE_KEYS = (
+    "lookback_days",
+    "min_trading_days",
+    "min_average_amount",
+    "min_listing_age_days",
+    "include_beijing",
+)
 
 
 class CreateJobRequest(BaseModel):
@@ -132,6 +142,28 @@ class DataOpsTaskConfigRequest(BaseModel):
     schedule_config: dict[str, Any] = Field(default_factory=dict)
     max_runtime_seconds: int = Field(default=1800, ge=1)
     stale_after_seconds: int = Field(default=300, ge=1)
+
+
+class MootdxDailyGapRepairItem(BaseModel):
+    symbol: str = Field(min_length=9, max_length=16)
+    start_date: date
+    end_date: date
+    evidence: str = Field(min_length=1, max_length=300)
+
+
+class MootdxDailyGapRepairRequest(BaseModel):
+    items: list[MootdxDailyGapRepairItem] = Field(min_length=1, max_length=100)
+
+
+class MootdxUniverseProfileFiltersRequest(BaseModel):
+    filters: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MootdxDailyGapReviewRequest(BaseModel):
+    symbol: str = Field(min_length=9, max_length=16)
+    start_date: date
+    end_date: date
+    reason: str = Field(min_length=2, max_length=300)
 
 
 class DataQualityCalendarGenerateRequest(BaseModel):
@@ -231,6 +263,10 @@ def create_app(
     data_ops_interval_seconds: int = 60,
     data_ops_maintenance_runner=None,
     data_ops_repository=None,
+    mootdx_daily_gap_repair_runner=sync_mootdx_offline_data,
+    mootdx_daily_gap_verify_runner=verify_mootdx_daily_gaps,
+    mootdx_monitor_service=None,
+    mootdx_quality_service=None,
     data_quality_calendar_service=None,
     minute5_quality_service=None,
     clickhouse_dataset_builder=build_clickhouse_research_dataset,
@@ -350,6 +386,10 @@ def create_app(
     app.state.quote_snapshot_interval_seconds = quote_snapshot_interval_seconds
     app.state.auto_start_data_ops_scheduler = auto_start_data_ops_scheduler
     app.state.data_ops_repository = data_ops_repository or ClickHouseDataOpsRepository()
+    app.state.mootdx_daily_gap_repair_runner = mootdx_daily_gap_repair_runner
+    app.state.mootdx_daily_gap_verify_runner = mootdx_daily_gap_verify_runner
+    app.state.mootdx_monitor_service = mootdx_monitor_service or MootdxMonitorService(repository=app.state.data_ops_repository)
+    app.state.mootdx_quality_service = mootdx_quality_service or MootdxQualityService(job_store=store)
     app.state.data_quality_calendar = data_quality_calendar_service or DataQualityCalendarService()
     app.state.minute5_quality = minute5_quality_service or Minute5QualityService()
 
@@ -434,7 +474,9 @@ def create_app(
         return {"job_id": job.id}
 
     @app.get("/api/data/status")
-    def get_data_status() -> dict[str, Any]:
+    def get_data_status(as_of: date | None = None) -> dict[str, Any]:
+        if as_of is not None:
+            return app.state.data_status_runner(as_of=as_of)
         return app.state.data_status_runner()
 
     @app.get("/api/data/quality-calendar")
@@ -788,12 +830,18 @@ def create_app(
         if task_key not in configs:
             raise HTTPException(status_code=404, detail="Data ops task not found")
         existing = configs[task_key]
+        schedule_config = dict(payload.schedule_config)
+        if task_key == "stock_universe_profile_refresh":
+            current_rules = {key: existing.schedule_config.get(key) for key in _STOCK_UNIVERSE_RULE_KEYS}
+            next_rules = {key: schedule_config.get(key) for key in _STOCK_UNIVERSE_RULE_KEYS}
+            current_version = max(1, int(existing.schedule_config.get("rule_version") or 1))
+            schedule_config["rule_version"] = current_version + 1 if current_rules != next_rules else current_version
         repository.upsert_task_config(
             DataOpsTaskConfig(
                 task_key=task_key,
                 enabled=payload.enabled,
                 schedule_kind=payload.schedule_kind,
-                schedule_config=payload.schedule_config,
+                schedule_config=schedule_config,
                 max_runtime_seconds=payload.max_runtime_seconds,
                 stale_after_seconds=payload.stale_after_seconds,
                 manual_trigger=existing.manual_trigger,
@@ -810,6 +858,92 @@ def create_app(
             raise HTTPException(status_code=404, detail="Data ops task not found")
         repository.request_manual_run(task_key)
         return {"task_key": task_key, "manual_trigger": True}
+
+    @app.get("/api/data/mootdx/monitor")
+    def get_mootdx_monitor(audit_limit: int = 50) -> dict[str, Any]:
+        return app.state.mootdx_monitor_service.snapshot(audit_limit=audit_limit)
+
+    @app.get("/api/data/mootdx/monitor/audits/{run_id}")
+    def get_mootdx_monitor_audit(run_id: str) -> dict[str, Any]:
+        item = app.state.mootdx_monitor_service.audit_detail(run_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Mootdx audit not found")
+        return {"item": item}
+
+    @app.get("/api/data/mootdx/catalog-quality")
+    def get_mootdx_catalog_quality(event_limit: int = 200) -> dict[str, Any]:
+        return app.state.mootdx_quality_service.catalog_quality(event_limit=event_limit)
+
+    @app.get("/api/data/mootdx/catalog-quality/events")
+    def get_mootdx_catalog_change_events(
+        event_date: date | None = None,
+        event_type: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        return {"items": app.state.mootdx_quality_service.catalog_change_events(
+            event_date=event_date,
+            event_type=event_type,
+            limit=limit,
+        )}
+
+    @app.post("/api/data/mootdx/catalog-quality/universe-profiles")
+    def get_mootdx_universe_profiles(payload: MootdxUniverseProfileFiltersRequest, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        return app.state.mootdx_quality_service.universe_profiles(filters=payload.filters, limit=limit, offset=offset)
+
+    @app.get("/api/data/mootdx/daily-quality")
+    def get_mootdx_daily_quality(lookback_days: int = 30, missing_limit: int = 200) -> dict[str, Any]:
+        return app.state.mootdx_quality_service.daily_quality(
+            lookback_days=lookback_days,
+            missing_limit=missing_limit,
+        )
+
+    @app.post("/api/data/mootdx/daily-quality/repair")
+    def create_mootdx_daily_gap_repair(
+        payload: MootdxDailyGapRepairRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        job = store.create_job("mootdx_daily_gap_repair", payload.model_dump(mode="json"))
+        if app.state.run_jobs_inline:
+            _run_mootdx_daily_gap_repair_job(
+                store,
+                app.state.mootdx_daily_gap_repair_runner,
+                job.id,
+                payload,
+            )
+        else:
+            background_tasks.add_task(
+                _run_mootdx_daily_gap_repair_job,
+                store,
+                app.state.mootdx_daily_gap_repair_runner,
+                job.id,
+                payload,
+            )
+        return {"job_id": job.id}
+
+    @app.post("/api/data/mootdx/daily-quality/verify")
+    def create_mootdx_daily_gap_verify(
+        payload: MootdxDailyGapRepairRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        job = store.create_job("mootdx_daily_gap_verify", payload.model_dump(mode="json"))
+        runner = _run_mootdx_daily_gap_verify_job
+        args = (store, app.state.mootdx_daily_gap_verify_runner, job.id, payload)
+        if app.state.run_jobs_inline:
+            runner(*args)
+        else:
+            background_tasks.add_task(runner, *args)
+        return {"job_id": job.id}
+
+    @app.post("/api/data/mootdx/daily-quality/review-no-repair")
+    def review_mootdx_daily_gap_no_repair(payload: MootdxDailyGapReviewRequest) -> dict[str, str]:
+        job = store.create_job("mootdx_daily_gap_review", payload.model_dump(mode="json"))
+        store.update_job(
+            job.id,
+            status="success",
+            result={"decision": "no_repair"},
+            progress=_progress(100, "completed", "已记录人工核验结论"),
+        )
+        return {"job_id": job.id}
 
     @app.get("/api/data/ops-scheduler")
     def get_data_ops_scheduler_status() -> dict[str, Any]:
@@ -1640,8 +1774,11 @@ def _apply_tail_historical_calibration(signal_repository, result: dict[str, Any]
     calibrate = getattr(signal_repository, "historical_calibration_for_signal", None)
     if not callable(calibrate):
         return
+    cache_key_for_signal = getattr(signal_repository, "historical_calibration_cache_key", None)
+    if not callable(cache_key_for_signal):
+        cache_key_for_signal = None
 
-    cache: dict[tuple[float | None, float | None, float | None], dict[str, Any]] = {}
+    cache: dict[Any, dict[str, Any]] = {}
     for section in ("ranked_signals", "selections", "preview_signals", "watchlist_signals", "weak_signals"):
         rows = result.get(section)
         if not isinstance(rows, list):
@@ -1657,7 +1794,11 @@ def _apply_tail_historical_calibration(signal_repository, result: dict[str, Any]
             v2_score = _number_or_none(row.get("v2_score") or credibility.get("score"))
             volume_ratio = _number_or_none(row.get("volume_ratio"))
             tail_return = _number_or_none(row.get("tail_return"))
-            key = (v2_score, volume_ratio, tail_return)
+            key = (
+                cache_key_for_signal(v2_score=v2_score, volume_ratio=volume_ratio, tail_return=tail_return)
+                if cache_key_for_signal is not None
+                else (v2_score, volume_ratio, tail_return)
+            )
             if key not in cache:
                 try:
                     cache[key] = calibrate(
@@ -1958,6 +2099,61 @@ def _run_minute5_invalid_repair_job(
         store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "异常分钟线修复失败"))
         return
     store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "异常分钟线修复完成"))
+
+
+def _run_mootdx_daily_gap_repair_job(
+    store: JobStore,
+    runner,
+    job_id: str,
+    payload: MootdxDailyGapRepairRequest,
+) -> None:
+    items = payload.items
+    store.update_job(job_id, status="running", progress=_progress(2, "starting", f"准备回补 {len(items)} 个日线缺口"))
+    results = []
+    try:
+        for index, item in enumerate(items, start=1):
+            start_percent = 5 + int((index - 1) / len(items) * 85)
+            store.update_job(
+                job_id,
+                status="running",
+                progress=_progress(start_percent, "backfilling", f"回补 {item.symbol} {item.start_date} 至 {item.end_date}"),
+            )
+            sync = runner(
+                symbols=[item.symbol],
+                tasks=["stock_kline_daily"],
+                trade_date=item.end_date,
+                daily_mode="backfill",
+                start_date=item.start_date,
+                end_date=item.end_date,
+                recheck_no_data=True,
+                progress=None,
+            )
+            results.append({"item": item.model_dump(mode="json"), "sync": sync})
+            if sync.get("failed"):
+                raise RuntimeError(f"Mootdx 日线回补失败: {sync['failed']}")
+    except Exception as exc:  # noqa: BLE001 - the job record is the operator-facing audit trail.
+        store.update_job(job_id, status="failed", result={"items": results}, error=str(exc), progress=_progress(100, "failed", "日线定向回补失败"))
+        return
+    store.update_job(
+        job_id,
+        status="success",
+        result={"items": results, "requested_items": len(items)},
+        progress=_progress(100, "completed", "日线定向回补完成，请刷新缺口判断复核"),
+    )
+
+
+def _run_mootdx_daily_gap_verify_job(store: JobStore, runner, job_id: str, payload: MootdxDailyGapRepairRequest) -> None:
+    items = payload.items
+    store.update_job(job_id, status="running", progress=_progress(1, "starting", f"准备核验 {len(items)} 个缺口", processed=0, total=len(items)))
+    try:
+        def report(percent: int, stage: str, message: str) -> None:
+            processed = min(len(items), max(0, round(percent / 100 * len(items))))
+            store.update_job(job_id, status="running", progress=_progress(percent, stage, message, processed=processed, total=len(items)))
+        result = runner(items=items, progress=report)
+    except Exception as exc:
+        store.update_job(job_id, status="failed", error=str(exc), progress=_progress(100, "failed", "Baostock 核验失败", processed=0, total=len(items)))
+        return
+    store.update_job(job_id, status="success", result=result, progress=_progress(100, "completed", "Baostock 核验完成", processed=len(items), total=len(items)))
 
 
 def _run_minute5_missing_repair_job(
@@ -2320,6 +2516,8 @@ def _data_ops_status_item(status) -> dict[str, Any]:
         "status": status.status,
         "schedule_kind": status.schedule_kind,
         "schedule_config": status.schedule_config,
+        "max_runtime_seconds": status.max_runtime_seconds,
+        "stale_after_seconds": status.stale_after_seconds,
         "last_started_at": _iso_or_none(status.last_started_at),
         "last_finished_at": _iso_or_none(status.last_finished_at),
         "next_run_at": _iso_or_none(status.next_run_at),
@@ -2413,8 +2611,8 @@ def _job_result_summary(result: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _progress(percent: int, stage: str, message: str) -> dict[str, Any]:
-    return {"percent": percent, "stage": stage, "message": message}
+def _progress(percent: int, stage: str, message: str, **extra: Any) -> dict[str, Any]:
+    return {"percent": percent, "stage": stage, "message": message, **extra}
 
 
 def _elapsed(started_at: float) -> float:

@@ -338,9 +338,11 @@ class ClickHouseTailSignalRepository:
     ) -> dict[str, Any]:
         """Return historical outcome stats for signals in the same quality buckets."""
         self.ensure_tables()
-        confidence_bucket = _confidence_bucket(_float_or_none(v2_score))
-        volume_ratio_bucket = _volume_ratio_bucket(_float_or_none(volume_ratio))
-        tail_return_bucket = _tail_return_bucket(_float_or_none(tail_return))
+        confidence_bucket, volume_ratio_bucket, tail_return_bucket = self.historical_calibration_cache_key(
+            v2_score=v2_score,
+            volume_ratio=volume_ratio,
+            tail_return=tail_return,
+        )
         params = {
             "start": start or date(1970, 1, 1),
             "end": end or date(2999, 12, 31),
@@ -393,6 +395,19 @@ class ClickHouseTailSignalRepository:
             else "历史相同分桶样本不足，不能给出可靠胜率。"
         )
         return result
+
+    def historical_calibration_cache_key(
+        self,
+        *,
+        v2_score: float | None,
+        volume_ratio: float | None,
+        tail_return: float | None,
+    ) -> tuple[str, str, str]:
+        return (
+            _confidence_bucket(_float_or_none(v2_score)),
+            _volume_ratio_bucket(_float_or_none(volume_ratio)),
+            _tail_return_bucket(_float_or_none(tail_return)),
+        )
 
     def _overall_rows(self, params: dict[str, date], status: str | None = None) -> list[tuple[Any, ...]]:
         status_filter = f"and s.status = '{status}'" if status else ""

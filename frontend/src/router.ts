@@ -4,6 +4,9 @@ import Dashboard from './pages/Dashboard.vue'
 import FundTail from './pages/FundTail.vue'
 import Jobs from './pages/Jobs.vue'
 import Minute5Quality from './pages/Minute5Quality.vue'
+import CatalogQuality from './pages/CatalogQuality.vue'
+import DailyKlineQuality from './pages/DailyKlineQuality.vue'
+import MootdxMonitor from './pages/MootdxMonitor.vue'
 import OptionsStrategy from './pages/OptionsStrategy.vue'
 import ReitsChannel from './pages/ReitsChannel.vue'
 import SignalReview from './pages/SignalReview.vue'
@@ -20,6 +23,9 @@ export const navigationRoutes = [
   { name: 'dashboard', label: '总览' },
   { name: 'data', label: '数据中心' },
   { name: 'minute5-quality', label: '5m质量巡检' },
+  { name: 'mootdx-monitor', label: 'Mootdx 数据源' },
+  { name: 'mootdx-catalog-quality', label: 'Mootdx 目录质量' },
+  { name: 'mootdx-daily-quality', label: 'Mootdx 日线质量' },
   { name: 'stock-list', label: '股票列表' },
   { name: 'stock-readiness', label: '策略数据就绪度' },
   { name: 'tail-live', label: '今日尾盘选股' },
@@ -78,6 +84,9 @@ export const router = createRouter({
     { path: '/dashboard', name: 'dashboard', component: Dashboard },
     { path: '/data', name: 'data', component: DataCenter },
     { path: '/minute5-quality', name: 'minute5-quality', component: Minute5Quality },
+    { path: '/mootdx-monitor', name: 'mootdx-monitor', component: MootdxMonitor },
+    { path: '/mootdx/catalog-quality', name: 'mootdx-catalog-quality', component: CatalogQuality },
+    { path: '/mootdx/daily-quality', name: 'mootdx-daily-quality', component: DailyKlineQuality },
     { path: '/stocks', name: 'stock-list', component: StockList },
     { path: '/stock-readiness', name: 'stock-readiness', component: StockReadiness },
     {

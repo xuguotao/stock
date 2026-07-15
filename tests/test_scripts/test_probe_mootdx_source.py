@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 
 from scripts.probe_mootdx_source import ProbeTask, build_summary, run_probe_task
@@ -50,7 +52,7 @@ def test_run_probe_task_records_success_metadata() -> None:
 def test_run_probe_task_serializes_daily_date_metadata() -> None:
     task = ProbeTask(data_type="daily_bars", symbol="000001.SZ", frequency="daily", sleep_seconds=0.0, round_index=1)
 
-    result = run_probe_task(FakeProbeSource(), task)
+    result = run_probe_task(FakeProbeSource(), task, trade_date=date(2026, 7, 9))
 
     assert result["success"] is True
     assert result["first_datetime"] == "2026-07-09"

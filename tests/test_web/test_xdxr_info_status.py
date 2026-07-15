@@ -22,4 +22,4 @@ def test_inspect_includes_xdxr_info():
     xdxr_row = xdxr_rows[0]
     assert xdxr_row["name"] == "除权除息数据"
     assert xdxr_row["category"] == "参考数据"
-    assert "xdxr_sync" in xdxr_row["repair_action_keys"]
+    assert xdxr_row["repair_action_keys"] == []

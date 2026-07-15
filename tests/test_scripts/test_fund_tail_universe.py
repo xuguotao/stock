@@ -1,6 +1,9 @@
+import pandas as pd
+
 from scripts.backtest_fund_tail_advice import (
     FUNDS,
     PROXY_INDEXES,
+    download_fund_nav,
     load_fund_universe,
     proxy_info_for,
 )
@@ -65,3 +68,31 @@ def test_candidate_file_can_expand_backtest_universe(tmp_path):
         "proxy_code": "000016",
         "proxy_name": "上证50",
     }
+
+
+def test_download_fund_nav_parses_eastmoney_js_without_akshare_js_runtime(monkeypatch):
+    def fake_urlopen(req, timeout):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return (
+                    b'var Data_netWorthTrend = [{"x":1438099200000,"y":1.0,'
+                    b'"equityReturn":0,"unitMoney":""}];'
+                )
+
+        return Response()
+
+    import scripts.backtest_fund_tail_advice as advice
+
+    monkeypatch.setattr(advice.urllib.request, "urlopen", fake_urlopen)
+
+    result = download_fund_nav("001632")
+
+    assert result.to_dict(orient="records") == [
+        {"date": pd.Timestamp("2015-07-29"), "close": 1.0}
+    ]

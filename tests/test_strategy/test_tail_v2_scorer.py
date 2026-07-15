@@ -103,10 +103,29 @@ def test_v2_scorer_keeps_overheated_tail_return_out_of_trade_candidates() -> Non
 
 def test_v2_scorer_keeps_excessive_volume_spike_out_of_trade_candidates() -> None:
     rows = score_tail_signals([
-        _signal("000005.SZ", strength=1.0, volume_ratio=3.2, tail_return=0.008)
+        _signal("000005.SZ", strength=1.0, volume_ratio=7.5, tail_return=0.018)
     ])
 
     row = rows[0]
     assert row.action == "observe_next_open"
     assert row.layer == "watchlist"
     assert any("过度放量" in risk for risk in row.risks)
+
+
+def test_v2_scorer_allows_high_volume_when_price_action_is_orderly() -> None:
+    rows = score_tail_signals([
+        _signal(
+            "000006.SZ",
+            strength=1.0,
+            volume_ratio=7.5,
+            tail_return=0.008,
+            tail_high_return=0.01,
+            pullback_from_high=-0.001,
+            close_position=0.92,
+        )
+    ])
+
+    row = rows[0]
+    assert row.layer == "strong"
+    assert row.action == "trade_candidate"
+    assert not any("过度放量" in risk for risk in row.risks)

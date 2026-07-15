@@ -76,3 +76,7 @@ anaconda_projects/
 .worktrees/
 .runtime/
 logs/
+
+# Local brainstorming and editor runtime state
+.superpowers/brainstorm/
+.mimocode/.cron-lock

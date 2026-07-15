@@ -128,12 +128,13 @@ class MootdxSource(DataSourceBase):
         start: date,
         end: date,
         frequency: str = "daily",
+        offset: int | None = None,
     ) -> pd.DataFrame:
         if frequency not in {"daily", "day"}:
             return pd.DataFrame()
         client = self._client_instance()
         self._wait_for_rate_limit()
-        frame = client.bars(symbol=_code(symbol), frequency=MOOTDX_FREQUENCIES["daily"], start=0, offset=self._default_offset)
+        frame = client.bars(symbol=_code(symbol), frequency=MOOTDX_FREQUENCIES["daily"], start=0, offset=offset or self._default_offset)
         normalized = normalize_mootdx_bars(frame, symbol)
         if normalized.empty:
             return normalized
@@ -272,8 +273,8 @@ def normalize_mootdx_bars(frame: pd.DataFrame | None, symbol: str) -> pd.DataFra
         "high": source["high"].map(_float).reset_index(drop=True),
         "low": source["low"].map(_float).reset_index(drop=True),
         "close": source["close"].map(_float).reset_index(drop=True),
-        "volume": source.get("volume", source.get("vol", pd.Series([0] * len(source)))).map(_float).astype(int).reset_index(drop=True),
-        "amount": source.get("amount", pd.Series([0.0] * len(source))).map(_float).reset_index(drop=True),
+        "volume": source.get("volume", source.get("vol", pd.Series([0] * len(source)))).map(_turnover_float).astype(int).reset_index(drop=True),
+        "amount": source.get("amount", pd.Series([0.0] * len(source))).map(_turnover_float).reset_index(drop=True),
     })
     rows["time"] = rows["datetime"].dt.time
     return rows[["datetime", "time", "symbol", "open", "high", "low", "close", "volume", "amount"]].sort_values("datetime").reset_index(drop=True)
@@ -327,3 +328,8 @@ def _float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _turnover_float(value: Any) -> float:
+    number = _float(value)
+    return 0.0 if abs(number) < 1e-8 else number

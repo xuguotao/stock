@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from src.data_ops.config import load_data_ops_config
 from src.data_ops.handlers import TaskHandler, build_default_handlers
+from src.data_ops.mootdx_tasks import MOOTDX_TASK_KEYS
 from src.data_ops.models import encode_progress_message
 from src.data_ops.repository import ClickHouseDataOpsRepository
 from src.data_ops.scheduler import should_run_task
@@ -25,9 +26,9 @@ TASK_GROUPS: dict[str, set[str]] = {
         "stock_master_sync",
         "quality_snapshot",
         "post_close_maintenance",
-        "xdxr_sync",
         "stock_readiness_snapshot",
         "stock_readiness_repair",
+        *MOOTDX_TASK_KEYS,
     },
 }
 
@@ -101,6 +102,7 @@ class DataOpsRunner:
             try:
                 params = dict(task_config.schedule_config)
                 params["progress"] = self._progress_callback(task_config.task_key)
+                params["manual_trigger"] = task_config.manual_trigger
                 result = handler(params)
             except Exception as exc:  # noqa: BLE001 - failures must be recorded and runner continues.
                 failed += 1
@@ -164,8 +166,12 @@ class DataOpsRunner:
 
     def run_forever(self) -> None:
         while True:
-            result = self.run_once()
-            logging.info("data ops cycle completed: %s", result)
+            try:
+                result = self.run_once()
+            except Exception:  # noqa: BLE001 - a daemon runner should survive transient infrastructure failures.
+                logging.exception("data ops cycle failed")
+            else:
+                logging.info("data ops cycle completed: %s", result)
             sleep(self.config.interval_seconds)
 
 

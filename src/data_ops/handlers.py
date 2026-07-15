@@ -6,6 +6,9 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from src.data.clickhouse_source import ClickHouseStockDataSource
+from src.data.mootdx_source import MootdxSource
+from src.data_ops.mootdx_tasks import MOOTDX_TASK_BY_KEY
+from src.trading.scheduler import TradingScheduler
 
 TaskHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -20,9 +23,10 @@ def build_default_handlers(
     daily_repair_runner: Callable[..., dict[str, Any]] | None = None,
     index_daily_sync_runner: Callable[..., dict[str, Any]] | None = None,
     stock_master_runner: Callable[..., dict[str, Any]] | None = None,
-    xdxr_sync_runner: Callable[..., dict[str, Any]] | None = None,
     stock_readiness_snapshot_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     stock_readiness_repair_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    mootdx_sync_runner: Callable[..., dict[str, Any]] | None = None,
+    stock_universe_profile_runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, TaskHandler]:
     if stock_master_runner is None:
         from src.data.clickhouse_stock_master_sync import sync_clickhouse_stock_master
@@ -56,13 +60,6 @@ def build_default_handlers(
         from src.data.clickhouse_daily_sync import sync_clickhouse_index_daily
 
         index_daily_sync_runner = sync_clickhouse_index_daily
-    if xdxr_sync_runner is None:
-        from src.data.clickhouse_xdxr_sync import sync_clickhouse_xdxr_info
-        from src.data.tdxrs_sync import fetch_xdxr_info
-
-        xdxr_sync_runner = lambda client, symbols: sync_clickhouse_xdxr_info(
-            client=client, fetch_fn=fetch_xdxr_info, symbols=symbols
-        )
     if stock_readiness_snapshot_runner is None:
         from src.data.stock_data_readiness import run_readiness_snapshot
 
@@ -71,6 +68,16 @@ def build_default_handlers(
         from src.data.stock_data_readiness import run_readiness_repair
 
         stock_readiness_repair_runner = run_readiness_repair
+    if mootdx_sync_runner is None:
+        from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+        mootdx_sync_runner = sync_mootdx_offline_data
+    if stock_universe_profile_runner is None:
+        from src.data.stock_universe_profile import refresh_stock_universe_profiles
+
+        stock_universe_profile_runner = lambda **kwargs: refresh_stock_universe_profiles(
+            client=ClickHouseStockDataSource()._client_instance(), **kwargs
+        )
 
     return {
         "stock_master_sync": lambda params: run_stock_master_sync(params, stock_master_runner),
@@ -86,9 +93,19 @@ def build_default_handlers(
             daily_repair_runner=daily_repair_runner,
             index_daily_sync_runner=index_daily_sync_runner,
         ),
-        "xdxr_sync": lambda params: run_xdxr_sync(params, xdxr_sync_runner),
         "stock_readiness_snapshot": stock_readiness_snapshot_runner,
         "stock_readiness_repair": stock_readiness_repair_runner,
+        **{
+            task_key: lambda params, definition=definition: run_mootdx_sync(
+                params,
+                mootdx_sync_runner,
+                task=definition.sync_task,
+                daily_reconcile=definition.daily_reconcile,
+            )
+            for task_key, definition in MOOTDX_TASK_BY_KEY.items()
+            if task_key != "stock_universe_profile_refresh"
+        },
+        "stock_universe_profile_refresh": lambda params: run_stock_universe_profile_refresh(params, stock_universe_profile_runner),
     }
 
 
@@ -128,6 +145,97 @@ def run_quote_snapshot_capture(params: dict[str, Any], runner: Callable[..., dic
 
 def run_quote_rollup_refresh(params: dict[str, Any], runner: Callable[..., dict[str, Any]]) -> dict[str, Any]:
     return runner()
+
+
+def run_mootdx_sync(
+    params: dict[str, Any],
+    runner: Callable[..., dict[str, Any]],
+    *,
+    task: str,
+    daily_reconcile: bool = False,
+) -> dict[str, Any]:
+    progress = params.get("progress")
+    trade_date = _trade_date(params)
+    manual_reconcile = False
+    if task == "stock_kline_daily" and params.get("manual_trigger") and not TradingScheduler().is_trading_day(trade_date):
+        trade_date = _latest_trade_calendar_date() or _latest_daily_trade_date() or trade_date
+        manual_reconcile = True
+    result = runner(
+        tasks=[task],
+        source=_mootdx_source_from_params(params),
+        trade_date=trade_date,
+        limit=int(params.get("limit") or 0),
+        include_beijing=bool(params.get("include_beijing") or False),
+        daily_reconcile=daily_reconcile or manual_reconcile,
+        progress=progress if callable(progress) else None,
+    )
+    audit = ((result.get("diagnostics") or {}).get(task) or {}).get("audit") or {}
+    failed = result.get("failed") or {}
+    if failed:
+        raise RuntimeError(f"mootdx {task} failed: {failed.get(task) or failed}")
+    if audit.get("status") == "failed":
+        reasons = ", ".join(str(reason) for reason in audit.get("reasons") or [])
+        raise RuntimeError(f"mootdx {task} audit failed: {reasons or 'unknown'}")
+    return result
+
+
+def _mootdx_source_from_params(params: dict[str, Any]) -> MootdxSource:
+    """Build one reusable source for the full task run from task configuration."""
+    server = _mootdx_server(params.get("server"))
+    return MootdxSource(
+        rate_limit=float(params.get("rate_limit") or 0.02),
+        timeout=int(params.get("timeout") or 15),
+        bestip=bool(params.get("bestip") or False),
+        server=server,
+        include_beijing=bool(params.get("include_beijing") or False),
+    )
+
+
+def _mootdx_server(value: Any) -> tuple[str, int] | None:
+    if value is None or not str(value).strip():
+        return None
+    host, separator, port = str(value).strip().partition(":")
+    if not separator or not host or not port.isdigit():
+        raise ValueError("Mootdx 服务器必须为 host:port 格式")
+    return host, int(port)
+
+
+def run_stock_universe_profile_refresh(params: dict[str, Any], runner: Callable[..., dict[str, Any]]) -> dict[str, Any]:
+    from src.data.stock_universe_profile import StockUniverseProfileRules
+
+    progress = params.get("progress")
+    return runner(
+        rules=StockUniverseProfileRules.from_mapping(params),
+        rule_version=max(1, int(params.get("rule_version") or 1)),
+        symbols=params.get("symbols"),
+        progress=progress if callable(progress) else None,
+    )
+
+
+def _latest_daily_trade_date() -> date | None:
+    try:
+        rows = ClickHouseStockDataSource()._client_instance().execute(
+            "select max(trade_date) from mootdx_stock_kline final where frequency = 'daily'"
+        )
+    except Exception:  # noqa: BLE001 - manual execution still records the normal source error if unavailable.
+        return None
+    value = rows[0][0] if rows and rows[0] else None
+    if isinstance(value, datetime):
+        return value.date()
+    return value if isinstance(value, date) else None
+
+
+def _latest_trade_calendar_date() -> date | None:
+    try:
+        rows = ClickHouseStockDataSource()._client_instance().execute(
+            "select max(date) from trade_calendar where is_open = 1 and date <= today()"
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    value = rows[0][0] if rows and rows[0] else None
+    if isinstance(value, datetime):
+        return value.date()
+    return value if isinstance(value, date) else None
 
 
 def run_quality_snapshot(
@@ -192,32 +300,3 @@ def _trade_date(params: dict[str, Any]) -> date:
     if value:
         return datetime.strptime(str(value), "%Y-%m-%d").date()
     return date.today()
-
-
-def run_xdxr_sync(params: dict[str, Any], runner: Callable[..., dict[str, Any]]) -> dict[str, Any]:
-    """Run xdxr sync task."""
-    progress = params.get("progress")
-    if callable(progress):
-        progress(10, "connecting", "连接通达信服务器")
-
-    from src.data.tdxrs_sync import is_tdxrs_available
-
-    if not is_tdxrs_available():
-        return {"status": "skipped", "reason": "tdxrs not installed"}
-
-    if callable(progress):
-        progress(20, "fetching_symbols", "获取股票列表")
-
-    client = ClickHouseStockDataSource()._client_instance()
-    symbols_result = client.execute("SELECT symbol || '.' || market FROM stocks FINAL WHERE market IN ('SZ', 'SH')")
-    symbols = [row[0] for row in symbols_result]
-
-    if callable(progress):
-        progress(30, "syncing", f"同步 {len(symbols)} 只股票的除权除息数据")
-
-    result = runner(client=client, symbols=symbols)
-
-    if callable(progress):
-        progress(100, "completed", f"除权除息同步完成，插入 {result.get('inserted', 0)} 条记录")
-
-    return result

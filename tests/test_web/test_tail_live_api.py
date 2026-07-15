@@ -306,6 +306,38 @@ def test_tail_historical_calibration_limits_full_market_rows() -> None:
     assert "history" not in result["weak_signals"][0]["credibility"]
 
 
+def test_tail_historical_calibration_reuses_repository_cache_key() -> None:
+    class FakeSignalRepository:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def historical_calibration_cache_key(self, *, v2_score, volume_ratio, tail_return):
+            return ("same_confidence", "same_volume", "same_return")
+
+        def historical_calibration_for_signal(self, *, v2_score, volume_ratio, tail_return):
+            self.calls.append((v2_score, volume_ratio, tail_return))
+            return {"status": "样本不足", "sample_count": 0}
+
+    ranked = [
+        {
+            "symbol": f"{index:06d}.SZ",
+            "rank": index,
+            "v2_score": 80.0 + index / 1000,
+            "volume_ratio": 6.0 + index / 1000,
+            "tail_return": 0.01 + index / 100000,
+            "credibility": {"score": 60.0},
+        }
+        for index in range(1, 101)
+    ]
+    result = {"ranked_signals": ranked, "diagnostics": {}}
+    repository = FakeSignalRepository()
+
+    app_module._apply_tail_historical_calibration(repository, result)
+
+    assert len(repository.calls) == 1
+    assert all(row["credibility"]["history"]["status"] == "样本不足" for row in ranked)
+
+
 def test_tail_signal_stats_api_returns_repository_metrics(tmp_path) -> None:
     class FakeSignalRepository:
         def signal_stats(self, *, start=None, end=None):

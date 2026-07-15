@@ -1582,7 +1582,6 @@ function dataOpsTaskTitle(taskKey: string) {
     quote_snapshot_capture: '行情快照采集',
     quote_rollup_refresh: '快照聚合刷新',
     quality_snapshot: '数据质量快照',
-    xdxr_sync: '除权除息数据同步',
     stock_readiness_snapshot: '策略数据就绪度快照',
     stock_readiness_repair: '策略数据缺口回补'
   }
@@ -1638,14 +1637,6 @@ function dataOpsTaskDetail(taskKey: string) {
       dependency: '依赖质量检查 SQL、ClickHouse 读写能力和数据源健康规则。',
       verification: '检查 data_source_health 新增行数、健康矩阵状态和任务 last_result.rows。',
       failure: '质量 SQL 执行失败、ClickHouse 不可用、写入 data_source_health 失败或 runner 心跳超时。'
-    },
-    xdxr_sync: {
-      logic: '同步全市场除权除息信息，为前复权行情、复权口径校验和策略回测价格一致性提供基础数据。',
-      trigger: '交易日按 daily_time 执行，默认 15:30；也支持手动运行一次。',
-      data: '读取 stocks 股票池和外部除权除息数据源；写入 xdxr_info，并记录 data_ops_task_runs、data_ops_task_heartbeats。',
-      dependency: '依赖 ClickHouse stocks、xdxr_info 表、外部除权除息数据接口和网络稳定性。',
-      verification: '检查同步标的数、写入行数、最新除权除息日期和任务心跳；stale 表示上次 running 心跳超过阈值。',
-      failure: '外部数据源无响应、ClickHouse 写入失败、全市场批量同步超时或 runner 异常退出。'
     },
     stock_readiness_snapshot: {
       logic: '按近 180 天窗口生成策略所需数据维度的覆盖率快照，目前默认检查日线和 5m 分钟线是否达到策略可用标准。',

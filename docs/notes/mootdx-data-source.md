@@ -127,6 +127,181 @@ python scripts/sync_mootdx_clickhouse.py \
 | `finance_snapshot` | 个股财务摘要 | `mootdx_finance_snapshot` |
 | 每次运行 | 同步参数、结果、失败信息 | `mootdx_sync_runs` |
 
+### catalog 与日线自动运行
+
+`stock_catalog` 和 `stock_kline_daily` 已接入独立 `data_ops` runner。默认配置如下：
+
+| data_ops task | 交易日时间 | 行为 |
+| --- | --- | --- |
+| `mootdx_stock_catalog_sync` | 08:30 | 从 mootdx 全量股票目录建立权威快照，记录新增、移除、名称/ST 变化。 |
+| `mootdx_daily_kline_sync` | 15:35 | 以最新 catalog 有效池同步当日日线；单标的依次尝试 offset `5`、`20`、`800`。 |
+| `mootdx_daily_kline_reconcile` | 16:05 | 仅查询并重试当天缺少日线的标的，不重跑已成功标的。 |
+| `stock_universe_profile_refresh` | 16:15 | 读取目录与所有来源日线，重算全项目统一的可用股票池标签。 |
+
+运行状态由 `data_ops_task_runs` 和 `data_ops_task_heartbeats` 保存；源端参数、插入量、失败样本和质量结果由 `mootdx_sync_runs` 保存。日线标的状态保存在 `mootdx_symbol_data_status`：
+
+三个 Mootdx 任务的“调度参数”除 `time` 外，还包含连接配置。独立 runner 会在**每一轮任务开始时**创建一个 `MootdxSource`，并在该轮全量标的请求中复用同一客户端；手工脚本与 runner 的默认值保持一致：
+
+```json
+{
+  "time": "15:35",
+  "rate_limit": 0.02,
+  "timeout": 15,
+  "bestip": false
+}
+```
+
+| 参数 | 含义 | 默认值 | 使用建议 |
+| --- | --- | ---: | --- |
+| `rate_limit` | 同一任务内两次 Mootdx 请求的最小间隔，单位秒 | `0.02` | 源端不稳时增加到 `0.05`；不要改回旧实现的隐式 `0.2`。 |
+| `timeout` | 单次 Mootdx socket 超时，单位秒 | `15` | 临时网络问题可提高到 `30`。 |
+| `bestip` | 每次任务启动时是否重新测速选择服务器 | `false` | 日常关闭，排障或服务器失效时临时开启。 |
+| `server` | 可选固定服务器，格式 `host:port` | 未设置 | 用于可复现基准或已确认的稳定服务器；格式错误会使任务明确失败。 |
+
+旧任务配置会在 runner 下一个循环自动补齐上述缺失项，同时保留已保存的执行时间、限额与启停状态。
+
+### 统一可用股票池标签
+
+`stock_universe_profile_refresh` 是唯一的标签刷新任务。它以最新开市日为基准，使用最近 20 个交易日的合法日线计算流动性；日线可来自 mootdx 或按需核验后写回的 Baostock。默认规则为近 20 日至少 15 个成交日、日均成交额至少 1,000 万元、排除 ST 和北交所。
+
+规则保存在 data-ops 任务的 `schedule_config`：`lookback_days`、`min_trading_days`、`min_average_amount`、`min_listing_age_days`、`include_beijing`。通过后台保存任一业务阈值时会自动递增 `rule_version`；随后点击“运行一次”即可立刻使用新规则全量重算。结果写入 `stock_universe_profiles`，任务审计会记录基准日、规则版本、目录有效数、日线有效数、流动性达标数和最终可用数。
+
+排障时可由 runner 手工传入 `symbols`，仅刷新指定标的，例如：
+
+```python
+from src.data.stock_universe_profile import StockUniverseProfileRules, refresh_stock_universe_profiles
+from src.data.clickhouse_source import ClickHouseStockDataSource
+
+refresh_stock_universe_profiles(
+    client=ClickHouseStockDataSource()._client_instance(),
+    rules=StockUniverseProfileRules(),
+    symbols=["000001.SZ"],
+)
+```
+
+- `active`：最近请求成功，连续失败数清零。
+- `temporary_failed`：源端请求异常，保留首次发现时间并累加连续失败数。
+- `no_data`：所有 offset 都为空；默认跳过，但满 30 天后会自动复查。
+- `disabled`：仅供人工明确停用，自动任务不请求。
+
+每次 catalog 和日线同步都会返回 `diagnostics.*.audit`：
+
+- `healthy`：目录和日线覆盖、质量检查均符合目标。
+- `degraded`：目录总量相对上一快照变化超过 2%，或日线覆盖低于 99.5%、存在单标的请求失败、存在被过滤的无效行。
+- `failed`：目录源端为空，或日线覆盖低于 98%。`data_ops` 会将该运行标记为失败；详细原因仍保留在 mootdx 运行记录中。
+
+日线请求成功但未返回目标日有效数据时，任务会按需调用 Baostock 复查相同标的和日期范围，不会启动独立 Baostock 定时任务。复查有数据则以 `source='baostock'` 写回 `mootdx_stock_kline`；无数据和查询错误分别写入 `mootdx_daily_gap_verifications`，供日线质量页判定。
+
+人工执行日线缺口核对：
+
+```bash
+uv run --no-sync python scripts/sync_mootdx_clickhouse.py \
+  --tasks stock_kline_daily \
+  --trade-date 2026-07-09 \
+  --daily-reconcile
+```
+
+### 手工运行指南
+
+脚本入口为 `scripts/sync_mootdx_clickhouse.py`。手工执行前请确认已安装 `market` 可选依赖，并已配置 `STOCK_CLICKHOUSE_*`：
+
+```bash
+uv sync --extra market
+uv run --no-sync python scripts/sync_mootdx_clickhouse.py --help
+```
+
+常用参数如下。未列出的 probe、分钟线和扩展信息任务不属于 catalog 与日线的日常维护路径。
+
+| 参数 | 含义 | 日常建议 |
+| --- | --- | --- |
+| `--tasks` | 要运行的 mootdx 任务，逗号分隔。 | `stock_catalog` 或 `stock_kline_daily`，不要在日常维护中混入其他离线探测任务。 |
+| `--trade-date` | 日线目标交易日，格式 `YYYY-MM-DD`。 | 指定收盘日；省略时为当天。 |
+| `--symbols` | 仅处理指定的 `000001.SZ` 格式标的。 | 排障或抽样时使用；省略后日线从最新 catalog 有效池读取。 |
+| `--limit` | 仅处理解析后股票池的前 N 只，`0` 表示全量。 | 正常使用 `0`；网络或逻辑验证时使用小值。 |
+| `--daily-mode` | 日线模式：`incremental` 或 `backfill`。 | 每日用 `incremental`；历史补齐用 `backfill`。 |
+| `--daily-offset` | `backfill` 单标的请求的最大日线根数。 | 当前源端有效上限为 `800`。 |
+| `--start-date` / `--end-date` | `backfill` 写入的日期边界。 | 只限制写入范围，不会突破源端约 800 根日线的返回上限。 |
+| `--daily-reconcile` | 先查库，再只请求目标日缺失的标的。 | 日终补缺和异常恢复使用。 |
+| `--recheck-no-data` | 强制将已标为 `no_data` 的标的重新请求。 | 人工确认源端恢复、代码状态变化时使用；正常任务会在 30 天后自动复查。 |
+| `--rate-limit` | 两次 mootdx 请求之间的最小间隔（秒）。 | `0.02` 为当前全量实测值；源端不稳时提高到 `0.05`。 |
+| `--timeout` | mootdx socket 超时秒数。 | 默认 `15`；临时网络问题可增至 `30`。 |
+| `--bestip` / `--server` | 自动挑选或固定通达信行情服务器。 | 排障时使用 `--bestip`；已验证稳定地址时使用 `--server host:port`。 |
+| `--include-beijing` | 将北交所纳入股票池。 | 默认关闭，需明确覆盖北交所时才开启。 |
+| `--no-ensure-tables` | 不执行表 DDL。 | 表已就绪的批量任务可用；首次运行不要使用。 |
+
+#### 每日目录同步
+
+目录同步始终读取源端全量列表，不会被旧 catalog 限制，因此可发现新增股票。若目录结果为空，审计会标为 `failed`，不会覆盖现有目录。
+
+```bash
+uv run --no-sync python scripts/sync_mootdx_clickhouse.py \
+  --tasks stock_catalog \
+  --rate-limit 0.02
+```
+
+#### 每日日线主同步
+
+主同步使用最新 catalog 中的非 ST 沪深有效池。每只股票先请求 `offset=5`；无结果或异常时依次降级为 `20`、`800`。单标的错误不会中断整批任务，结果会写入 `mootdx_symbol_data_status` 和 `mootdx_sync_runs`。
+
+```bash
+uv run --no-sync python scripts/sync_mootdx_clickhouse.py \
+  --tasks stock_kline_daily \
+  --trade-date 2026-07-09 \
+  --rate-limit 0.02
+```
+
+#### 日终缺口核对
+
+该命令不会重写已成功的日线，只查询并请求目标交易日缺失的标的。适合主同步后运行，也适合修复部分网络失败。
+
+```bash
+uv run --no-sync python scripts/sync_mootdx_clickhouse.py \
+  --tasks stock_kline_daily \
+  --trade-date 2026-07-09 \
+  --daily-reconcile \
+  --rate-limit 0.05
+```
+
+#### 指定标的排障与无数据复查
+
+先对单标的执行，输出 JSON 中的 `diagnostics.stock_kline_daily` 会给出各 offset 的尝试结果、过滤行数和最终审计等级。
+
+```bash
+uv run --no-sync python scripts/sync_mootdx_clickhouse.py \
+  --tasks stock_kline_daily \
+  --symbols 301583.SZ \
+  --trade-date 2026-07-09 \
+  --recheck-no-data \
+  --rate-limit 0.05
+```
+
+#### 历史回补
+
+`backfill` 按源端返回的 800 根日线写入指定日期窗口；它适合首次建库或修复历史缺口。运行时间较长，且会优化实际写入的日分区，不应在盘中执行。
+
+```bash
+uv run --no-sync python scripts/sync_mootdx_clickhouse.py \
+  --tasks stock_kline_daily \
+  --daily-mode backfill \
+  --daily-offset 800 \
+  --start-date 2023-07-01 \
+  --end-date 2026-07-09 \
+  --trade-date 2026-07-09 \
+  --rate-limit 0.02
+```
+
+### 后台管理与 runner
+
+后台导航中的 `Mootdx 数据源` 页面读取同一套 ClickHouse 状态：可编辑启停、调度类型、`schedule_config` JSON、运行上限和失联阈值；也可请求下一轮 runner 手工运行。页面的“运行审计”读取 `mootdx_sync_runs`，健康摘要读取当前 catalog、日线和标的状态表。
+
+页面提交“运行一次”只写入 `manual_trigger`，实际执行仍由独立 runner 完成。部署方式见 `docs/data_ops_runner_deployment.md`。维护组 runner 启动后，三个任务会按后台保存的配置执行：
+
+```bash
+TASK_GROUP=maintenance \
+DATA_OPS_RUNNER_ID=mootdx-maintenance \
+scripts/install_data_ops_launchd.sh install
+```
+
 扩展探测任务：
 
 | 任务 key | 数据内容 | 目标表 |
@@ -248,6 +423,23 @@ python scripts/probe_mootdx_source.py \
 - 单只股票的在线 K 线请求速度足够用于定向 fallback 评估。
 - 通达信原始股票目录包含大量非普通股票条目；`MootdxSource` 返回 `StockInfo` 前会先按已知 A 股代码前缀过滤。
 - 目前证据支持将 `mootdx` 作为显式研究源和备选 fallback 候选，不建议直接作为默认生产数据源。
+
+## 后台质量页
+
+后台 `Mootdx 数据源` 页面提供任务配置、最近运行审计和概览健康状态，并可进入两个详情页：
+
+- `Mootdx 目录质量`：显示当前同步池的市场分布、ST 数量，以及目录的新增、移除、名称/ST/市场变更事件。变更事件只追加保存，首次部署前没有历史事件属于正常情况。
+- `Mootdx 日线质量`：以当前目录的沪深非 ST 标的为预期池，按交易日统计预期数、实际数、缺失数和完整度。上市起始日优先使用 `stocks.list_date`，缺失时回退到该代码在 `mootdx_stock_kline` 的首次日线日期，避免上市前日期被误判为缺失。
+
+日线页面的“提交日线核对”只请求 `mootdx_daily_kline_reconcile` 在下一轮 runner 执行；不在 Web 请求中直接跑同步。可选择 10、30 或 60 个交易日窗口定位历史缺口。
+
+日线缺口以连续交易日区间归因：
+
+- `建议回补`：缺口前后交易日都已有该代码日线，是同步漏数的直接证据。
+- `待核验`：缺口位于所选窗口边界，或前后数据不足；没有停复牌历史时，不得视为合理缺失。
+- `已知无数据`：日线数据源状态已标记为 `no_data`，默认无需重复回补。
+
+该分类用于排列回补优先级，不能替代交易所停复牌公告。若需要把“待核验”进一步确认为合理停牌，需另行接入可追溯的停复牌历史源。
 
 ## 使用过的官方文档
 

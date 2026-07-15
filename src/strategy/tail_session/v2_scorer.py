@@ -128,7 +128,7 @@ def _risks(signal: TailSessionSignal) -> list[str]:
         risks.append("尾盘价格回落，次日延续性不确定")
     if signal.tail_return > 0.02:
         risks.append("尾盘涨幅过热，存在次日兑现压力")
-    if signal.volume_ratio > 2.5:
+    if _has_excessive_volume_chase_risk(signal):
         risks.append("尾盘过度放量，可能是短线资金抢跑")
     if _has_tail_pullback_risk(signal):
         risks.append("尾盘冲高回落，收盘未能守住拉升区间")
@@ -146,8 +146,13 @@ def _has_tail_pullback_risk(signal: TailSessionSignal) -> bool:
 
 def _has_tail_chase_risk(signal: TailSessionSignal) -> bool:
     tail_return = float(signal.tail_return)
+    return tail_return > 0.02 or _has_excessive_volume_chase_risk(signal)
+
+
+def _has_excessive_volume_chase_risk(signal: TailSessionSignal) -> bool:
     volume_ratio = float(signal.volume_ratio)
-    return tail_return > 0.02 or volume_ratio > 2.5
+    tail_return = float(signal.tail_return)
+    return volume_ratio >= 6.0 and tail_return >= 0.015
 
 
 def _bounded(value: float) -> float:

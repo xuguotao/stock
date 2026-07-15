@@ -715,6 +715,8 @@ export interface DataOpsTaskStatus {
   status: string
   schedule_kind: string
   schedule_config: Record<string, unknown>
+  max_runtime_seconds: number
+  stale_after_seconds: number
   last_started_at: string | null
   last_finished_at: string | null
   next_run_at: string | null
@@ -739,6 +741,114 @@ export interface DataOpsTaskConfigPayload {
   schedule_config: Record<string, unknown>
   max_runtime_seconds?: number
   stale_after_seconds?: number
+}
+
+export interface MootdxMonitorTask extends DataOpsTaskStatus {
+  label: string
+  description: string
+  sync_task: string
+  daily_reconcile: boolean
+  progress: {
+    percent: number | null
+    stage: string | null
+    message: string | null
+  }
+}
+
+export interface MootdxAuditRecord {
+  run_id: string
+  task_key: string
+  task_label: string
+  started_at: string | null
+  finished_at: string | null
+  status: string
+  duration_seconds: number | null
+  inserted: Record<string, number>
+  audit: { status: string; reasons: string[] }
+  error: string
+  diagnostics?: Record<string, unknown>
+}
+
+export interface MootdxHealthItem {
+  status: string
+  error?: string
+  symbols?: number
+  captured_at?: string | null
+  trade_date?: string | null
+  [key: string]: unknown
+}
+
+export interface MootdxMonitorResponse {
+  tasks: MootdxMonitorTask[]
+  audits: MootdxAuditRecord[]
+  health: {
+    catalog: MootdxHealthItem
+    daily: MootdxHealthItem
+    symbol_status: MootdxHealthItem
+  }
+}
+
+export interface MootdxCatalogQualityResponse {
+  summary: {
+    status: string
+    symbols: number
+    markets: Record<string, number>
+    st_symbols: number
+    captured_at: string | null
+  }
+  daily_changes: Array<{ date: string; added?: number; removed?: number; name_changed?: number; st_changed?: number; market_changed?: number }>
+  events: Array<{
+    event_at: string | null
+    symbol: string
+    event_type: string
+    previous: Record<string, unknown>
+    current: Record<string, unknown>
+    run_id: string
+  }>
+  universe_profile: {
+    status: string
+    summary: { as_of_date: string | null; computed_at: string | null; rule_version: number; symbols: number; catalog_valid: number; latest_daily_valid: number; liquidity_qualified: number; universe_eligible: number }
+    distributions: { markets: Array<{ key: string; count: number }>; liquidity_levels: Array<{ key: string; count: number }>; exclusion_reasons: Array<{ key: string; count: number }>; exclusion_reason_markets: Array<{ reason: string; market: string; count: number }> }
+  }
+}
+
+export interface MootdxUniverseProfileFilter { field: string; values: Array<string | number | boolean> }
+export interface MootdxUniverseProfilesResponse {
+  profile: MootdxCatalogQualityResponse['universe_profile']
+  total: number
+  items: Array<{ symbol: string; name: string; market: string; is_st: boolean; list_date: string | null; listing_age_days: number; latest_daily_valid: boolean; recent_20d_trading_days: number; recent_20d_avg_amount: number; liquidity_level: string; universe_eligible: boolean; exclusion_reasons: string[]; as_of_date: string | null; computed_at: string | null; rule_version: number }>
+}
+
+export interface MootdxDailyQualityResponse {
+  summary: {
+    status: string
+    latest_trade_date: string | null
+    expected_symbols: number
+    actual_symbols: number
+    completeness_rate: number
+    missing_symbols: number
+    status_counts: Record<string, number>
+    gap_counts: Record<string, number>
+  }
+  daily_coverage: Array<{
+    trade_date: string
+    expected_symbols: number
+    actual_symbols: number
+    missing_symbols: number
+    completeness_rate: number
+    gap_counts: Record<string, number>
+  }>
+  missing_details: Array<{
+    symbol: string
+    missing_dates: string[]
+    list_date: string | null
+    status: string
+    reason: string
+    consecutive_failures: number
+    classification: 'known_no_data' | 'needs_review' | 'repair_candidate' | 'reviewed_no_repair' | string
+    recommendation: string
+    evidence: string
+  }>
 }
 
 export interface DailyMaintenancePayload {
@@ -1216,8 +1326,11 @@ export const api = {
   getDataset(datasetId: string) {
     return request<DatasetDetail>(`/api/datasets/${encodeURIComponent(datasetId)}`)
   },
-  getDataStatus() {
-    return request<DataStatusResponse>('/api/data/status')
+  getDataStatus(asOf?: string | null) {
+    const params = new URLSearchParams()
+    if (asOf) params.set('as_of', asOf)
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return request<DataStatusResponse>(`/api/data/status${suffix}`)
   },
   getTailMlAudit() {
     return request<TailMlAuditResponse>('/api/ml/tail/audit')
@@ -1315,6 +1428,38 @@ export const api = {
   },
   getDataOpsTasks() {
     return request<DataOpsTasksResponse>('/api/data/ops-tasks')
+  },
+  getMootdxMonitor() {
+    return request<MootdxMonitorResponse>('/api/data/mootdx/monitor')
+  },
+  getMootdxMonitorAudit(runId: string) {
+    return request<{ item: MootdxAuditRecord }>(`/api/data/mootdx/monitor/audits/${encodeURIComponent(runId)}`)
+  },
+  getMootdxCatalogQuality(eventLimit = 200) {
+    return request<MootdxCatalogQualityResponse>(`/api/data/mootdx/catalog-quality?event_limit=${eventLimit}`)
+  },
+  getMootdxCatalogChangeEvents(eventDate?: string, eventType?: string) {
+    const params = new URLSearchParams({ limit: '500' })
+    if (eventDate) params.set('event_date', eventDate)
+    if (eventType) params.set('event_type', eventType)
+    return request<{ items: MootdxCatalogQualityResponse['events'] }>(`/api/data/mootdx/catalog-quality/events?${params}`)
+  },
+  getMootdxUniverseProfiles(filters: MootdxUniverseProfileFilter[], limit = 100, offset = 0) {
+    return request<MootdxUniverseProfilesResponse>(`/api/data/mootdx/catalog-quality/universe-profiles?limit=${limit}&offset=${offset}`, {
+      method: 'POST', body: JSON.stringify({ filters })
+    })
+  },
+  getMootdxDailyQuality(lookbackDays = 30, missingLimit = 200) {
+    return request<MootdxDailyQualityResponse>(`/api/data/mootdx/daily-quality?lookback_days=${lookbackDays}&missing_limit=${missingLimit}`)
+  },
+  createMootdxDailyGapRepair(items: Array<{ symbol: string; start_date: string; end_date: string; evidence: string }>) {
+    return request<{ job_id: string }>('/api/data/mootdx/daily-quality/repair', { method: 'POST', body: JSON.stringify({ items }) })
+  },
+  createMootdxDailyGapVerify(items: Array<{ symbol: string; start_date: string; end_date: string; evidence: string }>) {
+    return request<{ job_id: string }>('/api/data/mootdx/daily-quality/verify', { method: 'POST', body: JSON.stringify({ items }) })
+  },
+  reviewMootdxDailyGapNoRepair(payload: { symbol: string; start_date: string; end_date: string; reason: string }) {
+    return request<{ job_id: string }>('/api/data/mootdx/daily-quality/review-no-repair', { method: 'POST', body: JSON.stringify(payload) })
   },
   updateDataOpsTaskConfig(taskKey: string, payload: DataOpsTaskConfigPayload) {
     return request<{ item: DataOpsTaskStatus }>(`/api/data/ops-tasks/${encodeURIComponent(taskKey)}/config`, {

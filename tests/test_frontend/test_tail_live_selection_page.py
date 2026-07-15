@@ -125,10 +125,22 @@ def test_tail_live_selection_page_shows_source_data_health_panel() -> None:
     assert "刷新健康度" in source
     assert "loadDataHealth" in source
     assert "getDataStatus" in source
+    assert "useTailLiveDataHealth(computed(() => form.value.trade_date))" in source
     assert "分钟线覆盖" in source
     assert "分钟线最新" in source
     assert "行情快照" in source
     assert "日线质量" in source
+
+
+def test_tail_live_selection_uses_local_trade_date_for_today() -> None:
+    source = Path("frontend/src/pages/TailLiveSelection.vue").read_text(encoding="utf-8")
+    data_health = Path("frontend/src/features/tail-live/useTailLiveDataHealth.ts").read_text(encoding="utf-8")
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "const today = formatLocalDate(new Date())" in source
+    assert "new Date().toISOString().slice(0, 10)" not in source
+    assert "api.getDataStatus(tradeDate.value)" in data_health
+    assert "params.set('as_of', asOf)" in client
 
 
 def test_tail_live_selection_page_labels_full_market_limit_clearly() -> None:

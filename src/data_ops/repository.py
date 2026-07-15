@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from datetime import datetime
 from typing import Any
+
+from clickhouse_driver.errors import NetworkError
 
 from src.data.clickhouse_source import ClickHouseStockDataSource
 from src.data_ops.models import (
     DataOpsTaskConfig,
     DataOpsTaskStatus,
+    RETIRED_TASK_KEYS,
     decode_progress_message,
     default_task_configs,
     encode_progress_message,
@@ -31,6 +35,8 @@ class ClickHouseDataOpsRepository:
         self._source = None if client is not None else ClickHouseStockDataSource(host=host, user=user, password=password, database=database)
         self._client = client
         self._started_runs: dict[str, dict[str, Any]] = {}
+        # clickhouse-driver.Client uses one socket and cannot execute concurrent queries.
+        self._lock = threading.RLock()
 
     @property
     def client(self) -> Any:
@@ -39,13 +45,15 @@ class ClickHouseDataOpsRepository:
         return self._client
 
     def _execute(self, query: str, params: Any = None):
-        try:
-            return self.client.execute(query, params)
-        except OSError:
-            if self._source is None:
-                raise
-            self._client = self._source._client_instance()
-            return self.client.execute(query, params)
+        with self._lock:
+            try:
+                return self.client.execute(query, params)
+            except (OSError, AttributeError, NetworkError):
+                if self._source is None:
+                    raise
+                self._source._client = None
+                self._client = None
+                return self.client.execute(query, params)
 
     def ensure_tables(self) -> None:
         self._execute(
@@ -109,7 +117,7 @@ class ClickHouseDataOpsRepository:
                         task_key=current.task_key,
                         enabled=current.enabled,
                         schedule_kind=current.schedule_kind,
-                        schedule_config=config.schedule_config,
+                        schedule_config={**config.schedule_config, **current.schedule_config},
                         max_runtime_seconds=current.max_runtime_seconds,
                         stale_after_seconds=current.stale_after_seconds,
                         manual_trigger=current.manual_trigger,
@@ -142,6 +150,7 @@ class ClickHouseDataOpsRepository:
                 updated_at=row[8],
             )
             for row in rows
+            if str(row[0]) not in RETIRED_TASK_KEYS
         ]
 
     def upsert_task_config(self, config: DataOpsTaskConfig, *, now: datetime | None = None) -> None:
@@ -366,6 +375,8 @@ class ClickHouseDataOpsRepository:
                     status=status,
                     schedule_kind=config.schedule_kind,
                     schedule_config=config.schedule_config,
+                    max_runtime_seconds=config.max_runtime_seconds,
+                    stale_after_seconds=config.stale_after_seconds,
                     last_started_at=latest_run.get("started_at") if latest_run else None,
                     last_finished_at=latest_run.get("finished_at") if latest_run else None,
                     last_result=latest_result,
@@ -516,8 +527,13 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _should_upgrade_default_config(current: DataOpsTaskConfig, default: DataOpsTaskConfig) -> bool:
-    return (
+    if (
         current.task_key == "stock_readiness_snapshot"
         and current.schedule_config == {"time": "15:40"}
         and default.schedule_config != current.schedule_config
+    ):
+        return True
+    return (
+        current.task_key in {"mootdx_stock_catalog_sync", "mootdx_daily_kline_sync", "mootdx_daily_kline_reconcile"}
+        and any(key not in current.schedule_config for key in ("rate_limit", "timeout", "bestip"))
     )

@@ -66,30 +66,115 @@ def test_quote_snapshot_handler_passes_endpoint_and_chunk_size() -> None:
     assert calls[0]["quote_endpoint"] == "sqt_utf8"
 
 
-def test_xdxr_sync_handler_uses_clickhouse_data_source(monkeypatch) -> None:
-    calls = {}
+def test_mootdx_handlers_run_independent_catalog_daily_and_reconciliation_tasks() -> None:
+    calls = []
 
-    class FakeClient:
-        def execute(self, query):
-            calls["query"] = query
-            return [("600519.SH",), ("000001.SZ",)]
+    def fake_mootdx_sync(**kwargs):
+        calls.append(kwargs)
+        return {"tasks": kwargs["tasks"], "daily_reconcile": kwargs.get("daily_reconcile", False)}
 
-    class FakeClickHouseSource:
-        def _client_instance(self):
-            calls["client_created"] = True
-            return FakeClient()
+    handlers = build_default_handlers(mootdx_sync_runner=fake_mootdx_sync)
 
-    monkeypatch.setattr("src.data.tdxrs_sync.is_tdxrs_available", lambda: True)
-    monkeypatch.setattr("src.data_ops.handlers.ClickHouseStockDataSource", FakeClickHouseSource)
+    assert handlers["mootdx_stock_catalog_sync"]({"trade_date": "2026-07-09"})["tasks"] == ["stock_catalog"]
+    assert handlers["mootdx_daily_kline_sync"]({"trade_date": "2026-07-09"})["tasks"] == ["stock_kline_daily"]
+    assert handlers["mootdx_daily_kline_reconcile"]({"trade_date": "2026-07-09"})["daily_reconcile"] is True
+    assert [call["daily_reconcile"] for call in calls] == [False, False, True]
+    assert all(call["trade_date"] == date(2026, 7, 9) for call in calls)
 
-    def fake_runner(*, client, symbols):
-        calls["client"] = client
-        calls["symbols"] = symbols
-        return {"inserted": len(symbols)}
 
-    result = build_default_handlers(xdxr_sync_runner=fake_runner)["xdxr_sync"]({})
+def test_mootdx_handler_passes_configured_connection_to_one_source_instance(monkeypatch) -> None:
+    created = []
+    calls = []
 
-    assert result == {"inserted": 2}
-    assert calls["client_created"] is True
-    assert calls["symbols"] == ["600519.SH", "000001.SZ"]
-    assert "stocks FINAL" in calls["query"]
+    class FakeMootdxSource:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr("src.data_ops.handlers.MootdxSource", FakeMootdxSource)
+
+    def fake_mootdx_sync(**kwargs):
+        calls.append(kwargs)
+        return {"tasks": kwargs["tasks"]}
+
+    handler = build_default_handlers(mootdx_sync_runner=fake_mootdx_sync)["mootdx_daily_kline_sync"]
+    result = handler({
+        "trade_date": "2026-07-09",
+        "rate_limit": 0.02,
+        "timeout": 20,
+        "bestip": True,
+        "server": "127.0.0.1:7709",
+    })
+
+    assert result == {"tasks": ["stock_kline_daily"]}
+    assert created == [{
+        "rate_limit": 0.02,
+        "timeout": 20,
+        "bestip": True,
+        "server": ("127.0.0.1", 7709),
+        "include_beijing": False,
+    }]
+    assert calls[0]["source"] is not None
+    assert calls[0]["source"].__class__ is FakeMootdxSource
+
+
+def test_mootdx_handler_uses_benchmarked_connection_defaults(monkeypatch) -> None:
+    created = []
+
+    class FakeMootdxSource:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr("src.data_ops.handlers.MootdxSource", FakeMootdxSource)
+    handler = build_default_handlers(mootdx_sync_runner=lambda **kwargs: {"tasks": kwargs["tasks"]})["mootdx_daily_kline_sync"]
+
+    handler({"trade_date": "2026-07-09"})
+
+    assert created == [{
+        "rate_limit": 0.02,
+        "timeout": 15,
+        "bestip": False,
+        "server": None,
+        "include_beijing": False,
+    }]
+
+
+def test_mootdx_handler_rejects_invalid_pinned_server() -> None:
+    handler = build_default_handlers(mootdx_sync_runner=lambda **kwargs: {"tasks": kwargs["tasks"]})["mootdx_daily_kline_sync"]
+
+    with pytest.raises(ValueError, match="host:port"):
+        handler({"trade_date": "2026-07-09", "server": "not-a-server"})
+
+
+def test_mootdx_handler_raises_when_sync_audit_is_failed() -> None:
+    handlers = build_default_handlers(
+        mootdx_sync_runner=lambda **kwargs: {
+            "diagnostics": {"stock_kline_daily": {"audit": {"status": "failed", "reasons": ["coverage_below_target"]}}}
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="coverage_below_target"):
+        handlers["mootdx_daily_kline_sync"]({"trade_date": "2026-07-09"})
+
+
+def test_stock_universe_profile_handler_passes_configured_rules() -> None:
+    calls = []
+    handlers = build_default_handlers(stock_universe_profile_runner=lambda **kwargs: calls.append(kwargs) or {"universe_eligible": 2})
+
+    result = handlers["stock_universe_profile_refresh"]({
+        "lookback_days": 30,
+        "min_trading_days": 20,
+        "min_average_amount": 20_000_000,
+        "min_listing_age_days": 60,
+        "include_beijing": True,
+        "symbols": ["000001.SZ"],
+    })
+
+    assert result["universe_eligible"] == 2
+    assert calls[0]["rules"].lookback_days == 30
+    assert calls[0]["rules"].min_trading_days == 20
+    assert calls[0]["rules"].include_beijing is True
+    assert calls[0]["symbols"] == ["000001.SZ"]
+
+
+def test_default_handlers_do_not_register_retired_xdxr_sync() -> None:
+    assert "xdxr_sync" not in build_default_handlers()

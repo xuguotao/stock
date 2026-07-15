@@ -72,3 +72,42 @@ def test_resolve_strategy_universe_can_return_symbols_only() -> None:
         "600001.SH",
         "430001.BJ",
     ]
+
+
+def test_resolve_strategy_universe_prefers_shared_eligible_profile_when_available() -> None:
+    class ProfileClient(FakeUniverseClient):
+        def execute(self, query: str, params: dict[str, Any] | None = None) -> list[tuple]:
+            if "from stock_universe_profiles final" in query:
+                return [("000001.SZ",)]
+            if "from daily_kline d" in query:
+                assert params is not None
+                assert params["symbols"] == ("000001",)
+                assert "d.symbol in %(symbols)s" in query
+                return [("000001", "平安银行", "SZ", 62, date(2026, 6, 24), 100_000_000, 10_000_000)]
+            return super().execute(query, params)
+
+    rows = resolve_strategy_universe(
+        ProfileClient(),
+        StrategyUniverseOptions(trade_date=date(2026, 6, 24), min_daily_bars=60),
+    )
+
+    assert [row.symbol for row in rows] == ["000001.SZ"]
+
+
+def test_resolve_strategy_universe_falls_back_when_profile_table_is_empty() -> None:
+    class EmptyProfileClient(FakeUniverseClient):
+        def execute(self, query: str, params: dict[str, Any] | None = None) -> list[tuple]:
+            if "from stock_universe_profiles final" in query:
+                return []
+            if "from daily_kline d" in query:
+                assert "d.symbol in %(symbols)s" not in query
+                assert params is not None
+                assert "symbols" not in params
+            return super().execute(query, params)
+
+    rows = resolve_strategy_universe(
+        EmptyProfileClient(),
+        StrategyUniverseOptions(trade_date=date(2026, 6, 24), min_daily_bars=60),
+    )
+
+    assert [row.symbol for row in rows] == ["000001.SZ", "600000.SH", "600001.SH"]

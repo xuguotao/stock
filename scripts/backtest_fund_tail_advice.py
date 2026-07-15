@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -242,6 +244,38 @@ def download_proxy_index(provider: str, symbol: str, start_date: str, end_date: 
     raise ValueError(f"unsupported proxy provider: {provider}")
 
 
+def download_fund_nav(code: str) -> pd.DataFrame:
+    """Download fund NAV without AKShare's py_mini_racer dependency."""
+    return _download_fund_nav_from_eastmoney_js(code)
+
+
+def _download_fund_nav_from_eastmoney_js(code: str) -> pd.DataFrame:
+    url = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://fund.eastmoney.com/",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        text = resp.read().decode("utf-8", errors="ignore")
+    match = re.search(r"Data_netWorthTrend\s*=\s*(\[.*?\]);", text, flags=re.S)
+    if match is None:
+        raise ValueError(f"fund NAV payload missing Data_netWorthTrend for {code}")
+    rows = json.loads(match.group(1))
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return pd.DataFrame(columns=["date", "close"])
+    frame["date"] = (
+        pd.to_datetime(frame["x"], unit="ms", utc=True)
+        .dt.tz_convert("Asia/Shanghai")
+        .dt.tz_localize(None)
+    )
+    frame["close"] = pd.to_numeric(frame["y"], errors="coerce")
+    return frame[["date", "close"]].dropna(subset=["close"]).reset_index(drop=True)
+
+
 def download_sina_realtime_index(sina_symbol: str) -> pd.DataFrame:
     url = f"https://hq.sinajs.cn/list={sina_symbol}"
     req = urllib.request.Request(
@@ -280,12 +314,7 @@ def download_inputs(
     proxy_indexes = proxy_indexes or PROXY_INDEXES
     data_dir.mkdir(parents=True, exist_ok=True)
     for code in funds:
-        nav = ak.fund_open_fund_info_em(
-            symbol=code,
-            indicator="单位净值走势",
-            period="成立来",
-        )
-        nav_series = normalize_akshare_nav(nav)
+        nav_series = download_fund_nav(code)
         nav_series.to_csv(data_dir / f"{code}_nav.csv", index=False)
 
         proxy_spec = proxy_indexes.get(code)

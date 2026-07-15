@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from src.data_ops.mootdx_tasks import MOOTDX_TASK_DEFINITIONS
+
 VALID_TASK_STATUSES = {"disabled", "idle", "running", "success", "failed", "stale", "skipped"}
+RETIRED_TASK_KEYS = {"xdxr_sync"}
 
 
 def serialize_schedule_config(value: dict[str, Any]) -> str:
@@ -66,6 +69,8 @@ class DataOpsTaskStatus:
     status: str
     schedule_kind: str = ""
     schedule_config: dict[str, Any] = field(default_factory=dict)
+    max_runtime_seconds: int = 1800
+    stale_after_seconds: int = 300
     last_started_at: datetime | None = None
     last_finished_at: datetime | None = None
     next_run_at: datetime | None = None
@@ -134,14 +139,6 @@ def default_task_configs() -> list[DataOpsTaskConfig]:
             stale_after_seconds=180,
         ),
         DataOpsTaskConfig(
-            task_key="xdxr_sync",
-            enabled=True,
-            schedule_kind="daily_time",
-            schedule_config={"time": "15:30"},
-            max_runtime_seconds=1800,
-            stale_after_seconds=900,
-        ),
-        DataOpsTaskConfig(
             task_key="stock_readiness_snapshot",
             enabled=True,
             schedule_kind="daily_time",
@@ -161,6 +158,17 @@ def default_task_configs() -> list[DataOpsTaskConfig]:
             max_runtime_seconds=3600,
             stale_after_seconds=900,
         ),
+        *[
+            DataOpsTaskConfig(
+                task_key=definition.task_key,
+                enabled=definition.enabled,
+                schedule_kind=definition.schedule_kind,
+                schedule_config=definition.schedule_config,
+                max_runtime_seconds=definition.max_runtime_seconds,
+                stale_after_seconds=definition.stale_after_seconds,
+            )
+            for definition in MOOTDX_TASK_DEFINITIONS
+        ],
     ]
 
 

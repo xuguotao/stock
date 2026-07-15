@@ -389,10 +389,10 @@ def _dataset_health_rows(
             "category": "参考数据",
             "table": "xdxr_info",
             "source": "tdxrs (通达信 TCP 协议)",
-            "update_mechanism": "data_ops xdxr_sync 任务每日 15:30 盘后同步，从通达信获取全量除权除息历史（1990 年起）。",
+            "update_mechanism": "保留历史除权除息表，当前不再由 data_ops 默认任务自动同步。",
             "consumer": "复权计算、策略回测、价格跳变识别",
             "quality_rules": ["基础表存在", "除权事件覆盖", "历史完整性"],
-            "repair_action_keys": ["xdxr_sync"],
+            "repair_action_keys": [],
             "expected_symbols": expected_all,
             "status": _table_presence_status(tables.get("xdxr_info")),
             "issues": [],
@@ -748,6 +748,7 @@ def _clickhouse_quality(
         client=client,
         tables=tables,
         expected_symbols=quote_expected_symbols,
+        as_of=as_of,
     )
     issues.extend(quote_snapshot_check["issues"])
     scheduled_checks = _scheduled_data_quality_checks(
@@ -1202,6 +1203,7 @@ def _quote_snapshot_quality(
     client: Any,
     tables: dict[str, dict[str, Any]],
     expected_symbols: int,
+    as_of: date | None = None,
 ) -> dict[str, Any]:
     raw_table = "stock_quote_snapshots"
     raw_status = tables.get(raw_table, {})
@@ -1249,6 +1251,10 @@ def _quote_snapshot_quality(
     if raw["status"] == "ok" and raw["missing_rate"] > 0.2:
         raw["status"] = "warning"
     raw["issues"] = _quote_raw_issues(raw)
+    stale_issue = _quote_snapshot_stale_issue(raw_latest, as_of)
+    if stale_issue is not None:
+        raw["status"] = "warning" if raw["status"] == "ok" else raw["status"]
+        raw["issues"].append(stale_issue)
 
     rollups = {
         label: _quote_rollup_quality(
@@ -1340,6 +1346,18 @@ def _quote_raw_issues(raw: dict[str, Any]) -> list[str]:
     if float(raw.get("missing_rate") or 0) > 0.2:
         issues.append(f"stock_quote_snapshots_interval_missing_rate_{raw['missing_rate']:.2f}")
     return issues
+
+
+def _quote_snapshot_stale_issue(latest: Any, as_of: date | None) -> str | None:
+    if as_of is None:
+        return None
+    latest_date = _as_date(latest)
+    if latest_date is None:
+        return None
+    lag_days = (as_of - latest_date).days
+    if lag_days <= 0:
+        return None
+    return f"stock_quote_snapshots_stale_{lag_days}_days"
 
 
 def _quote_rollup_issues(*, label: str, status: str, missing_symbols: int, extra_rows: int) -> list[str]:

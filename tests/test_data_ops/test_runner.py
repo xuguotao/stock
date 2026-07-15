@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
+import pytest
+
 from src.data_ops.models import DataOpsTaskConfig, DataOpsTaskStatus
 from src.data_ops.runner import DataOpsRunner, DataOpsRunnerConfig, default_runner_loop_interval
 
@@ -278,20 +280,20 @@ def test_maintenance_runner_includes_stock_readiness_tasks() -> None:
 
 def test_runner_marks_stale_task_heartbeat_as_interrupted_before_skipping() -> None:
     config = DataOpsTaskConfig(
-        task_key="xdxr_sync",
+        task_key="stock_readiness_snapshot",
         enabled=True,
         schedule_kind="daily_time",
-        schedule_config={"time": "15:30"},
+        schedule_config={"time": "16:15"},
         stale_after_seconds=900,
     )
     repo = FakeRepository(config)
     repo.statuses = [
         DataOpsTaskStatus(
-            task_key="xdxr_sync",
+            task_key="stock_readiness_snapshot",
             enabled=True,
             status="stale",
             schedule_kind="daily_time",
-            schedule_config={"time": "15:30"},
+            schedule_config={"time": "16:15"},
             last_finished_at=datetime(2026, 7, 8, 15, 35),
             heartbeat_at=datetime(2026, 7, 8, 15, 30) - timedelta(seconds=901),
             runner_id="old-runner",
@@ -299,7 +301,7 @@ def test_runner_marks_stale_task_heartbeat_as_interrupted_before_skipping() -> N
     ]
     runner = DataOpsRunner(
         repository=repo,
-        handlers={"xdxr_sync": lambda params: {"rows": 1}},
+        handlers={"stock_readiness_snapshot": lambda params: {"rows": 1}},
         config=DataOpsRunnerConfig(runner_id="runner-maintenance", once=True, task_group="maintenance"),
         clock=lambda: datetime(2026, 7, 8, 15, 45),
         is_trading_day=lambda value: True,
@@ -308,7 +310,7 @@ def test_runner_marks_stale_task_heartbeat_as_interrupted_before_skipping() -> N
     result = runner.run_once()
 
     assert result == {"executed": 0, "failed": 0, "skipped": 1}
-    assert repo.heartbeats[0][:3] == ("runner-maintenance", "xdxr_sync", "failed")
+    assert repo.heartbeats[0][:3] == ("runner-maintenance", "stock_readiness_snapshot", "failed")
     assert json.loads(repo.heartbeats[0][3]) == {
         "percent": 100,
         "stage": "interrupted",
@@ -357,3 +359,45 @@ def test_realtime_runner_default_loop_interval_supports_ten_second_tasks() -> No
     assert default_runner_loop_interval("intraday") == 30
     assert default_runner_loop_interval("maintenance") == 30
     assert default_runner_loop_interval(None) == 30
+
+
+def test_long_running_runner_continues_after_cycle_level_failure(monkeypatch) -> None:
+    class StopLoop(Exception):
+        pass
+
+    repo = FakeRepository(
+        DataOpsTaskConfig(
+            task_key="quality_snapshot",
+            enabled=True,
+            schedule_kind="interval",
+            schedule_config={"interval_seconds": 0},
+        )
+    )
+    calls = {"ensure": 0, "sleep": 0}
+
+    def flaky_ensure_tables():
+        calls["ensure"] += 1
+        if calls["ensure"] == 1:
+            raise RuntimeError("temporary clickhouse outage")
+        repo.ensure_called = True
+
+    def stop_after_second_cycle(_seconds):
+        calls["sleep"] += 1
+        if calls["sleep"] == 2:
+            raise StopLoop()
+
+    repo.ensure_tables = flaky_ensure_tables
+    monkeypatch.setattr("src.data_ops.runner.sleep", stop_after_second_cycle)
+    runner = DataOpsRunner(
+        repository=repo,
+        handlers={"quality_snapshot": lambda params: {"rows": 1}},
+        config=DataOpsRunnerConfig(runner_id="runner-a", interval_seconds=0),
+        clock=lambda: datetime(2026, 6, 12, 10, 0),
+        is_trading_day=lambda value: True,
+    )
+
+    with pytest.raises(StopLoop):
+        runner.run_forever()
+
+    assert calls["ensure"] == 2
+    assert repo.finished == [("run-1", "success", {"rows": 1}, "")]
