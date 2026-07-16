@@ -1,6 +1,8 @@
 """Tests for explicit, fail-closed research adjustment builds."""
 from __future__ import annotations
 
+from datetime import date
+
 from scripts import build_research_adjustment_data
 
 
@@ -21,6 +23,24 @@ class _Store:
 
     def publish_run(self, **kwargs: object) -> None:
         self.calls.append(("publish", kwargs))
+
+    def current_run(self, _formula_version: str):
+        return None
+
+
+class _MootdxClient:
+    def execute(self, sql: str, _params: object | None = None):
+        normalized = " ".join(sql.lower().split())
+        if "select distinct symbol from mootdx_stock_kline final" in normalized:
+            return [("000001.SZ",)]
+        if "from mootdx_stock_kline final" in normalized:
+            return [
+                ("000001.SZ", date(2026, 7, 15), 10.0),
+                ("000001.SZ", date(2026, 7, 16), 9.0),
+            ]
+        if "from mootdx_xdxr final" in normalized:
+            return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
+        raise AssertionError(sql)
 
 
 def test_parse_args_supports_explicit_research_build_scope() -> None:
@@ -53,16 +73,36 @@ def test_build_writes_candidates_before_publishing_complete_result() -> None:
     }
 
 
-def test_build_fails_closed_without_an_injected_candidate_builder() -> None:
+def test_default_build_constructs_candidates_from_mootdx_raw_inputs() -> None:
     store = _Store()
 
-    try:
-        build_research_adjustment_data.build_research_adjustment_data(store=store)
-    except RuntimeError as exc:
-        assert "candidate builder" in str(exc)
-    else:
-        raise AssertionError("the build must not publish absent a candidate builder")
+    result = build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1", store=store, client=_MootdxClient(), run_id_factory=lambda: "run-raw"
+    )
 
+    assert result == {"run_id": "run-raw", "event_count": 1, "factor_count": 2}
+    event = store.calls[1][3][0]
+    factors = store.calls[2][3]
+    assert event["status"] == "approved"
+    assert event["ratio"] == 0.9
+    assert [(row["trade_date"], row["forward_factor"]) for row in factors] == [
+        (date(2026, 7, 15), 0.9),
+        (date(2026, 7, 16), 1.0),
+    ]
+
+
+def test_default_incremental_no_change_is_a_successful_unpublished_no_op() -> None:
+    store = _Store()
+
+    class _EmptyClient:
+        def execute(self, _sql: str, _params: object | None = None):
+            return []
+
+    result = build_research_adjustment_data.build_research_adjustment_data(
+        symbols=["000001.SZ"], store=store, client=_EmptyClient()
+    )
+
+    assert result == {"run_id": None, "event_count": 0, "factor_count": 0, "published": False}
     assert store.calls == []
 
 
