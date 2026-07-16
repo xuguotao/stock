@@ -848,6 +848,7 @@ export interface MootdxDailyQualityResponse {
     classification: 'known_no_data' | 'needs_review' | 'repair_candidate' | 'reviewed_no_repair' | string
     recommendation: string
     evidence: string
+    verification_by_date: Record<string, 'available' | 'no_data' | 'error' | ''>
   }>
 }
 
