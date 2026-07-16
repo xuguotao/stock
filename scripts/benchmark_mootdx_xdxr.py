@@ -27,13 +27,20 @@ BUCKET_ORDER = ("sh_main", "sz_main", "chi_next", "st", "other")
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-size", type=_positive_int, default=300, help="Maximum number of catalog symbols to request.")
+    parser.add_argument("--all", action="store_true", help="Request every catalog symbol (read-only only).")
     parser.add_argument("--rate-limit", type=_non_negative_float, default=0.02, help="Minimum seconds between Mootdx requests.")
     parser.add_argument("--timeout", type=_positive_int, default=10, help="Mootdx socket timeout in seconds.")
     parser.add_argument("--write", action="store_true", help="Explicitly sync the selected sample into ClickHouse.")
+    parser.add_argument("--output", type=Path, help="Optional JSON report path.")
     parser.add_argument("--bestip", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.bestip:
         parser.error("--bestip is disabled for reproducible XDXR benchmarks")
+    supplied = list(argv or [])
+    if args.all and any(value == "--sample-size" or value.startswith("--sample-size=") for value in supplied):
+        parser.error("--all cannot be combined with --sample-size")
+    if args.all and args.write:
+        parser.error("--all is read-only; omit --write")
     return args
 
 
@@ -46,12 +53,27 @@ def main(
     args = parse_args(argv)
     source = source_factory(bestip=False, timeout=args.timeout, rate_limit=args.rate_limit)
     catalog = list(source.fetch_stock_list())
-    symbols, bucket_counts = select_benchmark_symbols(catalog, sample_size=args.sample_size)
+    bucket_by_symbol = {
+        str(stock.symbol).strip().upper(): _symbol_bucket(
+            str(stock.symbol).strip().upper(),
+            is_st_flag=bool(getattr(stock, "is_st", False)),
+        )
+        for stock in catalog
+        if str(getattr(stock, "symbol", "")).strip()
+    }
+    if args.all:
+        symbols = list(bucket_by_symbol)
+        bucket_counts = _bucket_counts(bucket_by_symbol.values())
+        selection_mode = "all"
+    else:
+        symbols, bucket_counts = select_benchmark_symbols(catalog, sample_size=args.sample_size)
+        selection_mode = "sample"
     result: dict[str, Any] = {
         "mode": "write" if args.write else "read_only",
         "catalog_size": len(catalog),
         "bucket_counts": bucket_counts,
         "sample_count": len(symbols),
+        "selection_mode": selection_mode,
         "bestip": False,
     }
 
@@ -62,11 +84,11 @@ def main(
         # make unavailable percentile metrics explicit JSON null values.
         result.update(_write_diagnostics(sync_result))
         result["sync"] = sync_result
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        _emit_json(result, args.output)
         return 1 if sync_result.get("failed") else 0
 
-    result.update(_read_only_diagnostics(source, symbols))
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    result.update(_read_only_diagnostics(source, symbols, bucket_by_symbol=bucket_by_symbol))
+    _emit_json(result, args.output)
     return 0
 
 
@@ -96,11 +118,25 @@ def select_benchmark_symbols(catalog: Iterable[Any], *, sample_size: int) -> tup
     return selected, bucket_counts
 
 
-def _read_only_diagnostics(source: Any, symbols: list[str]) -> dict[str, Any]:
+def _read_only_diagnostics(
+    source: Any,
+    symbols: list[str],
+    *,
+    bucket_by_symbol: dict[str, str] | None = None,
+) -> dict[str, Any]:
     latencies_ms: list[float] = []
     success_count = empty_count = error_count = event_rows = 0
+    bucket_results: dict[str, dict[str, int]] = {}
+    error_types: dict[str, int] = {}
+    failed_symbols_sample: list[dict[str, str]] = []
     started = time.perf_counter()
     for symbol in symbols:
+        bucket = (bucket_by_symbol or {}).get(symbol, _symbol_bucket(symbol, is_st_flag=False))
+        bucket_result = bucket_results.setdefault(
+            bucket,
+            {"requested_count": 0, "success_count": 0, "empty_count": 0, "error_count": 0, "event_rows": 0},
+        )
+        bucket_result["requested_count"] += 1
         request_started = time.perf_counter()
         try:
             payload = source.fetch_xdxr(symbol)
@@ -108,10 +144,18 @@ def _read_only_diagnostics(source: Any, symbols: list[str]) -> dict[str, Any]:
             if row_count:
                 success_count += 1
                 event_rows += row_count
+                bucket_result["success_count"] += 1
+                bucket_result["event_rows"] += row_count
             else:
                 empty_count += 1
-        except Exception:  # noqa: BLE001 - a benchmark must retain per-symbol failures.
+                bucket_result["empty_count"] += 1
+        except Exception as exc:  # noqa: BLE001 - a benchmark must retain per-symbol failures.
             error_count += 1
+            bucket_result["error_count"] += 1
+            error = f"{type(exc).__name__}: {str(exc)}"[:240]
+            error_types[error] = error_types.get(error, 0) + 1
+            if len(failed_symbols_sample) < 20:
+                failed_symbols_sample.append({"symbol": symbol, "bucket": bucket, "error": error})
         finally:
             latencies_ms.append((time.perf_counter() - request_started) * 1000)
     request_seconds = round(time.perf_counter() - started, 3)
@@ -130,7 +174,25 @@ def _read_only_diagnostics(source: Any, symbols: list[str]) -> dict[str, Any]:
         "p50_ms": p50,
         "p95_ms": p95,
         "p99_ms": p99,
+        "bucket_results": bucket_results,
+        "error_types": error_types,
+        "failed_symbols_sample": failed_symbols_sample,
     }
+
+
+def _emit_json(result: dict[str, Any], output: Path | None) -> None:
+    rendered = json.dumps(result, ensure_ascii=False, indent=2, default=str)
+    print(rendered)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(f"{rendered}\n", encoding="utf-8")
+
+
+def _bucket_counts(buckets: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for bucket in buckets:
+        counts[bucket] = counts.get(bucket, 0) + 1
+    return {name: counts[name] for name in BUCKET_ORDER if name in counts}
 
 
 def _write_diagnostics(sync_result: dict[str, Any]) -> dict[str, Any]:

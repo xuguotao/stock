@@ -74,6 +74,40 @@ def test_read_only_benchmark_is_deterministic_and_never_invokes_sync(capsys) -> 
     assert set(payload) >= {"request_seconds", "p50_ms", "p95_ms", "p99_ms"}
 
 
+def test_all_mode_selects_entire_catalog_and_writes_matching_json(tmp_path, capsys) -> None:
+    source = FakeSource()
+    output = tmp_path / "benchmark.json"
+
+    assert benchmark_mootdx_xdxr.main(
+        ["--all", "--output", str(output)],
+        source_factory=lambda **_kwargs: source,
+    ) == 0
+
+    stdout = json.loads(capsys.readouterr().out)
+    assert stdout == json.loads(output.read_text(encoding="utf-8"))
+    assert stdout["sample_count"] == stdout["catalog_size"] == 7
+    assert stdout["selection_mode"] == "all"
+
+
+def test_all_mode_rejects_sample_size_and_write() -> None:
+    with pytest.raises(SystemExit):
+        benchmark_mootdx_xdxr.parse_args(["--all", "--sample-size", "7"])
+    with pytest.raises(SystemExit):
+        benchmark_mootdx_xdxr.parse_args(["--all", "--write"])
+
+
+def test_read_only_diagnostics_groups_failures_by_bucket_and_error() -> None:
+    diagnostics = benchmark_mootdx_xdxr._read_only_diagnostics(FakeSource(), ["300001.SZ"])
+
+    assert diagnostics["bucket_results"]["chi_next"]["error_count"] == 1
+    assert diagnostics["error_types"] == {"RuntimeError: source unavailable": 1}
+    assert diagnostics["failed_symbols_sample"] == [{
+        "symbol": "300001.SZ",
+        "bucket": "chi_next",
+        "error": "RuntimeError: source unavailable",
+    }]
+
+
 def test_write_mode_invokes_only_xdxr_sync_for_selected_symbols(capsys) -> None:
     source = FakeSource()
     calls: list[dict] = []
