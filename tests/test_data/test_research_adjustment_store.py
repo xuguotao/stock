@@ -27,9 +27,10 @@ def test_ensure_tables_creates_research_derivative_tables() -> None:
 
     ddl = "\n".join(sql for sql, _ in client.calls).lower()
     assert "create table if not exists research_adjustment_events" in ddl
+    assert "create table if not exists research_adjustment_raw_bars" in ddl
     assert "create table if not exists research_daily_adjustment_factors" in ddl
     assert "create table if not exists research_adjustment_runs" in ddl
-    assert ddl.count("replacingmergetree") == 3
+    assert ddl.count("replacingmergetree") == 4
     assert "ifnull(category, -1)" in ddl
     assert "datetime64(3)" in ddl
     assert "alter table research_adjustment_runs add column if not exists input_watermark" in ddl
@@ -107,6 +108,28 @@ def test_completed_run_with_no_events_and_daily_factors_can_be_published() -> No
     )
 
     assert "insert into research_adjustment_runs" in client.calls[2][0].lower()
+
+
+def test_publish_rejects_raw_bar_and_factor_count_mismatch() -> None:
+    client = _Client(responses=[[(0,)], [(2,)], [(1,)]])
+
+    with pytest.raises(ValueError, match="raw-bar"):
+        ResearchAdjustmentStore(client).publish_run(
+            "run-1", "v1", completed=True, expected_event_count=0,
+            expected_factor_count=2, expected_raw_bar_count=2,
+        )
+
+    assert all("insert into research_adjustment_runs" not in sql.lower() for sql, _ in client.calls)
+
+
+def test_publish_rejects_raw_bar_and_factor_symbol_date_mismatch() -> None:
+    client = _Client(responses=[[(0,)], [(2,)], [(2,)], [(1,)]])
+
+    with pytest.raises(ValueError, match="symbol/date coverage"):
+        ResearchAdjustmentStore(client).publish_run(
+            "run-1", "v1", completed=True, expected_event_count=0,
+            expected_factor_count=2, expected_raw_bar_count=2,
+        )
 
 
 def test_incomplete_run_cannot_be_published() -> None:

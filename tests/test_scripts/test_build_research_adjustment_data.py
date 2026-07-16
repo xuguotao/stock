@@ -21,6 +21,10 @@ class _Store:
         self.calls.append(("factors", run_id, formula_version, rows))
         return len(rows)
 
+    def write_candidate_raw_bars(self, run_id: str, formula_version: str, rows: list[dict]) -> int:
+        self.calls.append(("raw_bars", run_id, formula_version, rows))
+        return len(rows)
+
     def publish_run(self, **kwargs: object) -> None:
         self.calls.append(("publish", kwargs))
 
@@ -35,10 +39,10 @@ class _MootdxClient:
             return [(datetime(2026, 7, 16, 17, 40),)]
         if "select distinct symbol from mootdx_stock_kline final" in normalized:
             return [("000001.SZ",)]
-        if "from mootdx_stock_kline final" in normalized:
+        if "from mootdx_stock_kline" in normalized:
             return [
-                ("000001.SZ", date(2026, 7, 15), 10.0),
-                ("000001.SZ", date(2026, 7, 16), 9.0),
+                ("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, datetime(2026, 7, 16, 17, 20)),
+                ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, datetime(2026, 7, 16, 17, 20)),
             ]
         if "from mootdx_xdxr final" in normalized:
             return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
@@ -63,16 +67,18 @@ class _IncrementalMootdxClient(_MootdxClient):
             return [("600519.SH", date(2026, 7, 15), 1.0, 1.0, 0, 0, "approved")]
         if "from research_adjustment_events final" in normalized:
             return []
+        if "from research_adjustment_raw_bars final" in normalized:
+            return []
         if "select distinct symbol" in normalized and "ingested_at >" in normalized:
             # One XDXR change and one daily-bar-only change must both be rebuilt.
             if "mootdx_xdxr" in normalized:
                 return [("000001.SZ",)]
             return [("000002.SZ",)]
-        if "from mootdx_stock_kline final" in normalized:
+        if "from mootdx_stock_kline" in normalized:
             return [
-                ("000001.SZ", date(2026, 7, 15), 10.0),
-                ("000001.SZ", date(2026, 7, 16), 9.0),
-                ("000002.SZ", date(2026, 7, 15), 20.0),
+                ("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, datetime(2026, 7, 16, 17, 20)),
+                ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, datetime(2026, 7, 16, 17, 20)),
+                ("000002.SZ", date(2026, 7, 15), 20.0, 20.0, 20.0, 20.0, 100, 2000.0, datetime(2026, 7, 16, 17, 20)),
             ]
         if "from mootdx_xdxr final" in normalized:
             return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
@@ -102,11 +108,11 @@ def test_build_writes_candidates_before_publishing_complete_result() -> None:
     )
 
     assert result == {"run_id": "run-1", "event_count": 0, "factor_count": 1}
-    assert [call[0] for call in store.calls] == ["ensure_tables", "events", "factors", "publish"]
+    assert [call[0] for call in store.calls] == ["ensure_tables", "events", "factors", "raw_bars", "publish"]
     assert store.calls[-1][1] == {
         "run_id": "run-1", "formula_version": "v1", "completed": True,
-        "expected_event_count": 0, "expected_factor_count": 1,
-        "input_watermark": None, "base_run_id": None,
+            "expected_event_count": 0, "expected_factor_count": 1,
+        "expected_raw_bar_count": 0, "input_watermark": None, "base_run_id": None,
     }
 
 
@@ -137,12 +143,12 @@ def test_candidate_reads_are_bounded_by_captured_input_watermark() -> None:
             normalized = " ".join(sql.lower().split())
             if "max(ingested_at)" in normalized:
                 return [(captured,)]
-            if "select symbol, trade_date, close from mootdx_stock_kline final" in normalized:
+            if "select symbol, trade_date, open, high, low, close, volume, amount, ingested_at from mootdx_stock_kline" in normalized:
                 assert params == {"symbols": ("000001.SZ",), "captured_input_watermark": captured}
                 # A later bar must remain for the following build.
                 return [
-                    ("000001.SZ", date(2026, 7, 15), 10.0),
-                    ("000001.SZ", date(2026, 7, 16), 9.0),
+                    ("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, captured),
+                    ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, captured),
                 ]
             if "from mootdx_xdxr final" in normalized:
                 assert params == {"symbols": ("000001.SZ",), "captured_input_watermark": captured}
@@ -249,6 +255,28 @@ def test_incremental_build_uses_persisted_input_watermark_and_captured_upper_bou
     assert store.calls[-1][1]["base_run_id"] == "prior-run"
 
 
+def test_incremental_symbol_selection_rechecks_same_second_watermark() -> None:
+    store = _IncrementalStore()
+
+    class _SameSecondClient(_IncrementalMootdxClient):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object | None]] = []
+
+        def execute(self, sql: str, params: object | None = None):
+            self.calls.append((sql, params))
+            if "max(ingested_at)" in sql.lower():
+                return [(datetime(2026, 7, 16, 17, 40),)]
+            return super().execute(sql, params)
+
+    client = _SameSecondClient()
+    build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1", store=store, client=client, run_id_factory=lambda: "run-overlap"
+    )
+    queries = [sql for sql, _ in client.calls if "select distinct symbol" in sql.lower() and "ingested_at" in sql.lower()]
+    assert len(queries) == 2
+    assert all("ingested_at >= %(previous_input_watermark)s" in sql.lower() for sql in queries)
+
+
 def test_incremental_build_with_legacy_run_without_input_watermark_requires_full_rebuild() -> None:
     class _LegacyStore(_IncrementalStore):
         def current_run(self, _formula_version: str):
@@ -293,8 +321,8 @@ def test_incremental_build_rejects_a_target_without_daily_factor_coverage() -> N
             normalized = " ".join(sql.lower().split())
             if "max(ingested_at)" in normalized:
                 return [(datetime(2026, 7, 16, 17, 40),)]
-            if "select symbol, trade_date, close from mootdx_stock_kline final" in normalized:
-                return [("000001.SZ", date(2026, 7, 15), 10.0)]
+            if "select symbol, trade_date, open, high, low, close, volume, amount, ingested_at from mootdx_stock_kline" in normalized:
+                return [("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, datetime(2026, 7, 16, 17, 20))]
             return super().execute(sql, params)
 
     try:

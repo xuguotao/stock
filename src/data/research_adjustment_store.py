@@ -49,6 +49,26 @@ class ResearchAdjustmentStore:
     def ensure_tables(self) -> None:
         self.client.execute(
             """
+            create table if not exists research_adjustment_raw_bars (
+                run_id String,
+                formula_version String,
+                symbol String,
+                trade_date Date,
+                open Float64,
+                high Float64,
+                low Float64,
+                close Float64,
+                volume UInt64,
+                amount Float64,
+                source_ingested_at DateTime,
+                computed_at DateTime
+            ) engine = ReplacingMergeTree(computed_at)
+            partition by toYYYYMM(trade_date)
+            order by (formula_version, run_id, symbol, trade_date)
+            """
+        )
+        self.client.execute(
+            """
             create table if not exists research_adjustment_events (
                 run_id String,
                 formula_version String,
@@ -142,6 +162,20 @@ class ResearchAdjustmentStore:
         )
         return len(values)
 
+    def write_candidate_raw_bars(
+        self, run_id: str, formula_version: str, rows: Sequence[Mapping[str, Any]]
+    ) -> int:
+        values = [self._raw_bar_row(run_id, formula_version, row) for row in rows]
+        if not values:
+            return 0
+        self.client.execute(
+            """insert into research_adjustment_raw_bars
+            (run_id, formula_version, symbol, trade_date, open, high, low, close,
+             volume, amount, source_ingested_at, computed_at) values""",
+            values,
+        )
+        return len(values)
+
     def publish_run(
         self,
         run_id: str,
@@ -149,6 +183,7 @@ class ResearchAdjustmentStore:
         completed: bool,
         expected_event_count: int | None = None,
         expected_factor_count: int | None = None,
+        expected_raw_bar_count: int | None = None,
         input_watermark: datetime | None = None,
         base_run_id: str | None | object = _UNSET,
     ) -> None:
@@ -183,6 +218,14 @@ class ResearchAdjustmentStore:
                     f"events={actual_event_count}/{expected_event_count}, "
                     f"factors={actual_factor_count}/{expected_factor_count}"
                 )
+            if expected_raw_bar_count is not None:
+                actual_raw_bar_count = self._candidate_count(
+                    "research_adjustment_raw_bars", run_id, formula_version
+                )
+                if actual_raw_bar_count != expected_raw_bar_count or actual_raw_bar_count != actual_factor_count:
+                    raise ValueError("candidate raw-bar and factor counts do not form a complete snapshot")
+                if self._raw_factor_coverage_mismatch_count(run_id, formula_version):
+                    raise ValueError("candidate raw bars and factors have mismatched symbol/date coverage")
             self.client.execute(
                 """
                 insert into research_adjustment_runs
@@ -211,6 +254,25 @@ class ResearchAdjustmentStore:
             from {table}
             where run_id = %(run_id)s and formula_version = %(formula_version)s
             """,
+            {"run_id": run_id, "formula_version": formula_version},
+        )
+        return int(rows[0][0]) if rows else 0
+
+    def _raw_factor_coverage_mismatch_count(self, run_id: str, formula_version: str) -> int:
+        rows = self.client.execute(
+            """select count() from (
+                select b.symbol, b.trade_date from research_adjustment_raw_bars as b
+                left anti join research_daily_adjustment_factors as f
+                  on b.run_id = f.run_id and b.formula_version = f.formula_version
+                 and b.symbol = f.symbol and b.trade_date = f.trade_date
+                where b.run_id = %(run_id)s and b.formula_version = %(formula_version)s
+                union all
+                select f.symbol, f.trade_date from research_daily_adjustment_factors as f
+                left anti join research_adjustment_raw_bars as b
+                  on b.run_id = f.run_id and b.formula_version = f.formula_version
+                 and b.symbol = f.symbol and b.trade_date = f.trade_date
+                where f.run_id = %(run_id)s and f.formula_version = %(formula_version)s
+            )""",
             {"run_id": run_id, "formula_version": formula_version},
         )
         return int(rows[0][0]) if rows else 0
@@ -259,6 +321,14 @@ class ResearchAdjustmentStore:
             int(row.get("eligible_event_count") or 0), int(row.get("excluded_event_count") or 0),
             str(row.get("quality_status") or "unverified"), _as_datetime(snapshot) if snapshot else None,
             datetime.now(),
+        )
+
+    @staticmethod
+    def _raw_bar_row(run_id: str, formula_version: str, row: Mapping[str, Any]) -> tuple[Any, ...]:
+        return (
+            run_id, formula_version, str(row["symbol"]), _as_date(row["trade_date"]),
+            float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]),
+            int(row["volume"]), float(row["amount"]), _as_datetime(row["source_ingested_at"]), datetime.now(),
         )
 
 

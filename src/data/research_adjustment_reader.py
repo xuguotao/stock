@@ -52,16 +52,17 @@ class ResearchAdjustmentReader:
             select
                 k.symbol, k.trade_date, k.open, k.high, k.low, k.close, k.volume, k.amount,
                 f.forward_factor, f.backward_factor, f.quality_status
-            from mootdx_stock_kline final as k
+            from research_adjustment_raw_bars final as k
             inner join research_daily_adjustment_factors final as f
                 on f.symbol = k.symbol
                and f.trade_date = k.trade_date
-            where k.frequency = 'daily'
-              and k.symbol in %(symbols)s
+            where k.symbol in %(symbols)s
               and k.trade_date >= %(start)s
               and k.trade_date <= %(end)s
               and f.run_id = %(run_id)s
               and f.formula_version = %(formula_version)s
+              and k.run_id = %(run_id)s
+              and k.formula_version = %(formula_version)s
               and f.forward_factor > 0
               and f.backward_factor > 0
             order by k.trade_date, k.symbol

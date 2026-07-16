@@ -17,7 +17,7 @@ class _Client:
         normalized = " ".join(sql.lower().split())
         if "from research_adjustment_runs final" in normalized:
             return [self.current_run] if self.current_run else []
-        if "from mootdx_stock_kline final" in normalized:
+        if "from research_adjustment_raw_bars final" in normalized:
             return self.rows
         raise AssertionError(f"unexpected SQL: {sql}")
 
@@ -41,9 +41,9 @@ def test_reader_returns_raw_and_both_adjusted_price_conventions() -> None:
     assert row.raw_amount == row.forward_amount == row.backward_amount == 11000.0
     assert row.quality_status == "approved"
     sql, params = client.calls[-1]
-    assert "mootdx_stock_kline final" in sql.lower()
+    assert "research_adjustment_raw_bars final" in sql.lower()
+    assert "mootdx_stock_kline" not in sql.lower()
     assert "research_daily_adjustment_factors final" in sql.lower()
-    assert "frequency = 'daily'" in sql.lower()
     assert params["run_id"] == "run-7"
     assert params["formula_version"] == "v1"
 

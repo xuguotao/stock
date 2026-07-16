@@ -72,18 +72,21 @@ def build_research_adjustment_data(
     )
     events = list(candidate.get("events", []))
     factors = list(candidate.get("factors", []))
+    raw_bars = list(candidate.get("raw_bars", []))
     if not factors:
         return {"run_id": None, "event_count": 0, "factor_count": 0, "published": False}
     run_id = (run_id_factory or (lambda: str(uuid.uuid4())))()
     active_store.ensure_tables()
     written_events = active_store.write_candidate_events(run_id, formula_version, events)
     written_factors = active_store.write_candidate_factors(run_id, formula_version, factors)
+    written_raw_bars = active_store.write_candidate_raw_bars(run_id, formula_version, raw_bars)
     active_store.publish_run(
         run_id=run_id,
         formula_version=formula_version,
         completed=True,
         expected_event_count=written_events,
         expected_factor_count=written_factors,
+        expected_raw_bar_count=written_raw_bars,
         input_watermark=input_watermark,
         base_run_id=current["run_id"] if current is not None else None,
     )
@@ -140,7 +143,7 @@ def _build_candidates_from_mootdx(
     built = _validate_and_factor(daily_bars, _xdxr_events(client, target_symbols, input_watermark))
     _assert_target_factor_coverage(target_symbols, daily_bars, built["factors"])
     if current is None or full:
-        return built
+        return {**built, "raw_bars": daily_bars.raw_rows}
     targets = set(target_symbols)
     retained = [
         row for row in _prior_factor_rows(client, current["run_id"], formula_version)
@@ -150,7 +153,14 @@ def _build_candidates_from_mootdx(
         row for row in _prior_event_rows(client, current["run_id"], formula_version)
         if str(row["symbol"]) not in targets
     ]
-    return {"events": [*retained_events, *built["events"]], "factors": [*retained, *built["factors"]]}
+    retained_raw_bars = [
+        row for row in _prior_raw_bar_rows(client, current["run_id"], formula_version)
+        if str(row["symbol"]) not in targets
+    ]
+    return {
+        "events": [*retained_events, *built["events"]], "factors": [*retained, *built["factors"]],
+        "raw_bars": [*retained_raw_bars, *daily_bars.raw_rows],
+    }
 
 
 def _capture_input_watermark(client: Any) -> datetime | None:
@@ -195,13 +205,13 @@ def _default_symbols(
     }
     xdxr_rows = client.execute(
         """select distinct symbol from mootdx_xdxr final
-        where ingested_at > %(previous_input_watermark)s
+        where ingested_at >= %(previous_input_watermark)s
           and ingested_at <= %(captured_input_watermark)s order by symbol""", params
     )
     daily_rows = client.execute(
         """
         select distinct symbol from mootdx_stock_kline final
-        where frequency = 'daily' and ingested_at > %(previous_input_watermark)s
+        where frequency = 'daily' and ingested_at >= %(previous_input_watermark)s
           and ingested_at <= %(captured_input_watermark)s
         order by symbol
         """,
@@ -252,13 +262,30 @@ def _prior_event_rows(client: Any, run_id: str, formula_version: str) -> list[di
     ]
 
 
+def _prior_raw_bar_rows(client: Any, run_id: str, formula_version: str) -> list[dict[str, Any]]:
+    rows = client.execute(
+        """select symbol, trade_date, open, high, low, close, volume, amount, source_ingested_at
+        from research_adjustment_raw_bars final
+        where run_id = %(run_id)s and formula_version = %(formula_version)s""",
+        {"run_id": run_id, "formula_version": formula_version},
+    )
+    fields = ("symbol", "trade_date", "open", "high", "low", "close", "volume", "amount", "source_ingested_at")
+    return [{field: value for field, value in zip(fields, row)} for row in rows]
+
+
+class _DailyBars(dict[str, list[tuple[date, float]]]):
+    def __init__(self, *args: Any, raw_rows: list[dict[str, Any]], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.raw_rows = raw_rows
+
+
 def _daily_bars(
     client: Any, symbols: Sequence[str], input_watermark: datetime | None
 ) -> dict[str, list[tuple[date, float]]]:
     rows = client.execute(
         """
-        select symbol, trade_date, close
-        from mootdx_stock_kline final
+        select symbol, trade_date, open, high, low, close, volume, amount, ingested_at
+        from mootdx_stock_kline
         where frequency = 'daily' and symbol in %(symbols)s
           and ingested_at <= %(captured_input_watermark)s
         order by symbol, trade_date
@@ -266,13 +293,16 @@ def _daily_bars(
         {"symbols": tuple(symbols), "captured_input_watermark": input_watermark},
     )
     result: dict[str, list[tuple[date, float]]] = {}
-    for symbol, trade_date, close in rows:
+    raw_rows: list[dict[str, Any]] = []
+    for symbol, trade_date, open_, high, low, close, volume, amount, ingested_at in rows:
         try:
             close_value = float(close)
         except (TypeError, ValueError):
             continue
         result.setdefault(str(symbol), []).append((_as_date(trade_date), close_value))
-    return result
+        raw_rows.append({"symbol": str(symbol), "trade_date": _as_date(trade_date), "open": open_, "high": high, "low": low,
+                         "close": close_value, "volume": volume, "amount": amount, "source_ingested_at": ingested_at})
+    return _DailyBars(result, raw_rows=raw_rows)
 
 
 def _xdxr_events(client: Any, symbols: Sequence[str], input_watermark: datetime | None) -> list[dict[str, Any]]:
