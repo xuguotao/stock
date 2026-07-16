@@ -2,6 +2,14 @@ from pathlib import Path
 import subprocess
 
 
+def _workspace_path(relative_path: str) -> Path:
+    for root in (Path.cwd(), *Path.cwd().parents):
+        candidate = root / relative_path
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(relative_path)
+
+
 def test_daily_quality_page_explains_degraded_coverage_in_chinese() -> None:
     source = Path("frontend/src/pages/DailyKlineQuality.vue").read_text(encoding="utf-8")
     formatter = Path("frontend/src/features/mootdx/formatters.ts").read_text(encoding="utf-8")
@@ -40,7 +48,7 @@ def test_daily_quality_page_places_selected_day_metrics_with_the_date_query() ->
 
 def test_daily_gap_payloads_verify_the_full_gap_block_but_repair_selected_day_only() -> None:
     helper = Path("frontend/src/features/mootdx/dailyGapPayloads.ts").resolve()
-    typescript = (Path.cwd().parents[1] / "frontend/node_modules/typescript/lib/typescript.js").resolve()
+    typescript = _workspace_path("frontend/node_modules/typescript/lib/typescript.js")
     script = """
 import { pathToFileURL } from 'node:url'
 import { readFile } from 'node:fs/promises'
