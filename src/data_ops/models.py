@@ -9,7 +9,7 @@ from typing import Any
 
 from src.data_ops.mootdx_tasks import MOOTDX_TASK_DEFINITIONS
 
-VALID_TASK_STATUSES = {"disabled", "idle", "running", "success", "failed", "stale", "skipped"}
+VALID_TASK_STATUSES = {"disabled", "idle", "queued", "running", "success", "failed", "stale", "skipped"}
 RETIRED_TASK_KEYS = {"xdxr_sync"}
 
 

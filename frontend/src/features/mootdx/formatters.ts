@@ -4,6 +4,7 @@ const STATUS_TEXT: Record<string, string> = {
   failed: '异常',
   unavailable: '不可用',
   pending: '等待执行',
+  queued: '等待 runner 接管',
   running: '执行中',
   success: '已完成',
   stale: '已失联',

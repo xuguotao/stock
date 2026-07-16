@@ -123,7 +123,7 @@ def _task_automation_status(task: dict[str, Any] | None) -> str | None:
     if not task.get("enabled"):
         return "stopped"
     status = str(task.get("status") or "")
-    if status in {"running", "success", "idle", "skipped"}:
+    if status in {"queued", "running", "success", "idle", "skipped"}:
         return "scheduled"
     if status in {"failed", "stale", "unavailable"}:
         return "stopped"
