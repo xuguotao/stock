@@ -136,8 +136,8 @@ def _build_candidates_from_mootdx(
         return {"events": [], "factors": []}
     # Event audit rows describe only this run's recomputed symbols.  Factor rows
     # are a complete snapshot because unchanged symbols are copied below.
-    daily_bars = _daily_bars(client, target_symbols)
-    built = _validate_and_factor(daily_bars, _xdxr_events(client, target_symbols))
+    daily_bars = _daily_bars(client, target_symbols, input_watermark)
+    built = _validate_and_factor(daily_bars, _xdxr_events(client, target_symbols, input_watermark))
     _assert_target_factor_coverage(target_symbols, daily_bars, built["factors"])
     if current is None or full:
         return built
@@ -247,15 +247,18 @@ def _prior_event_rows(client: Any, run_id: str, formula_version: str) -> list[di
     ]
 
 
-def _daily_bars(client: Any, symbols: Sequence[str]) -> dict[str, list[tuple[date, float]]]:
+def _daily_bars(
+    client: Any, symbols: Sequence[str], input_watermark: datetime | None
+) -> dict[str, list[tuple[date, float]]]:
     rows = client.execute(
         """
         select symbol, trade_date, close
         from mootdx_stock_kline final
         where frequency = 'daily' and symbol in %(symbols)s
+          and ingested_at <= %(captured_input_watermark)s
         order by symbol, trade_date
         """,
-        {"symbols": tuple(symbols)},
+        {"symbols": tuple(symbols), "captured_input_watermark": input_watermark},
     )
     result: dict[str, list[tuple[date, float]]] = {}
     for symbol, trade_date, close in rows:
@@ -267,16 +270,17 @@ def _daily_bars(client: Any, symbols: Sequence[str]) -> dict[str, list[tuple[dat
     return result
 
 
-def _xdxr_events(client: Any, symbols: Sequence[str]) -> list[dict[str, Any]]:
+def _xdxr_events(client: Any, symbols: Sequence[str], input_watermark: datetime | None) -> list[dict[str, Any]]:
     rows = client.execute(
         """
         select symbol, event_date, category, name, fenhong, peigujia,
                songzhuangu, peigu, suogu
         from mootdx_xdxr final
         where symbol in %(symbols)s
+          and ingested_at <= %(captured_input_watermark)s
         order by symbol, event_date, category, name
         """,
-        {"symbols": tuple(symbols)},
+        {"symbols": tuple(symbols), "captured_input_watermark": input_watermark},
     )
     fields = ("symbol", "event_date", "category", "name", "fenhong", "peigujia", "songzhuangu", "peigu", "suogu")
     return [{field: value for field, value in zip(fields, row)} for row in rows]

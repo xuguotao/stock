@@ -128,6 +128,35 @@ def test_default_build_constructs_candidates_from_mootdx_raw_inputs() -> None:
     ]
 
 
+def test_candidate_reads_are_bounded_by_captured_input_watermark() -> None:
+    captured = datetime(2026, 7, 16, 17, 40)
+    store = _Store()
+
+    class _StableSnapshotClient(_MootdxClient):
+        def execute(self, sql: str, params: object | None = None):
+            normalized = " ".join(sql.lower().split())
+            if "max(ingested_at)" in normalized:
+                return [(captured,)]
+            if "select symbol, trade_date, close from mootdx_stock_kline final" in normalized:
+                assert params == {"symbols": ("000001.SZ",), "captured_input_watermark": captured}
+                # A later bar must remain for the following build.
+                return [
+                    ("000001.SZ", date(2026, 7, 15), 10.0),
+                    ("000001.SZ", date(2026, 7, 16), 9.0),
+                ]
+            if "from mootdx_xdxr final" in normalized:
+                assert params == {"symbols": ("000001.SZ",), "captured_input_watermark": captured}
+                # The post-capture event is likewise absent from this snapshot.
+                return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
+            return super().execute(sql, params)
+
+    result = build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1", full=True, store=store, client=_StableSnapshotClient(), run_id_factory=lambda: "run-stable"
+    )
+
+    assert result == {"run_id": "run-stable", "event_count": 1, "factor_count": 2}
+
+
 def test_default_incremental_no_change_is_a_successful_unpublished_no_op() -> None:
     store = _IncrementalStore()
 
