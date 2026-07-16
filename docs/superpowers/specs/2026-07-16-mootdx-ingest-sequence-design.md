@@ -21,14 +21,14 @@
 
 运行记录至少包含：`ingest_seq`、`run_id`、任务键、状态、开始/结束时间、写入行数和错误信息。序号在运行开始时分配，即使该运行失败也不复用；间隙是允许的，并保留失败审计。
 
-`mootdx_stock_kline` 与 `mootdx_xdxr` 的 `ingest_seq` 默认值为 `0`，用于历史存量。发布复权版本另存 `input_ingest_seq`，表示该版本已完整消费的最大成功入库序号。
+`mootdx_stock_kline` 与 `mootdx_xdxr` 的 `ingest_seq` 默认值为 `0`，用于历史存量。发布复权版本另存 `input_ingest_seq`，表示该版本已完整消费的连续已结算入库边界：从序号 1 起，每个运行均已有 `succeeded` 或 `failed` 终态。
 
 ## 同步与发布流程
 
 1. 同步器申请新的全局序号，并写入 `running` 审计记录。
 2. 同步器在本运行内把同一 `ingest_seq` 附到日线或 XDXR 的所有写入行。
 3. 所有写入成功后，审计记录标记为 `succeeded`；失败则标记为 `failed`，其序号不可用于复权消费。
-4. 复权构建读取上一个已发布版本的 `input_ingest_seq`，只选择成功序号在 `(previous_seq, captured_seq]` 的变更标的；`captured_seq` 是构建开始时最后一个成功运行的序号。
+4. 复权构建读取上一个已发布版本的 `input_ingest_seq`，捕获构建开始时的连续已结算边界；只选择 `succeeded` 序号在 `(previous_seq, captured_seq]` 的变更标的。`failed` 序号可以推进边界，但绝不作为数据输入。
 5. 发布复权运行时持久化 `captured_seq`，并继续保留当前的完整原始快照、因子、事件、覆盖校验及发布冲突保护。
 
 首次迁移后，历史行的序号均为 `0`，因此必须使用 `--full` 完成一次全量研究快照发布；后续增量只消费大于该基线的成功入库序号。旧复权版本没有 `input_ingest_seq` 时，增量构建失败关闭并要求 `--full`。
