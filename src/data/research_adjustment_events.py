@@ -12,7 +12,11 @@ def daily_ratio(events: Iterable[Mapping[str, Any] | Any]) -> float:
     keeps a bad or incomplete corporate-action record from entering a research
     adjustment factor.
     """
-    approved = [event for event in events if _value(event, "status") == "approved"]
+    approved = [
+        event
+        for event in events
+        if _value(event, "status") == "approved" and _value(event, "category") == 1
+    ]
     ordered = sorted(
         approved,
         key=lambda event: (

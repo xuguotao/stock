@@ -46,20 +46,20 @@ def validate_event(
         return ValidatedEvent("missing_pre_close", None, None, None)
     if not _positive_finite(ex_close):
         return ValidatedEvent("missing_ex_date_bar", None, None, None)
+    if event.get("category") != 1:
+        return ValidatedEvent("unverified", None, None, None)
 
-    fenhong = _nonnegative(event.get("fenhong"), default=0.0)
-    songzhuangu = _nonnegative(event.get("songzhuangu"), default=0.0)
-    peigu = _nonnegative(event.get("peigu"), default=0.0)
+    fenhong = _required_nonnegative(event.get("fenhong"))
+    songzhuangu = _required_nonnegative(event.get("songzhuangu"))
+    peigu = _required_nonnegative(event.get("peigu"))
     suogu = _nonnegative(event.get("suogu"), default=1.0)
     if None in (fenhong, songzhuangu, peigu, suogu):
         return ValidatedEvent("formula_invalid", None, None, None)
     if suogu == 0.0:
         suogu = 1.0
 
-    peigujia = _nonnegative(event.get("peigujia"), default=0.0)
+    peigujia = _required_nonnegative(event.get("peigujia"))
     if peigujia is None:
-        return ValidatedEvent("formula_invalid", None, None, None)
-    if peigu > 0 and event.get("peigujia") is None:
         return ValidatedEvent("formula_invalid", None, None, None)
 
     denominator = float(pre_close) + songzhuangu + peigu
@@ -74,7 +74,7 @@ def validate_event(
 
     error = (float(ex_close) - theoretical_price) / theoretical_price
     if abs(error) > price_error_tolerance:
-        return ValidatedEvent("price_discontinuous", None, theoretical_price, error)
+        return ValidatedEvent("unverified", None, theoretical_price, error)
     return ValidatedEvent("approved", ratio, theoretical_price, error)
 
 
@@ -121,6 +121,12 @@ def _nonnegative(value: object, *, default: float) -> float | None:
     except (TypeError, ValueError):
         return None
     return numeric if math.isfinite(numeric) and numeric >= 0 else None
+
+
+def _required_nonnegative(value: object) -> float | None:
+    if value is None:
+        return None
+    return _nonnegative(value, default=0.0)
 
 
 def _positive_finite(value: object) -> bool:
