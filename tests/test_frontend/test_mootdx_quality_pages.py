@@ -32,6 +32,12 @@ def test_daily_quality_page_filters_gap_queue_by_selected_trade_date() -> None:
     assert '@click="selectTradeDate(coverage.trade_date)"' in source
 
 
+def test_daily_quality_client_contract_includes_per_date_verification_verdicts() -> None:
+    client = Path("frontend/src/api/client.ts").read_text(encoding="utf-8")
+
+    assert "verification_by_date: Record<string, 'available' | 'no_data' | 'error' | ''>" in client
+
+
 def test_daily_quality_page_places_selected_day_metrics_with_the_date_query() -> None:
     source = Path("frontend/src/pages/DailyKlineQuality.vue").read_text(encoding="utf-8")
 

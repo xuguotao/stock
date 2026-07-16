@@ -325,3 +325,44 @@ def test_daily_quality_coverage_queries_do_not_force_clickhouse_final() -> None:
 
     assert response["summary"]["actual_symbols"] == 1
     assert all("mootdx_stock_kline final" not in " ".join(query.lower().split()) for query in queries)
+
+
+def test_daily_quality_exposes_verified_verdicts_for_each_missing_block_date() -> None:
+    from src.web.backend.mootdx_quality import MootdxQualityService
+
+    first, available, no_data = date(2026, 7, 9), date(2026, 7, 10), date(2026, 7, 11)
+
+    class FakeClient:
+        def execute(self, query, params=None):
+            if "from trade_calendar" in query:
+                return [(no_data,), (available,), (first,)]
+            if "from mootdx_stock_catalog final" in query:
+                return [("002005.SZ", date(2004, 7, 5))]
+            if "groupuniqarray(symbol)" in " ".join(query.lower().split()):
+                return [(first, ["002005.SZ"])]
+            if "select symbol, min(trade_date) from mootdx_stock_kline" in query:
+                return [("002005.SZ", first)]
+            if "from mootdx_symbol_data_status" in query:
+                return []
+            if "from mootdx_daily_gap_verifications" in query:
+                return [
+                    ("002005.SZ", available, "available"),
+                    ("002005.SZ", no_data, "no_data"),
+                    ("999999.SZ", no_data, "available"),
+                ]
+            raise AssertionError(query)
+
+    payload = MootdxQualityService(client=FakeClient()).daily_quality(lookback_days=30)
+
+    assert payload["missing_details"] == [{
+        "symbol": "002005.SZ",
+        "missing_dates": ["2026-07-10", "2026-07-11"],
+        "list_date": "2004-07-05",
+        "status": "unknown",
+        "reason": "",
+        "consecutive_failures": 0,
+        "classification": "repair_candidate",
+        "recommendation": "建议回补",
+        "evidence": "Baostock 已确认缺口日期存在日线数据",
+        "verification_by_date": {"2026-07-10": "available", "2026-07-11": "no_data"},
+    }]

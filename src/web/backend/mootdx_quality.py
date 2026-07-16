@@ -301,6 +301,10 @@ class MootdxQualityService:
         for symbol, missing_dates in missing_by_symbol.items():
             values = status_by_symbol.get(symbol) or {}
             for block in _missing_date_blocks(missing_dates, date_positions):
+                verification_by_date = {
+                    trade_date: verification_by_symbol.get((symbol, trade_date), "")
+                    for trade_date in block
+                }
                 classification, recommendation, evidence = _classify_missing_block(
                     symbol=symbol,
                     block=block,
@@ -308,10 +312,7 @@ class MootdxQualityService:
                     trade_dates=trade_dates,
                     date_positions=date_positions,
                     status=values.get("status", "unknown"),
-                    verification_by_date={
-                        trade_date: verification_by_symbol.get((symbol, trade_date), "")
-                        for trade_date in block
-                    },
+                    verification_by_date=verification_by_date,
                 )
                 review_reason = reviewed_no_repair.get(_gap_key(symbol, block))
                 if review_reason:
@@ -330,6 +331,10 @@ class MootdxQualityService:
                     "classification": classification,
                     "recommendation": recommendation,
                     "evidence": evidence,
+                    "verification_by_date": {
+                        trade_date.isoformat(): verdict
+                        for trade_date, verdict in verification_by_date.items()
+                    },
                 })
         missing_details.sort(key=lambda row: (_gap_priority(row["classification"]), row["symbol"], row["missing_dates"][0]))
         return {
