@@ -18,6 +18,25 @@ class FakeClickHouse:
         return []
 
 
+class IngestionSequenceClickHouse(FakeClickHouse):
+    """In-memory sequence responses for the append-only ingestion run audit."""
+
+    def execute(self, sql: str, params=None):
+        super().execute(sql, params)
+        normalized = sql.lower()
+        if "select max(ingest_seq)" in normalized:
+            rows = [
+                row
+                for statement, values in self.inserts
+                if "insert into mootdx_ingestion_runs" in statement.lower()
+                for row in values
+            ]
+            if "status = 'succeeded'" in normalized:
+                rows = [row for row in rows if row[5] == "succeeded"]
+            return [(max((int(row[0]) for row in rows), default=0),)]
+        return []
+
+
 class FakeSource:
     def fetch_stock_list(self):
         from src.data.models import StockInfo
@@ -166,6 +185,75 @@ def test_ensure_mootdx_tables_creates_only_prefixed_tables() -> None:
     assert "create table if not exists stocks (" not in joined
     assert "create table if not exists daily_kline" not in joined
     assert "create table if not exists minute5_kline" not in joined
+
+
+def test_ensure_mootdx_tables_migrates_raw_tables_and_creates_ingestion_audit() -> None:
+    from src.data.mootdx_clickhouse_sync import ensure_mootdx_tables
+
+    client = FakeClickHouse()
+    ensure_mootdx_tables(client)
+
+    joined = "\n".join(client.sql).lower()
+    assert "create table if not exists mootdx_ingestion_runs" in joined
+    assert "ingest_seq uint64" in joined
+    assert "alter table mootdx_stock_kline add column if not exists ingest_seq uint64 default 0" in joined
+    assert "alter table mootdx_xdxr add column if not exists ingest_seq uint64 default 0" in joined
+
+
+def test_sync_assigns_one_ingest_sequence_to_daily_kline_and_xdxr_rows() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    client = IngestionSequenceClickHouse()
+    result = sync_mootdx_offline_data(
+        client=client,
+        source=FakeSource(),
+        symbols=["000001.SZ"],
+        trade_date=date(2026, 7, 9),
+        tasks=["stock_kline_daily", "xdxr"],
+        ensure_tables=False,
+    )
+
+    kline_rows = next(rows for sql, rows in client.inserts if "insert into mootdx_stock_kline" in sql.lower())
+    xdxr_rows = next(rows for sql, rows in client.inserts if "insert into mootdx_xdxr" in sql.lower())
+    assert result["ingest_seq"] > 0
+    assert {row[-1] for row in kline_rows} == {result["ingest_seq"]}
+    assert {row[-1] for row in xdxr_rows} == {result["ingest_seq"]}
+
+
+def test_sync_ingest_sequences_are_monotonic_across_runs() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    client = IngestionSequenceClickHouse()
+    first = sync_mootdx_offline_data(
+        client=client, source=FakeSource(), symbols=["000001.SZ"], tasks=["xdxr"], ensure_tables=False,
+    )
+    second = sync_mootdx_offline_data(
+        client=client, source=FakeSource(), symbols=["000001.SZ"], tasks=["xdxr"], ensure_tables=False,
+    )
+
+    assert second["ingest_seq"] == first["ingest_seq"] + 1
+
+
+def test_failed_ingestion_run_is_not_a_latest_successful_boundary() -> None:
+    from src.data.mootdx_clickhouse_sync import _latest_successful_ingest_seq, sync_mootdx_offline_data
+
+    client = IngestionSequenceClickHouse()
+    succeeded = sync_mootdx_offline_data(
+        client=client, source=FakeSource(), symbols=["000001.SZ"], tasks=["xdxr"], ensure_tables=False,
+    )
+    failed = sync_mootdx_offline_data(
+        client=client, source=FakeSource(), symbols=["000001.SZ"], tasks=["not_a_task"], ensure_tables=False,
+    )
+
+    ingestion_rows = [
+        row
+        for sql, rows in client.inserts
+        if "insert into mootdx_ingestion_runs" in sql.lower()
+        for row in rows
+    ]
+    assert failed["failed"]
+    assert any(row[0] == failed["ingest_seq"] and row[5] == "failed" for row in ingestion_rows)
+    assert _latest_successful_ingest_seq(client) == succeeded["ingest_seq"]
 
 
 def test_ensure_mootdx_tables_creates_daily_gap_verifications() -> None:
@@ -1435,5 +1523,8 @@ def test_xdxr_sync_writes_event_and_symbol_audit_rows() -> None:
     )
 
     assert result["inserted"] == {"mootdx_xdxr": 1, "mootdx_xdxr_symbol_runs": 1}
-    assert any("insert into mootdx_xdxr values" in sql.lower() for sql, _ in client.inserts)
+    assert any(
+        "insert into mootdx_xdxr (symbol, event_date" in sql.lower()
+        for sql, _ in client.inserts
+    )
     assert any("insert into mootdx_xdxr_symbol_runs" in sql.lower() for sql, _ in client.inserts)

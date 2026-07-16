@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import fcntl
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 from uuid import uuid4
@@ -27,12 +29,14 @@ DEFAULT_TASKS = [
     "finance_snapshot",
 ]
 DEFAULT_INDEX_SYMBOLS = ["000001.SH", "399001.SZ", "399006.SZ"]
+_INGESTION_SEQUENCE_LOCK = Path("/tmp/mootdx_ingestion_sequence.lock")
 
 
 def ensure_mootdx_tables(client: Any) -> None:
     for sql in MOOTDX_TABLE_SQL:
         client.execute(sql)
     _ensure_mootdx_xdxr_nullable_columns(client)
+    _ensure_mootdx_ingest_sequence_columns(client)
     _ensure_mootdx_xdxr_symbol_runs_columns(client)
     _ensure_mootdx_catalog_lifecycle_columns(client)
     client.execute(MOOTDX_DAILY_XDXR_EVENTS_VIEW_SQL)
@@ -74,6 +78,13 @@ def sync_mootdx_offline_data(
         _progress(progress, 5, "ensure_tables", "准备 mootdx 独立表")
         ensure_mootdx_tables(clickhouse)
 
+    ingest_seq = _allocate_ingest_seq(
+        clickhouse,
+        run_id=run_id,
+        task_key=selected_tasks[0] if len(selected_tasks) == 1 else "mootdx_offline_sync",
+        started_at=run_started_at,
+    )
+
     target_symbols = _resolve_symbols(data_source, symbols=symbols, limit=limit, client=clickhouse, include_beijing=include_beijing)
     reconciliation_diagnostics = None
     if daily_reconcile:
@@ -112,7 +123,8 @@ def sync_mootdx_offline_data(
                 if not rows:
                     inserted[table] = inserted.get(table, 0)
                     continue
-                _insert_rows(clickhouse, table, rows)
+                rows_to_insert = _with_ingest_seq(rows, ingest_seq) if table in {"mootdx_stock_kline", "mootdx_xdxr"} else rows
+                _insert_rows(clickhouse, table, rows_to_insert)
                 inserted[table] = inserted.get(table, 0) + len(rows)
                 if table == "mootdx_stock_catalog":
                     clickhouse.execute("optimize table mootdx_stock_catalog final")
@@ -127,6 +139,7 @@ def sync_mootdx_offline_data(
 
     result = {
         "run_id": run_id,
+        "ingest_seq": ingest_seq,
         "trade_date": selected_trade_date.isoformat(),
         "tasks": selected_tasks,
         "symbols": target_symbols,
@@ -157,6 +170,18 @@ def sync_mootdx_offline_data(
         },
         result=result,
         error=json.dumps(failed, ensure_ascii=False) if failed else "",
+    )
+    _write_ingestion_run_row(
+        clickhouse,
+        ingest_seq=ingest_seq,
+        run_id=run_id,
+        task_key=selected_tasks[0] if len(selected_tasks) == 1 else "mootdx_offline_sync",
+        started_at=run_started_at,
+        finished_at=_now(),
+        status="failed" if failed else "succeeded",
+        row_count=sum(inserted.get(table, 0) for table in ("mootdx_stock_kline", "mootdx_xdxr")),
+        error=json.dumps(failed, ensure_ascii=False) if failed else "",
+        version=2,
     )
     _progress(progress, 100, "completed", "mootdx 离线同步完成")
     return result
@@ -1222,7 +1247,19 @@ def _insert_rows(client: Any, table: str, rows: list[tuple]) -> None:
             rows,
         )
         return
-    if table in {"mootdx_stock_kline", "mootdx_index_kline"}:
+    if table == "mootdx_stock_kline":
+        batches: dict[tuple[Any, Any], list[tuple]] = {}
+        for row in rows:
+            batches.setdefault((row[1], row[2]), []).append(row)
+        for batch in batches.values():
+            client.execute(
+                "insert into mootdx_stock_kline "
+                "(datetime, trade_date, frequency, symbol, open, high, low, close, volume, amount, "
+                "source, ingested_at, raw_json, ingest_seq) values",
+                batch,
+            )
+        return
+    if table == "mootdx_index_kline":
         batches: dict[tuple[Any, Any], list[tuple]] = {}
         for row in rows:
             batches.setdefault((row[1], row[2]), []).append(row)
@@ -1235,7 +1272,12 @@ def _insert_rows(client: Any, table: str, rows: list[tuple]) -> None:
             event_date = row[1]
             batches.setdefault((event_date.year, event_date.month), []).append(row)
         for batch in batches.values():
-            client.execute(f"insert into {table} values", batch)
+            client.execute(
+                "insert into mootdx_xdxr "
+                "(symbol, event_date, category, name, fenhong, peigujia, songzhuangu, peigu, suogu, "
+                "panqianliutong, panhouliutong, qianzongguben, houzongguben, ingested_at, raw_json, ingest_seq) values",
+                batch,
+            )
         return
     if table == "mootdx_xdxr_symbol_runs":
         client.execute(
@@ -1250,6 +1292,83 @@ def _insert_rows(client: Any, table: str, rows: list[tuple]) -> None:
 def _ensure_mootdx_xdxr_nullable_columns(client: Any) -> None:
     for column in MOOTDX_XDXR_NULLABLE_FLOAT_COLUMNS:
         client.execute(f"alter table mootdx_xdxr modify column {column} Nullable(Float64)")
+
+
+def _ensure_mootdx_ingest_sequence_columns(client: Any) -> None:
+    """Backfill the sequence marker without rewriting existing Mootdx raw rows."""
+    for table in ("mootdx_stock_kline", "mootdx_xdxr"):
+        client.execute(f"alter table {table} add column if not exists ingest_seq UInt64 default 0")
+
+
+def _with_ingest_seq(rows: list[tuple], ingest_seq: int) -> list[tuple]:
+    return [(*row, ingest_seq) for row in rows]
+
+
+def _allocate_ingest_seq(client: Any, *, run_id: str, task_key: str, started_at: datetime) -> int:
+    """Allocate once per sync run.
+
+    The advisory file lock makes ``max + 1`` safe for the current single-host
+    scheduler. Multiple scheduler hosts require a shared coordinator/sequence
+    service before they can write these tables concurrently.
+    """
+    _INGESTION_SEQUENCE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with _INGESTION_SEQUENCE_LOCK.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            rows = client.execute("select max(ingest_seq) from mootdx_ingestion_runs")
+            latest = _first_clickhouse_value(rows)
+            try:
+                latest_seq = int(latest or 0)
+            except (TypeError, ValueError):
+                # Test doubles and unavailable audit tables may return unrelated
+                # result rows; a real ClickHouse aggregate is numeric.
+                latest_seq = 0
+            ingest_seq = latest_seq + 1
+            _write_ingestion_run_row(
+                client,
+                ingest_seq=ingest_seq,
+                run_id=run_id,
+                task_key=task_key,
+                started_at=started_at,
+                finished_at=None,
+                status="running",
+                row_count=0,
+                error="",
+                version=1,
+            )
+            return ingest_seq
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _latest_successful_ingest_seq(client: Any) -> int:
+    rows = client.execute(
+        "select max(ingest_seq) from mootdx_ingestion_runs final where status = 'succeeded'"
+    )
+    try:
+        return int(_first_clickhouse_value(rows) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _write_ingestion_run_row(
+    client: Any,
+    *,
+    ingest_seq: int,
+    run_id: str,
+    task_key: str,
+    started_at: datetime,
+    finished_at: datetime | None,
+    status: str,
+    row_count: int,
+    error: str,
+    version: int,
+) -> None:
+    client.execute(
+        "insert into mootdx_ingestion_runs "
+        "(ingest_seq, run_id, task_key, started_at, finished_at, status, row_count, error, version) values",
+        [(ingest_seq, run_id, task_key, started_at, finished_at, status, row_count, error, version)],
+    )
 
 
 def _ensure_mootdx_xdxr_symbol_runs_columns(client: Any) -> None:
@@ -1418,6 +1537,22 @@ def _now() -> datetime:
 
 MOOTDX_TABLE_SQL = [
     """
+    create table if not exists mootdx_ingestion_runs (
+        ingest_seq UInt64,
+        run_id String,
+        task_key LowCardinality(String),
+        started_at DateTime,
+        finished_at Nullable(DateTime),
+        status LowCardinality(String),
+        row_count UInt64,
+        error String,
+        version UInt8
+    )
+    engine = ReplacingMergeTree(version)
+    order by ingest_seq
+    ttl started_at + interval 365 day delete
+    """,
+    """
     create table if not exists mootdx_sync_runs (
         run_id String,
         task_key LowCardinality(String),
@@ -1505,7 +1640,8 @@ MOOTDX_TABLE_SQL = [
         amount Float64,
         source LowCardinality(String),
         ingested_at DateTime,
-        raw_json String
+        raw_json String,
+        ingest_seq UInt64 default 0
     )
     engine = ReplacingMergeTree(ingested_at)
     partition by (trade_date, frequency)
@@ -1610,7 +1746,8 @@ MOOTDX_TABLE_SQL = [
         qianzongguben Nullable(Float64),
         houzongguben Nullable(Float64),
         ingested_at DateTime,
-        raw_json String
+        raw_json String,
+        ingest_seq UInt64 default 0
     )
     engine = ReplacingMergeTree(ingested_at)
     partition by toYYYYMM(event_date)
