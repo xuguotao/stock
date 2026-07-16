@@ -9,6 +9,18 @@ from typing import Any, Mapping, Sequence
 from src.data.clickhouse_source import ClickHouseStockDataSource
 
 
+VALIDATION_STATUSES = frozenset(
+    {
+        "approved",
+        "unverified",
+        "source_mismatch",
+        "missing_pre_close",
+        "missing_ex_date_bar",
+        "formula_invalid",
+    }
+)
+
+
 class ResearchAdjustmentStore:
     """Store candidate adjustment results and publish complete runs atomically by version.
 
@@ -152,10 +164,11 @@ class ResearchAdjustmentStore:
     def _event_row(run_id: str, formula_version: str, row: Mapping[str, Any]) -> tuple[Any, ...]:
         event_date = _as_date(row["event_date"])
         now = datetime.now()
+        validation_status = _validation_status(row)
         return (
             run_id, formula_version, str(row["symbol"]), event_date,
             _optional_int(row.get("category")), str(row.get("name") or row.get("event_name") or ""),
-            str(row.get("status") or row.get("validation_status") or "unverified"),
+            validation_status,
             _optional_float(row.get("ratio")), _optional_float(row.get("theoretical_price")),
             _optional_float(row.get("pre_close")), _optional_float(row.get("ex_close")),
             _optional_float(row.get("error") if "error" in row else row.get("validation_error")),
@@ -188,6 +201,13 @@ def _optional_float(value: Any) -> float | None:
 
 def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
+
+
+def _validation_status(row: Mapping[str, Any]) -> str:
+    status = str(row.get("status") or row.get("validation_status") or "unverified")
+    if status not in VALIDATION_STATUSES:
+        raise ValueError(f"invalid validation status: {status}")
+    return status
 
 
 def _json_default(value: Any) -> str:

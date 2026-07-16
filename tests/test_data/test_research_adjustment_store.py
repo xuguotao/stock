@@ -1,7 +1,7 @@
 """Tests for the research-only adjustment data store."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
@@ -54,5 +54,19 @@ def test_incomplete_run_cannot_be_published() -> None:
 
     with pytest.raises(ValueError, match="completed"):
         store.publish_run("run-1", "v1", completed=False)
+
+    assert client.calls == []
+
+
+def test_candidate_event_rejects_an_unknown_validation_status() -> None:
+    client = _Client()
+    store = ResearchAdjustmentStore(client)
+
+    with pytest.raises(ValueError, match="validation status"):
+        store.write_candidate_events(
+            "run-1",
+            "v1",
+            [{"symbol": "600000.SH", "event_date": date(2026, 7, 16), "status": "unknown"}],
+        )
 
     assert client.calls == []
