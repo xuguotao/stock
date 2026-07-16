@@ -51,6 +51,21 @@ def test_completed_published_run_is_returned_as_current() -> None:
     assert "order by published_at desc, run_id desc" in client.calls[3][0].lower()
 
 
+def test_completed_run_with_no_events_and_daily_factors_can_be_published() -> None:
+    client = _Client(responses=[[(0,)], [(2,)]])
+    store = ResearchAdjustmentStore(client)
+
+    store.publish_run(
+        "run-1",
+        "v1",
+        completed=True,
+        expected_event_count=0,
+        expected_factor_count=2,
+    )
+
+    assert "insert into research_adjustment_runs" in client.calls[2][0].lower()
+
+
 def test_incomplete_run_cannot_be_published() -> None:
     client = _Client()
     store = ResearchAdjustmentStore(client)

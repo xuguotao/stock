@@ -143,8 +143,10 @@ class ResearchAdjustmentStore:
             raise ValueError("only completed runs may be published")
         if expected_event_count is None or expected_factor_count is None:
             raise ValueError("candidate counts are required before publication")
-        if expected_event_count <= 0 or expected_factor_count <= 0:
-            raise ValueError("candidate counts must both be greater than zero")
+        if expected_event_count < 0 or expected_factor_count <= 0:
+            raise ValueError(
+                "candidate event count must be non-negative and candidate factor count must be greater than zero"
+            )
 
         actual_event_count = self._candidate_count(
             "research_adjustment_events", run_id, formula_version
