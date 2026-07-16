@@ -851,6 +851,65 @@ export interface MootdxDailyQualityResponse {
   }>
 }
 
+export interface MootdxXdxrRun {
+  run_id: string
+  started_at: string | null
+  finished_at: string | null
+  duration_seconds: number | null
+  status: string
+  error: string
+  target_symbols: number
+  requested_symbols: number
+  success_symbols: number
+  empty_symbols: number
+  error_symbols: number
+  event_rows: number
+  request_seconds: number
+  parse_seconds: number
+  write_seconds: number | null
+  circuit_breaker_triggered: boolean
+  failed_symbols_sample: string[]
+}
+
+export interface MootdxXdxrQualityResponse {
+  latest_run: MootdxXdxrRun | null
+  runs: MootdxXdxrRun[]
+  data_summary: {
+    symbols: number
+    events: number
+    latest_ingested_at: string | null
+    null_suogu: number
+  }
+}
+
+export interface MootdxXdxrRunDetail {
+  run_id: string
+  status: string
+  started_at: string | null
+  finished_at: string | null
+  duration_seconds: number | null
+  request_seconds: number
+  parse_seconds: number
+  write_seconds: number | null
+  error: string
+  summary: {
+    requested_symbols: number
+    success_symbols: number
+    empty_symbols: number
+    error_symbols: number
+    event_rows: number
+  }
+  items: Array<{
+    symbol: string
+    status: string
+    event_rows: number
+    request_ms: number | null
+    parse_ms: number | null
+    error: string
+    raw_columns: string[]
+  }>
+}
+
 export interface DailyMaintenancePayload {
   trade_date?: string | null
   retry_no_data?: boolean
@@ -1451,6 +1510,22 @@ export const api = {
   },
   getMootdxDailyQuality(lookbackDays = 30, missingLimit = 200) {
     return request<MootdxDailyQualityResponse>(`/api/data/mootdx/daily-quality?lookback_days=${lookbackDays}&missing_limit=${missingLimit}`)
+  },
+  getMootdxXdxrQuality(params: { limit?: number; startDate?: string; endDate?: string; status?: string } = {}) {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.startDate) query.set('start_date', params.startDate)
+    if (params.endDate) query.set('end_date', params.endDate)
+    if (params.status) query.set('status', params.status)
+    const suffix = query.size ? `?${query}` : ''
+    return request<MootdxXdxrQualityResponse>(`/api/data/mootdx/xdxr-quality${suffix}`)
+  },
+  getMootdxXdxrRunDetail(runId: string, params: { status?: string; limit?: number } = {}) {
+    const query = new URLSearchParams()
+    if (params.status) query.set('status', params.status)
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    const suffix = query.size ? `?${query}` : ''
+    return request<{ item: MootdxXdxrRunDetail }>(`/api/data/mootdx/xdxr-quality/runs/${encodeURIComponent(runId)}${suffix}`)
   },
   createMootdxDailyGapRepair(items: Array<{ symbol: string; start_date: string; end_date: string; evidence: string }>) {
     return request<{ job_id: string }>('/api/data/mootdx/daily-quality/repair', { method: 'POST', body: JSON.stringify({ items }) })

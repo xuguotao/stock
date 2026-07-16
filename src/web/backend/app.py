@@ -77,6 +77,8 @@ from src.web.backend.tail_replay_backtest import TailReplayBacktestRequest, run_
 from src.web.backend.watchlist_monitor import get_watchlist_config, get_watchlist_report
 
 TAIL_RESULT_ENRICHMENT_RANK_LIMIT = 300
+_MOOTDX_XDXR_RUN_STATUSES = {"success", "failed"}
+_MOOTDX_XDXR_AUDIT_STATUSES = {"success", "empty", "error"}
 _STOCK_UNIVERSE_RULE_KEYS = (
     "lookback_days",
     "min_trading_days",
@@ -84,6 +86,15 @@ _STOCK_UNIVERSE_RULE_KEYS = (
     "min_listing_age_days",
     "include_beijing",
 )
+
+
+def _parse_optional_iso_date(value: str | None, *, parameter: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{parameter} must be an ISO date") from exc
 
 
 class CreateJobRequest(BaseModel):
@@ -896,6 +907,43 @@ def create_app(
             lookback_days=lookback_days,
             missing_limit=missing_limit,
         )
+
+    @app.get("/api/data/mootdx/xdxr-quality")
+    def get_mootdx_xdxr_quality(
+        limit: int = 30,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 100:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+        parsed_start_date = _parse_optional_iso_date(start_date, parameter="start_date")
+        parsed_end_date = _parse_optional_iso_date(end_date, parameter="end_date")
+        if parsed_start_date is not None and parsed_end_date is not None and parsed_start_date > parsed_end_date:
+            raise HTTPException(status_code=400, detail="start_date must not be after end_date")
+        if status is not None and status not in _MOOTDX_XDXR_RUN_STATUSES:
+            raise HTTPException(status_code=400, detail="status must be success or failed")
+        return app.state.mootdx_quality_service.xdxr_quality(
+            limit=limit,
+            start_date=parsed_start_date,
+            end_date=parsed_end_date,
+            status=status,
+        )
+
+    @app.get("/api/data/mootdx/xdxr-quality/runs/{run_id}")
+    def get_mootdx_xdxr_quality_run_detail(
+        run_id: str,
+        status: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 1000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+        if status is not None and status not in _MOOTDX_XDXR_AUDIT_STATUSES:
+            raise HTTPException(status_code=400, detail="status must be success, empty, or error")
+        item = app.state.mootdx_quality_service.xdxr_run_detail(run_id, status=status, limit=limit)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Mootdx XDXR run not found")
+        return {"item": item}
 
     @app.post("/api/data/mootdx/daily-quality/repair")
     def create_mootdx_daily_gap_repair(

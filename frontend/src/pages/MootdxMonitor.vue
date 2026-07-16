@@ -8,6 +8,7 @@
       <div class="page-actions">
         <el-button @click="router.push({ name: 'mootdx-catalog-quality' })">目录质量</el-button>
         <el-button @click="router.push({ name: 'mootdx-daily-quality' })">日线质量</el-button>
+        <el-button @click="router.push({ name: 'mootdx-xdxr-quality' })">XDXR 质量</el-button>
         <el-button :loading="loading" @click="load">刷新</el-button>
       </div>
     </div>
