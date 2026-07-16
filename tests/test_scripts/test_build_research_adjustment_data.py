@@ -157,6 +157,30 @@ def test_candidate_reads_are_bounded_by_captured_input_watermark() -> None:
     assert result == {"run_id": "run-stable", "event_count": 1, "factor_count": 2}
 
 
+def test_full_build_selects_targets_only_through_captured_input_watermark() -> None:
+    captured = datetime(2026, 7, 16, 17, 40)
+    store = _Store()
+
+    class _StableTargetClient(_MootdxClient):
+        def execute(self, sql: str, params: object | None = None):
+            normalized = " ".join(sql.lower().split())
+            if "max(ingested_at)" in normalized:
+                return [(captured,)]
+            if "select distinct symbol from mootdx_stock_kline final" in normalized:
+                assert "frequency = 'daily'" in normalized
+                assert "ingested_at <= %(captured_input_watermark)s" in normalized
+                assert params == {"captured_input_watermark": captured}
+                # A symbol ingested after capture must wait for the next run.
+                return [("000001.SZ",)]
+            return super().execute(sql, params)
+
+    result = build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1", full=True, store=store, client=_StableTargetClient(), run_id_factory=lambda: "run-targets"
+    )
+
+    assert result == {"run_id": "run-targets", "event_count": 1, "factor_count": 2}
+
+
 def test_default_incremental_no_change_is_a_successful_unpublished_no_op() -> None:
     store = _IncrementalStore()
 

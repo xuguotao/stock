@@ -178,8 +178,13 @@ def _default_symbols(
     client: Any, current: Mapping[str, Any] | None, full: bool, input_watermark: datetime | None
 ) -> list[str]:
     if full or current is None:
+        if input_watermark is None:
+            return []
         rows = client.execute(
-            "select distinct symbol from mootdx_stock_kline final where frequency = 'daily' order by symbol"
+            """select distinct symbol from mootdx_stock_kline final
+            where frequency = 'daily' and ingested_at <= %(captured_input_watermark)s
+            order by symbol""",
+            {"captured_input_watermark": input_watermark},
         )
         return [str(row[0]) for row in rows]
     if input_watermark is None:
