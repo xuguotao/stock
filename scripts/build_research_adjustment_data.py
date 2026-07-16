@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Explicit fail-closed entry point for research adjustment candidates.
+"""Build versioned, fail-closed research adjustment candidates from Mootdx.
 
-The event and factor calculator is deliberately injectable.  It is not provided
-until the dedicated raw daily/XDXR construction task exists, which prevents this
-command from claiming a successful adjustment build with guessed input data.
+The default calculator reads isolated Mootdx daily bars and XDXR records.  It
+is also injectable for deterministic formula tests without accessing ClickHouse.
 """
 from __future__ import annotations
 
@@ -106,12 +105,14 @@ def _build_candidates_from_mootdx(
     client: Any,
     store: Any,
 ) -> Mapping[str, Sequence[Mapping[str, Any]]]:
-    """Recompute complete histories for explicit or XDXR-changed symbols.
+    """Build a complete factor snapshot from raw Mootdx inputs.
 
-    Default incremental scope is symbols whose Mootdx XDXR rows arrived after
-    the last published run of this formula.  Before a first publication, all
-    available daily symbols are selected.  An empty scope is a successful no-op
-    and is deliberately not published.
+    Default incremental scope is the union of symbols with XDXR or daily-bar
+    ``ingested_at`` updates after the prior publication.  Their complete
+    histories are rebuilt, while unchanged symbols' prior factor rows are
+    copied into the candidate.  Before a first publication, and with ``--full``,
+    all available daily symbols are built.  An empty incremental scope is a
+    successful no-op and is deliberately not published.
     """
     current = store.current_run(formula_version)
     if current is None and symbols and not full:
