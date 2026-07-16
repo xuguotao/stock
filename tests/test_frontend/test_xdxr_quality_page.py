@@ -26,5 +26,18 @@ def test_xdxr_quality_page_has_operations_content_and_safe_error_state() -> None
     assert "data_summary" in source
     assert "getMootdxXdxrRunDetail" in source
     assert "detailStatusOptions" in source
-    assert "snapshot.value = null; loadError.value" in source
+    assert "snapshot.value = null" in source
+    assert "loadError.value = error instanceof Error" in source
     assert "getMootdxXdxrQuality({ limit: 30" in source
+
+
+def test_xdxr_quality_page_ignores_stale_list_and_detail_responses() -> None:
+    source = Path("frontend/src/pages/XdxrQuality.vue").read_text(encoding="utf-8")
+
+    assert "let loadRequestToken = 0" in source
+    assert "const requestToken = ++loadRequestToken" in source
+    assert "if (requestToken !== loadRequestToken) return" in source
+    assert "let detailRequestToken = 0" in source
+    assert "const requestToken = ++detailRequestToken" in source
+    assert "selectedRunId.value === runId" in source
+    assert "const runId = selectedRunId.value" in source
