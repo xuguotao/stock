@@ -396,6 +396,29 @@ def test_repository_manual_trigger_is_consumed() -> None:
     assert repo.list_task_configs()[0].manual_trigger is False
 
 
+def test_repository_projects_pending_manual_trigger_as_queued_unless_runner_is_active() -> None:
+    client = FakeClickHouseClient()
+    repo = ClickHouseDataOpsRepository(client=client)
+    now = datetime(2026, 7, 16, 10, 0)
+    repo.upsert_task_config(
+        DataOpsTaskConfig(
+            task_key="mootdx_xdxr_sync",
+            enabled=True,
+            schedule_kind="daily_time",
+            schedule_config={"time": "17:10"},
+            manual_trigger=True,
+            manual_triggered_at=now,
+        ),
+        now=now,
+    )
+
+    assert repo.list_task_statuses(now=now)[0].status == "queued"
+
+    repo.write_heartbeat("runner-a", "mootdx_xdxr_sync", "running", "working", now=now)
+
+    assert repo.list_task_statuses(now=now)[0].status == "running"
+
+
 def test_repository_retries_once_after_clickhouse_socket_error() -> None:
     class BrokenThenWorkingSource:
         def __init__(self) -> None:

@@ -354,6 +354,8 @@ class ClickHouseDataOpsRepository:
                 status = "running"
             elif status == "running" and heartbeat_status in {"failed", "success", "skipped"}:
                 status = heartbeat_status
+            if config.manual_trigger and status != "running":
+                status = "queued"
             if (
                 status == "running"
                 and heartbeat_at

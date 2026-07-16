@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -126,6 +127,26 @@ class BaostockBars:
         if self._error:
             raise self._error
         return self._frame.copy()
+
+
+def test_verify_daily_gaps_only_persists_the_explicit_missing_trading_dates() -> None:
+    from src.data.mootdx_clickhouse_sync import verify_mootdx_daily_gaps
+
+    client = FakeClickHouse()
+    result = verify_mootdx_daily_gaps(
+        client=client,
+        baostock_source=BaostockBars(),
+        items=[SimpleNamespace(
+            symbol="000001.SZ",
+            start_date=date(2026, 7, 10),
+            end_date=date(2026, 7, 13),
+            trade_dates=[date(2026, 7, 10), date(2026, 7, 13)],
+        )],
+    )
+
+    rows = next(rows for sql, rows in client.inserts if "insert into mootdx_daily_gap_verifications" in sql.lower())
+    assert [row[4] for row in rows] == [date(2026, 7, 10), date(2026, 7, 13)]
+    assert result["no_data"] == 2
 
 
 def test_ensure_mootdx_tables_creates_only_prefixed_tables() -> None:

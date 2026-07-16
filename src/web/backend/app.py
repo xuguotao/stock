@@ -10,7 +10,7 @@ from time import perf_counter
 from typing import Any, Literal
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from src.data.clickhouse_minute5_sync import sync_clickhouse_minute5_history_window, sync_clickhouse_minute5_kline
 from src.data.clickhouse_quote_snapshot_sync import sync_clickhouse_quote_snapshots
@@ -160,6 +160,17 @@ class MootdxDailyGapRepairItem(BaseModel):
     start_date: date
     end_date: date
     evidence: str = Field(min_length=1, max_length=300)
+    trade_dates: list[date] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_trade_dates(self) -> "MootdxDailyGapRepairItem":
+        if self.trade_dates is None:
+            return self
+        if len(set(self.trade_dates)) != len(self.trade_dates):
+            raise ValueError("trade_dates must not contain duplicates")
+        if any(value < self.start_date or value > self.end_date for value in self.trade_dates):
+            raise ValueError("trade_dates must be within start_date and end_date")
+        return self
 
 
 class MootdxDailyGapRepairRequest(BaseModel):

@@ -131,6 +131,7 @@ const auditDrawer = ref(false)
 const selectedAudit = ref<MootdxAuditRecord | null>(null)
 const auditLoading = ref(false)
 let refreshTimer: ReturnType<typeof window.setTimeout> | null = null
+let postSubmitTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const activeSymbols = computed(() => String(snapshot.value?.health.symbol_status.active ?? '-'))
 const symbolStatusSummary = computed(() => {
@@ -192,7 +193,7 @@ async function load() {
     ElMessage.error(error instanceof Error ? error.message : '加载 mootdx 监控失败')
   } finally {
     loading.value = false
-    if (snapshot.value?.tasks.some((task) => task.status === 'running')) {
+    if (snapshot.value?.tasks.some((task) => task.status === 'queued' || task.status === 'running')) {
       refreshTimer = window.setTimeout(load, 2000)
     }
   }
@@ -221,7 +222,9 @@ async function runTask(taskKey: string) {
   try {
     await api.runDataOpsTaskOnce(taskKey)
     ElMessage.success('已提交，等待独立 runner 接管')
-    window.setTimeout(async () => {
+    if (postSubmitTimer) window.clearTimeout(postSubmitTimer)
+    postSubmitTimer = window.setTimeout(async () => {
+      postSubmitTimer = null
       await load()
       const task = snapshot.value?.tasks.find((item) => item.task_key === taskKey)
       if (task?.status === 'failed' || task?.status === 'stale') {
@@ -249,7 +252,10 @@ async function openAudit(row: MootdxAuditRecord) {
 }
 
 onMounted(load)
-onBeforeUnmount(() => { if (refreshTimer) window.clearTimeout(refreshTimer) })
+onBeforeUnmount(() => {
+  if (refreshTimer) window.clearTimeout(refreshTimer)
+  if (postSubmitTimer) window.clearTimeout(postSubmitTimer)
+})
 </script>
 
 <style scoped>

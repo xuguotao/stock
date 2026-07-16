@@ -157,6 +157,18 @@ def test_mootdx_handler_raises_when_sync_audit_is_failed() -> None:
         handlers["mootdx_daily_kline_sync"]({"trade_date": "2026-07-09"})
 
 
+def test_mootdx_handler_raises_when_inner_sync_returns_failed() -> None:
+    handler = build_default_handlers(
+        mootdx_sync_runner=lambda **_: {
+            "tasks": ["stock_catalog"],
+            "failed": {"stock_catalog": "AttributeError: bad code"},
+        }
+    )["mootdx_stock_catalog_sync"]
+
+    with pytest.raises(RuntimeError, match=r"stock_catalog.*AttributeError: bad code"):
+        handler({"trade_date": "2026-07-16"})
+
+
 def test_stock_universe_profile_handler_passes_configured_rules() -> None:
     calls = []
     handlers = build_default_handlers(stock_universe_profile_runner=lambda **kwargs: calls.append(kwargs) or {"universe_eligible": 2})
