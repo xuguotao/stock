@@ -5,7 +5,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from src.data_ops.handlers import build_default_handlers
 from src.data_ops.models import DataOpsTaskConfig, DataOpsTaskStatus
+from src.data_ops.repository import ClickHouseDataOpsRepository
 from src.data_ops.runner import DataOpsRunner, DataOpsRunnerConfig, default_runner_loop_interval
 
 
@@ -107,6 +109,49 @@ def test_runner_records_failed_task() -> None:
 
     assert repo.finished == [("run-1", "failed", {}, "boom")]
     assert result["failed"] == 1
+
+
+def test_runner_records_inner_mootdx_failure_as_failed_run_and_heartbeat() -> None:
+    class InMemoryClickHouseClient:
+        def __init__(self) -> None:
+            self.configs: dict[str, dict] = {}
+            self.runs: dict[str, dict] = {}
+            self.heartbeats: dict[tuple[str, str], dict] = {}
+
+        def execute(self, _query: str, _params=None):
+            return []
+
+    now = datetime(2026, 7, 16, 8, 30)
+    client = InMemoryClickHouseClient()
+    repository = ClickHouseDataOpsRepository(client=client)
+    handlers = build_default_handlers(
+        mootdx_sync_runner=lambda **_: {
+            "tasks": ["stock_catalog"],
+            "failed": {"stock_catalog": "AttributeError: bad code"},
+        }
+    )
+    runner = DataOpsRunner(
+        repository=repository,
+        handlers=handlers,
+        config=DataOpsRunnerConfig(
+            runner_id="runner-maintenance",
+            once=True,
+            task_key="mootdx_stock_catalog_sync",
+            task_group="maintenance",
+        ),
+        clock=lambda: now,
+        is_trading_day=lambda _value: True,
+    )
+
+    result = runner.run_once()
+
+    run = next(run for run in client.runs.values() if run["task_key"] == "mootdx_stock_catalog_sync")
+    heartbeat = client.heartbeats[("runner-maintenance", "mootdx_stock_catalog_sync")]
+    assert result == {"executed": 0, "failed": 1, "skipped": 0}
+    assert run["status"] == "failed"
+    assert "AttributeError: bad code" in run["error"]
+    assert heartbeat["status"] == "failed"
+    assert "AttributeError: bad code" in heartbeat["message"]
 
 
 def test_runner_consumes_manual_trigger_after_execution() -> None:
