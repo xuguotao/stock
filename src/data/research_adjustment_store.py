@@ -58,7 +58,7 @@ class ResearchAdjustmentStore:
                 computed_at DateTime
             ) engine = ReplacingMergeTree(computed_at)
             partition by toYYYYMM(event_date)
-            order by (formula_version, run_id, symbol, event_date, category, event_name)
+            order by (formula_version, run_id, symbol, event_date, ifNull(category, -1), event_name)
             """
         )
         self.client.execute(
@@ -86,7 +86,7 @@ class ResearchAdjustmentStore:
                 run_id String,
                 formula_version String,
                 status String,
-                published_at DateTime
+                published_at DateTime64(3)
             ) engine = ReplacingMergeTree(published_at)
             order by (formula_version, run_id)
             """
@@ -130,10 +130,34 @@ class ResearchAdjustmentStore:
         )
         return len(values)
 
-    def publish_run(self, run_id: str, formula_version: str, completed: bool) -> None:
+    def publish_run(
+        self,
+        run_id: str,
+        formula_version: str,
+        completed: bool,
+        expected_event_count: int | None = None,
+        expected_factor_count: int | None = None,
+    ) -> None:
         """Publish a fully built run; incomplete candidates are never publishable."""
         if not completed:
             raise ValueError("only completed runs may be published")
+        if expected_event_count is None or expected_factor_count is None:
+            raise ValueError("candidate counts are required before publication")
+        if expected_event_count <= 0 or expected_factor_count <= 0:
+            raise ValueError("candidate counts must both be greater than zero")
+
+        actual_event_count = self._candidate_count(
+            "research_adjustment_events", run_id, formula_version
+        )
+        actual_factor_count = self._candidate_count(
+            "research_daily_adjustment_factors", run_id, formula_version
+        )
+        if (actual_event_count, actual_factor_count) != (expected_event_count, expected_factor_count):
+            raise ValueError(
+                "candidate counts do not match expected publication counts: "
+                f"events={actual_event_count}/{expected_event_count}, "
+                f"factors={actual_factor_count}/{expected_factor_count}"
+            )
         self.client.execute(
             """
             insert into research_adjustment_runs
@@ -142,6 +166,17 @@ class ResearchAdjustmentStore:
             """,
             [(run_id, formula_version, "published", datetime.now())],
         )
+
+    def _candidate_count(self, table: str, run_id: str, formula_version: str) -> int:
+        rows = self.client.execute(
+            f"""
+            select count()
+            from {table}
+            where run_id = %(run_id)s and formula_version = %(formula_version)s
+            """,
+            {"run_id": run_id, "formula_version": formula_version},
+        )
+        return int(rows[0][0]) if rows else 0
 
     def current_run(self, formula_version: str) -> dict[str, Any] | None:
         """Return the newest published run for a formula, never a candidate run."""
@@ -188,7 +223,9 @@ class ResearchAdjustmentStore:
 
 
 def _as_date(value: Any) -> date:
-    return value if isinstance(value, date) and not isinstance(value, datetime) else date.fromisoformat(str(value))
+    if isinstance(value, datetime):
+        return value.date()
+    return value if isinstance(value, date) else date.fromisoformat(str(value))
 
 
 def _as_datetime(value: Any) -> datetime:
