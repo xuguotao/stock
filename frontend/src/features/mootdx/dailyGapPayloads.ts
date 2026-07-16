@@ -7,6 +7,7 @@ export type DailyGapDisplayItem = MootdxDailyQualityResponse['missing_details'][
 export type DailyGapPayloadItem = Pick<DailyGapDisplayItem, 'symbol' | 'evidence'> & {
   start_date: string
   end_date: string
+  trade_dates?: string[]
 }
 
 export function createDailyGapRepairPayload(
@@ -27,5 +28,6 @@ export function createDailyGapVerifyPayload(items: DailyGapDisplayItem[]): Daily
     start_date: item.block_missing_dates[0],
     end_date: item.block_missing_dates.at(-1) ?? item.block_missing_dates[0],
     evidence: item.evidence,
+    trade_dates: item.block_missing_dates,
   }))
 }

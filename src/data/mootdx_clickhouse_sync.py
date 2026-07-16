@@ -927,9 +927,10 @@ def verify_mootdx_daily_gaps(
     for index, item in enumerate(items, start=1):
         symbol = str(item.symbol)
         start_date, end_date = item.start_date, item.end_date
+        trade_dates = getattr(item, "trade_dates", None) or _date_range(start_date, end_date)
         verification = _verify_baostock_daily(baostock_source, symbol=symbol, start_date=start_date, end_date=end_date)
         bars = _stock_kline_rows_from_frame(_tradable_baostock_daily_frame(verification["frame"]), frequency="daily", source="baostock")
-        verdicts = _baostock_verdicts(symbol=symbol, start_date=start_date, end_date=end_date, verified_rows=bars, error=verification["error"])
+        verdicts = _baostock_verdicts(symbol=symbol, trade_dates=trade_dates, verified_rows=bars, error=verification["error"])
         for trade_date, verdict in verdicts.items():
             counts[verdict] += 1
             rows.append(_daily_gap_verification_row(run_id=run_id, symbol=symbol, trade_date=trade_date, verdict=verdict, details={"error": verification["error"], "trigger": "manual_quality_verify"}))
@@ -950,15 +951,22 @@ def _tradable_baostock_daily_frame(frame: Any) -> pd.DataFrame:
 def _baostock_verdicts(
     *,
     symbol: str,
-    start_date: date,
-    end_date: date,
     verified_rows: list[tuple],
     error: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    trade_dates: list[date] | None = None,
 ) -> dict[date, str]:
+    if trade_dates is None:
+        if start_date is None or end_date is None:
+            raise ValueError("start_date and end_date are required when trade_dates is omitted")
+        dates = _date_range(start_date, end_date)
+    else:
+        dates = trade_dates
     if error:
-        return {value: "error" for value in _date_range(start_date, end_date)}
+        return {value: "error" for value in dates}
     found_dates = {row[1] for row in verified_rows if row[3] == symbol}
-    return {value: "available" if value in found_dates else "no_data" for value in _date_range(start_date, end_date)}
+    return {value: "available" if value in found_dates else "no_data" for value in dates}
 
 
 def _date_range(start_date: date, end_date: date) -> list[date]:

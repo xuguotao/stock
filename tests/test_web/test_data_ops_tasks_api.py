@@ -301,3 +301,30 @@ def test_mootdx_daily_gap_verify_creates_progress_job(tmp_path) -> None:
     assert job["progress"]["processed"] == 1
     assert job["progress"]["total"] == 1
     assert calls[0]["items"][0].symbol == "000524.SZ"
+
+
+def test_mootdx_daily_gap_verify_passes_explicit_missing_trade_dates_to_runner(tmp_path) -> None:
+    calls = []
+
+    def verify_runner(**kwargs):
+        calls.append(kwargs)
+        return {"available": 0, "no_data": 2, "error": 0}
+
+    app = create_app(
+        db_path=tmp_path / "jobs.json",
+        data_ops_repository=FakeDataOpsRepository(),
+        mootdx_daily_gap_verify_runner=verify_runner,
+        run_jobs_inline=True,
+        auto_start_minute5_monitor=False,
+        auto_start_quote_snapshot_monitor=False,
+        auto_start_data_ops_scheduler=False,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/data/mootdx/daily-quality/verify", json={"items": [{
+        "symbol": "000524.SZ", "start_date": "2026-07-10", "end_date": "2026-07-13",
+        "trade_dates": ["2026-07-10", "2026-07-13"], "evidence": "跨周末连续缺口",
+    }]})
+
+    assert response.status_code == 200
+    assert [value.isoformat() for value in calls[0]["items"][0].trade_dates] == ["2026-07-10", "2026-07-13"]

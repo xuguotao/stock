@@ -1530,7 +1530,7 @@ export const api = {
   createMootdxDailyGapRepair(items: Array<{ symbol: string; start_date: string; end_date: string; evidence: string }>) {
     return request<{ job_id: string }>('/api/data/mootdx/daily-quality/repair', { method: 'POST', body: JSON.stringify({ items }) })
   },
-  createMootdxDailyGapVerify(items: Array<{ symbol: string; start_date: string; end_date: string; evidence: string }>) {
+  createMootdxDailyGapVerify(items: Array<{ symbol: string; start_date: string; end_date: string; evidence: string; trade_dates?: string[] }>) {
     return request<{ job_id: string }>('/api/data/mootdx/daily-quality/verify', { method: 'POST', body: JSON.stringify({ items }) })
   },
   reviewMootdxDailyGapNoRepair(payload: { symbol: string; start_date: string; end_date: string; reason: string }) {

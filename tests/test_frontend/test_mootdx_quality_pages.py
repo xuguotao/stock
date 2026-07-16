@@ -69,7 +69,7 @@ console.log(JSON.stringify({
 
     assert result.stdout.strip() == (
         '{"repair":[{"symbol":"002005.SZ","start_date":"2026-07-13","end_date":"2026-07-13","evidence":"连续缺口"}],'
-        '"verify":[{"symbol":"002005.SZ","start_date":"2026-06-03","end_date":"2026-07-13","evidence":"连续缺口"}]}'
+        '"verify":[{"symbol":"002005.SZ","start_date":"2026-06-03","end_date":"2026-07-13","evidence":"连续缺口","trade_dates":["2026-06-03","2026-06-04","2026-07-13"]}]}'
     )
 
 
