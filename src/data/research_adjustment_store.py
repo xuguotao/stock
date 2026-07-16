@@ -192,9 +192,11 @@ class ResearchAdjustmentStore:
             raise ValueError("only completed runs may be published")
         if expected_event_count is None or expected_factor_count is None:
             raise ValueError("candidate counts are required before publication")
-        if expected_event_count < 0 or expected_factor_count <= 0:
+        if expected_raw_bar_count is None:
+            raise ValueError("raw-bar count is required before publication")
+        if expected_event_count < 0 or expected_factor_count <= 0 or expected_raw_bar_count <= 0:
             raise ValueError(
-                "candidate event count must be non-negative and candidate factor count must be greater than zero"
+                "candidate event count must be non-negative and factor/raw-bar counts must be greater than zero"
             )
         # ClickHouse has no compare-and-swap insert.  The deployment currently
         # has one scheduler host, so an advisory file lock serializes the final
@@ -218,14 +220,13 @@ class ResearchAdjustmentStore:
                     f"events={actual_event_count}/{expected_event_count}, "
                     f"factors={actual_factor_count}/{expected_factor_count}"
                 )
-            if expected_raw_bar_count is not None:
-                actual_raw_bar_count = self._candidate_count(
-                    "research_adjustment_raw_bars", run_id, formula_version
-                )
-                if actual_raw_bar_count != expected_raw_bar_count or actual_raw_bar_count != actual_factor_count:
-                    raise ValueError("candidate raw-bar and factor counts do not form a complete snapshot")
-                if self._raw_factor_coverage_mismatch_count(run_id, formula_version):
-                    raise ValueError("candidate raw bars and factors have mismatched symbol/date coverage")
+            actual_raw_bar_count = self._candidate_count(
+                "research_adjustment_raw_bars", run_id, formula_version
+            )
+            if actual_raw_bar_count != expected_raw_bar_count or actual_raw_bar_count != actual_factor_count:
+                raise ValueError("candidate raw-bar and factor counts do not form a complete snapshot")
+            if self._raw_factor_coverage_mismatch_count(run_id, formula_version):
+                raise ValueError("candidate raw bars and factors have mismatched symbol/date coverage")
             self.client.execute(
                 """
                 insert into research_adjustment_runs
