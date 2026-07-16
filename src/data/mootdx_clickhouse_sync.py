@@ -85,22 +85,33 @@ def sync_mootdx_offline_data(
         started_at=run_started_at,
     )
 
-    target_symbols = _resolve_symbols(data_source, symbols=symbols, limit=limit, client=clickhouse, include_beijing=include_beijing)
-    reconciliation_diagnostics = None
-    if daily_reconcile:
-        candidate_symbols = target_symbols
-        target_symbols = _symbols_missing_daily_kline(clickhouse, candidate_symbols, selected_trade_date)
-        reconciliation_diagnostics = {
-            "candidate_symbols": len(candidate_symbols),
-            "missing_symbols": len(target_symbols),
-            "missing_symbols_sample": target_symbols[:20],
-        }
-    _progress(progress, 15, "resolved_symbols", f"解析 mootdx 股票池 {len(target_symbols)} 只")
+    try:
+        target_symbols = _resolve_symbols(data_source, symbols=symbols, limit=limit, client=clickhouse, include_beijing=include_beijing)
+        reconciliation_diagnostics = None
+        if daily_reconcile:
+            candidate_symbols = target_symbols
+            target_symbols = _symbols_missing_daily_kline(clickhouse, candidate_symbols, selected_trade_date)
+            reconciliation_diagnostics = {
+                "candidate_symbols": len(candidate_symbols),
+                "missing_symbols": len(target_symbols),
+                "missing_symbols_sample": target_symbols[:20],
+            }
+        _progress(progress, 15, "resolved_symbols", f"解析 mootdx 股票池 {len(target_symbols)} 只")
+    except Exception as exc:
+        _mark_ingestion_run_failed(
+            clickhouse,
+            ingest_seq=ingest_seq,
+            run_id=run_id,
+            task_key=selected_tasks[0] if len(selected_tasks) == 1 else "mootdx_offline_sync",
+            started_at=run_started_at,
+            exc=exc,
+        )
+        raise
 
     task_count = max(1, len(selected_tasks))
     for index, task in enumerate(selected_tasks, start=1):
-        _progress(progress, 15 + int(index / task_count * 75), task, f"执行 mootdx 离线任务 {task}")
         try:
+            _progress(progress, 15 + int(index / task_count * 75), task, f"执行 mootdx 离线任务 {task}")
             rows_by_table = _run_task(
                 task=task,
                 source=data_source,
@@ -1368,6 +1379,29 @@ def _write_ingestion_run_row(
         "insert into mootdx_ingestion_runs "
         "(ingest_seq, run_id, task_key, started_at, finished_at, status, row_count, error, version) values",
         [(ingest_seq, run_id, task_key, started_at, finished_at, status, row_count, error, version)],
+    )
+
+
+def _mark_ingestion_run_failed(
+    client: Any,
+    *,
+    ingest_seq: int,
+    run_id: str,
+    task_key: str,
+    started_at: datetime,
+    exc: Exception,
+) -> None:
+    _write_ingestion_run_row(
+        client,
+        ingest_seq=ingest_seq,
+        run_id=run_id,
+        task_key=task_key,
+        started_at=started_at,
+        finished_at=_now(),
+        status="failed",
+        row_count=0,
+        error=f"{type(exc).__name__}: {str(exc)[:240]}",
+        version=2,
     )
 
 

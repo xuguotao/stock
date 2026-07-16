@@ -4,6 +4,7 @@ from datetime import date, datetime
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 
 class FakeClickHouse:
@@ -254,6 +255,33 @@ def test_failed_ingestion_run_is_not_a_latest_successful_boundary() -> None:
     assert failed["failed"]
     assert any(row[0] == failed["ingest_seq"] and row[5] == "failed" for row in ingestion_rows)
     assert _latest_successful_ingest_seq(client) == succeeded["ingest_seq"]
+
+
+def test_sync_marks_allocated_sequence_failed_when_symbol_resolution_raises() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    class BrokenCatalogSource(FakeSource):
+        def fetch_stock_list(self):
+            raise RuntimeError("catalog unavailable")
+
+    client = IngestionSequenceClickHouse()
+    with pytest.raises(RuntimeError, match="catalog unavailable"):
+        sync_mootdx_offline_data(
+            client=client,
+            source=BrokenCatalogSource(),
+            tasks=["xdxr"],
+            ensure_tables=False,
+        )
+
+    ingestion_rows = [
+        row
+        for sql, rows in client.inserts
+        if "insert into mootdx_ingestion_runs" in sql.lower()
+        for row in rows
+    ]
+    assert ingestion_rows[-1][5] == "failed"
+    assert ingestion_rows[-1][4] is not None
+    assert "catalog unavailable" in ingestion_rows[-1][7]
 
 
 def test_ensure_mootdx_tables_creates_daily_gap_verifications() -> None:
