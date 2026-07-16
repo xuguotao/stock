@@ -115,13 +115,17 @@ class ResearchAdjustmentStore:
                 formula_version String,
                 status String,
                 published_at DateTime64(3),
-                input_watermark Nullable(DateTime)
+                input_watermark Nullable(DateTime),
+                input_ingest_seq Nullable(UInt64)
             ) engine = ReplacingMergeTree(published_at)
             order by (formula_version, run_id)
             """
         )
         self.client.execute(
             "alter table research_adjustment_runs add column if not exists input_watermark Nullable(DateTime)"
+        )
+        self.client.execute(
+            "alter table research_adjustment_runs add column if not exists input_ingest_seq Nullable(UInt64)"
         )
 
     def write_candidate_events(
@@ -185,6 +189,7 @@ class ResearchAdjustmentStore:
         expected_factor_count: int | None = None,
         expected_raw_bar_count: int | None = None,
         input_watermark: datetime | None = None,
+        input_ingest_seq: int | None = None,
         base_run_id: str | None | object = _UNSET,
     ) -> None:
         """Publish a fully built run; incomplete candidates are never publishable."""
@@ -194,6 +199,8 @@ class ResearchAdjustmentStore:
             raise ValueError("candidate counts are required before publication")
         if expected_raw_bar_count is None:
             raise ValueError("raw-bar count is required before publication")
+        if input_ingest_seq is None:
+            raise ValueError("input ingest sequence is required before publication")
         if expected_event_count < 0 or expected_factor_count <= 0 or expected_raw_bar_count <= 0:
             raise ValueError(
                 "candidate event count must be non-negative and factor/raw-bar counts must be greater than zero"
@@ -230,10 +237,10 @@ class ResearchAdjustmentStore:
             self.client.execute(
                 """
                 insert into research_adjustment_runs
-                    (run_id, formula_version, status, published_at, input_watermark)
+                    (run_id, formula_version, status, published_at, input_watermark, input_ingest_seq)
                 values
                 """,
-                [(run_id, formula_version, "published", datetime.now(), input_watermark)],
+                [(run_id, formula_version, "published", datetime.now(), input_watermark, input_ingest_seq)],
             )
 
     @contextmanager
@@ -282,7 +289,7 @@ class ResearchAdjustmentStore:
         """Return the newest published run for a formula, never a candidate run."""
         rows = self.client.execute(
             """
-            select run_id, formula_version, published_at, input_watermark
+            select run_id, formula_version, published_at, input_watermark, input_ingest_seq
             from research_adjustment_runs final
             where formula_version = %(formula_version)s and status = 'published'
             order by published_at desc, run_id desc
@@ -292,10 +299,11 @@ class ResearchAdjustmentStore:
         )
         if not rows:
             return None
-        run_id, version, published_at, input_watermark = rows[0]
+        run_id, version, published_at, input_watermark, input_ingest_seq = rows[0]
         return {
             "run_id": str(run_id), "formula_version": str(version), "published_at": published_at,
             "input_watermark": input_watermark,
+            "input_ingest_seq": int(input_ingest_seq) if input_ingest_seq is not None else None,
         }
 
     @staticmethod

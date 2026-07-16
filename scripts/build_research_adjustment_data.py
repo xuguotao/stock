@@ -56,11 +56,11 @@ def build_research_adjustment_data(
     if candidate_builder is None and input_client is None:
         raise RuntimeError("Mootdx raw-data client is required to build adjustment candidates")
     current = active_store.current_run(formula_version)
-    input_watermark = None
+    input_ingest_seq = 0
     if candidate_builder is None:
-        if current is not None and not full and current.get("input_watermark") is None:
-            raise ValueError("incremental build requires a published input watermark; rerun with --full")
-        input_watermark = _capture_input_watermark(input_client)
+        if current is not None and not full and current.get("input_ingest_seq") is None:
+            raise ValueError("incremental build requires a published input ingest sequence; rerun with --full")
+        input_ingest_seq = _capture_input_ingest_seq(input_client)
     candidate = builder(
         symbols=list(symbols) if symbols else None,
         formula_version=formula_version,
@@ -68,7 +68,7 @@ def build_research_adjustment_data(
         client=input_client,
         store=active_store,
         current=current,
-        input_watermark=input_watermark,
+        input_ingest_seq=input_ingest_seq,
     )
     events = list(candidate.get("events", []))
     factors = list(candidate.get("factors", []))
@@ -87,7 +87,7 @@ def build_research_adjustment_data(
         expected_event_count=written_events,
         expected_factor_count=written_factors,
         expected_raw_bar_count=written_raw_bars,
-        input_watermark=input_watermark,
+        input_ingest_seq=input_ingest_seq,
         base_run_id=current["run_id"] if current is not None else None,
     )
     return {"run_id": run_id, "event_count": written_events, "factor_count": written_factors}
@@ -118,12 +118,12 @@ def _build_candidates_from_mootdx(
     client: Any,
     store: Any,
     current: Mapping[str, Any] | None = None,
-    input_watermark: datetime | None = None,
+    input_ingest_seq: int = 0,
 ) -> Mapping[str, Sequence[Mapping[str, Any]]]:
     """Build a complete factor snapshot from raw Mootdx inputs.
 
     Default incremental scope is the union of symbols with XDXR or daily-bar
-    ``ingested_at`` updates after the prior publication.  Their complete
+    ``ingest_seq`` updates after the prior publication.  Their complete
     histories are rebuilt, while unchanged symbols' prior factor rows are
     copied into the candidate.  Before a first publication, and with ``--full``,
     all available daily symbols are built.  An empty incremental scope is a
@@ -132,15 +132,15 @@ def _build_candidates_from_mootdx(
     current = current if current is not None else store.current_run(formula_version)
     if current is None and symbols and not full:
         raise ValueError("initial research adjustment publication requires --full to create a complete snapshot")
-    target_symbols = _default_symbols(client, current, True, input_watermark) if full else (
-        symbols or _default_symbols(client, current, False, input_watermark)
+    target_symbols = _default_symbols(client, current, True, input_ingest_seq) if full else (
+        symbols or _default_symbols(client, current, False, input_ingest_seq)
     )
     if not target_symbols:
         return {"events": [], "factors": []}
     # Event audit rows describe only this run's recomputed symbols.  Factor rows
     # are a complete snapshot because unchanged symbols are copied below.
-    daily_bars = _daily_bars(client, target_symbols, input_watermark)
-    built = _validate_and_factor(daily_bars, _xdxr_events(client, target_symbols, input_watermark))
+    daily_bars = _daily_bars(client, target_symbols, input_ingest_seq)
+    built = _validate_and_factor(daily_bars, _xdxr_events(client, target_symbols, input_ingest_seq))
     _assert_target_factor_coverage(target_symbols, daily_bars, built["factors"])
     if current is None or full:
         return {**built, "raw_bars": daily_bars.raw_rows}
@@ -163,56 +163,65 @@ def _build_candidates_from_mootdx(
     }
 
 
-def _capture_input_watermark(client: Any) -> datetime | None:
-    """Capture one upper bound for the union of daily and XDXR ingestions.
+def _capture_input_ingest_seq(client: Any) -> int:
+    """Return the highest contiguous terminal ingestion sequence.
 
-    Every incremental source query uses the persisted prior bound exclusively
-    below this value and this captured bound inclusively above it.  A row that
-    arrives after the capture is therefore deferred to the next run rather
-    than being half-included in this candidate snapshot.
+    A failed batch advances this boundary, but raw rows are always joined to
+    succeeded audit rows below so failed batches never become research input.
     """
     rows = client.execute(
-        """
-        select max(ingested_at)
-        from (
-            select ingested_at from mootdx_stock_kline final where frequency = 'daily'
-            union all
-            select ingested_at from mootdx_xdxr final
-        )
-        """
+        "select ingest_seq, status from mootdx_ingestion_runs final order by ingest_seq"
     )
-    return _as_datetime(rows[0][0]) if rows and rows[0][0] is not None else None
+    expected = 1
+    for row in rows:
+        try:
+            ingest_seq, status = int(row[0]), str(row[1])
+        except (IndexError, TypeError, ValueError):
+            return expected - 1
+        if ingest_seq != expected or status not in {"succeeded", "failed"}:
+            return expected - 1
+        expected += 1
+    return expected - 1
 
 
 def _default_symbols(
-    client: Any, current: Mapping[str, Any] | None, full: bool, input_watermark: datetime | None
+    client: Any, current: Mapping[str, Any] | None, full: bool, input_ingest_seq: int
 ) -> list[str]:
     if full or current is None:
-        if input_watermark is None:
+        if input_ingest_seq <= 0:
             return []
         rows = client.execute(
             """select distinct symbol from mootdx_stock_kline final
-            where frequency = 'daily' and ingested_at <= %(captured_input_watermark)s
+            inner join mootdx_ingestion_runs final as ingestion
+              on mootdx_stock_kline.ingest_seq = ingestion.ingest_seq
+            where frequency = 'daily' and ingestion.status = 'succeeded'
+              and mootdx_stock_kline.ingest_seq <= %(captured_input_ingest_seq)s
             order by symbol""",
-            {"captured_input_watermark": input_watermark},
+            {"captured_input_ingest_seq": input_ingest_seq},
         )
         return [str(row[0]) for row in rows]
-    if input_watermark is None:
+    if input_ingest_seq <= int(current["input_ingest_seq"]):
         return []
     params = {
-        "previous_input_watermark": current["input_watermark"],
-        "captured_input_watermark": input_watermark,
+        "previous_input_ingest_seq": int(current["input_ingest_seq"]),
+        "captured_input_ingest_seq": input_ingest_seq,
     }
     xdxr_rows = client.execute(
         """select distinct symbol from mootdx_xdxr final
-        where ingested_at >= %(previous_input_watermark)s
-          and ingested_at <= %(captured_input_watermark)s order by symbol""", params
+        inner join mootdx_ingestion_runs final as ingestion
+          on mootdx_xdxr.ingest_seq = ingestion.ingest_seq
+        where ingestion.status = 'succeeded'
+          and mootdx_xdxr.ingest_seq > %(previous_input_ingest_seq)s
+          and mootdx_xdxr.ingest_seq <= %(captured_input_ingest_seq)s order by symbol""", params
     )
     daily_rows = client.execute(
         """
         select distinct symbol from mootdx_stock_kline final
-        where frequency = 'daily' and ingested_at >= %(previous_input_watermark)s
-          and ingested_at <= %(captured_input_watermark)s
+        inner join mootdx_ingestion_runs final as ingestion
+          on mootdx_stock_kline.ingest_seq = ingestion.ingest_seq
+        where frequency = 'daily' and ingestion.status = 'succeeded'
+          and mootdx_stock_kline.ingest_seq > %(previous_input_ingest_seq)s
+          and mootdx_stock_kline.ingest_seq <= %(captured_input_ingest_seq)s
         order by symbol
         """,
         params,
@@ -280,17 +289,20 @@ class _DailyBars(dict[str, list[tuple[date, float]]]):
 
 
 def _daily_bars(
-    client: Any, symbols: Sequence[str], input_watermark: datetime | None
+    client: Any, symbols: Sequence[str], input_ingest_seq: int
 ) -> dict[str, list[tuple[date, float]]]:
     rows = client.execute(
         """
         select symbol, trade_date, open, high, low, close, volume, amount, ingested_at
         from mootdx_stock_kline
+        inner join mootdx_ingestion_runs final as ingestion
+          on mootdx_stock_kline.ingest_seq = ingestion.ingest_seq
         where frequency = 'daily' and symbol in %(symbols)s
-          and ingested_at <= %(captured_input_watermark)s
+          and ingestion.status = 'succeeded'
+          and mootdx_stock_kline.ingest_seq <= %(captured_input_ingest_seq)s
         order by symbol, trade_date
         """,
-        {"symbols": tuple(symbols), "captured_input_watermark": input_watermark},
+        {"symbols": tuple(symbols), "captured_input_ingest_seq": input_ingest_seq},
     )
     result: dict[str, list[tuple[date, float]]] = {}
     raw_rows: list[dict[str, Any]] = []
@@ -305,17 +317,20 @@ def _daily_bars(
     return _DailyBars(result, raw_rows=raw_rows)
 
 
-def _xdxr_events(client: Any, symbols: Sequence[str], input_watermark: datetime | None) -> list[dict[str, Any]]:
+def _xdxr_events(client: Any, symbols: Sequence[str], input_ingest_seq: int) -> list[dict[str, Any]]:
     rows = client.execute(
         """
         select symbol, event_date, category, name, fenhong, peigujia,
                songzhuangu, peigu, suogu
         from mootdx_xdxr final
+        inner join mootdx_ingestion_runs final as ingestion
+          on mootdx_xdxr.ingest_seq = ingestion.ingest_seq
         where symbol in %(symbols)s
-          and ingested_at <= %(captured_input_watermark)s
+          and ingestion.status = 'succeeded'
+          and mootdx_xdxr.ingest_seq <= %(captured_input_ingest_seq)s
         order by symbol, event_date, category, name
         """,
-        {"symbols": tuple(symbols), "captured_input_watermark": input_watermark},
+        {"symbols": tuple(symbols), "captured_input_ingest_seq": input_ingest_seq},
     )
     fields = ("symbol", "event_date", "category", "name", "fenhong", "peigujia", "songzhuangu", "peigu", "suogu")
     return [{field: value for field, value in zip(fields, row)} for row in rows]

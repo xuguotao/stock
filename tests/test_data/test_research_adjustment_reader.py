@@ -24,7 +24,7 @@ class _Client:
 
 def test_reader_returns_raw_and_both_adjusted_price_conventions() -> None:
     client = _Client(
-        current_run=("run-7", "v1", datetime(2026, 7, 16, 17, 25), datetime(2026, 7, 16, 17, 20)),
+        current_run=("run-7", "v1", datetime(2026, 7, 16, 17, 25), datetime(2026, 7, 16, 17, 20), 21),
         rows=[("000001.SZ", date(2026, 7, 15), 10.0, 12.0, 9.0, 11.0, 1000, 11000.0, 0.5, 2.0, "approved")],
     )
 
@@ -60,7 +60,7 @@ def test_reader_fails_closed_when_formula_has_no_published_run() -> None:
 
 
 def test_reader_returns_empty_when_current_run_has_no_matching_factors() -> None:
-    client = _Client(current_run=("run-7", "v1", datetime.now(), datetime(2026, 7, 16, 17, 20)), rows=[])
+    client = _Client(current_run=("run-7", "v1", datetime.now(), datetime(2026, 7, 16, 17, 20), 21), rows=[])
 
     bars = ResearchAdjustmentReader(client=client).get_bars(
         ["000001.SZ"], date(2026, 7, 1), date(2026, 7, 31), "v1"
