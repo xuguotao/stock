@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from contextlib import contextmanager
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+import fcntl
 
 from src.data.clickhouse_source import ClickHouseStockDataSource
 
@@ -19,6 +25,7 @@ VALIDATION_STATUSES = frozenset(
         "formula_invalid",
     }
 )
+_UNSET = object()
 
 
 class ResearchAdjustmentStore:
@@ -29,8 +36,9 @@ class ResearchAdjustmentStore:
     runs, so partial or failed work is never selected as research input.
     """
 
-    def __init__(self, client: Any | None = None) -> None:
+    def __init__(self, client: Any | None = None, lock_directory: Path | None = None) -> None:
         self._client = client
+        self._lock_directory = lock_directory or Path(tempfile.gettempdir())
 
     @property
     def client(self) -> Any:
@@ -86,10 +94,14 @@ class ResearchAdjustmentStore:
                 run_id String,
                 formula_version String,
                 status String,
-                published_at DateTime64(3)
+                published_at DateTime64(3),
+                input_watermark Nullable(DateTime)
             ) engine = ReplacingMergeTree(published_at)
             order by (formula_version, run_id)
             """
+        )
+        self.client.execute(
+            "alter table research_adjustment_runs add column if not exists input_watermark Nullable(DateTime)"
         )
 
     def write_candidate_events(
@@ -137,6 +149,8 @@ class ResearchAdjustmentStore:
         completed: bool,
         expected_event_count: int | None = None,
         expected_factor_count: int | None = None,
+        input_watermark: datetime | None = None,
+        base_run_id: str | None | object = _UNSET,
     ) -> None:
         """Publish a fully built run; incomplete candidates are never publishable."""
         if not completed:
@@ -147,27 +161,48 @@ class ResearchAdjustmentStore:
             raise ValueError(
                 "candidate event count must be non-negative and candidate factor count must be greater than zero"
             )
+        # ClickHouse has no compare-and-swap insert.  The deployment currently
+        # has one scheduler host, so an advisory file lock serializes the final
+        # current-run check and insert across its processes.  Multi-host
+        # scheduling must replace this with a shared coordinator before use.
+        with self._publication_lock(formula_version):
+            if base_run_id is not _UNSET:
+                current = self.current_run(formula_version)
+                if (current or {}).get("run_id") != base_run_id:
+                    raise ValueError("published run changed during candidate build; refusing stale publication")
 
-        actual_event_count = self._candidate_count(
-            "research_adjustment_events", run_id, formula_version
-        )
-        actual_factor_count = self._candidate_count(
-            "research_daily_adjustment_factors", run_id, formula_version
-        )
-        if (actual_event_count, actual_factor_count) != (expected_event_count, expected_factor_count):
-            raise ValueError(
-                "candidate counts do not match expected publication counts: "
-                f"events={actual_event_count}/{expected_event_count}, "
-                f"factors={actual_factor_count}/{expected_factor_count}"
+            actual_event_count = self._candidate_count(
+                "research_adjustment_events", run_id, formula_version
             )
-        self.client.execute(
-            """
-            insert into research_adjustment_runs
-                (run_id, formula_version, status, published_at)
-            values
-            """,
-            [(run_id, formula_version, "published", datetime.now())],
-        )
+            actual_factor_count = self._candidate_count(
+                "research_daily_adjustment_factors", run_id, formula_version
+            )
+            if (actual_event_count, actual_factor_count) != (expected_event_count, expected_factor_count):
+                raise ValueError(
+                    "candidate counts do not match expected publication counts: "
+                    f"events={actual_event_count}/{expected_event_count}, "
+                    f"factors={actual_factor_count}/{expected_factor_count}"
+                )
+            self.client.execute(
+                """
+                insert into research_adjustment_runs
+                    (run_id, formula_version, status, published_at, input_watermark)
+                values
+                """,
+                [(run_id, formula_version, "published", datetime.now(), input_watermark)],
+            )
+
+    @contextmanager
+    def _publication_lock(self, formula_version: str):
+        safe_version = "".join(character if character.isalnum() else "_" for character in formula_version)
+        lock_path = self._lock_directory / f"research-adjustment-publish-{safe_version}.lock"
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     def _candidate_count(self, table: str, run_id: str, formula_version: str) -> int:
         rows = self.client.execute(
@@ -184,7 +219,7 @@ class ResearchAdjustmentStore:
         """Return the newest published run for a formula, never a candidate run."""
         rows = self.client.execute(
             """
-            select run_id, formula_version, published_at
+            select run_id, formula_version, published_at, input_watermark
             from research_adjustment_runs final
             where formula_version = %(formula_version)s and status = 'published'
             order by published_at desc, run_id desc
@@ -194,8 +229,11 @@ class ResearchAdjustmentStore:
         )
         if not rows:
             return None
-        run_id, version, published_at = rows[0]
-        return {"run_id": str(run_id), "formula_version": str(version), "published_at": published_at}
+        run_id, version, published_at, input_watermark = rows[0]
+        return {
+            "run_id": str(run_id), "formula_version": str(version), "published_at": published_at,
+            "input_watermark": input_watermark,
+        }
 
     @staticmethod
     def _event_row(run_id: str, formula_version: str, row: Mapping[str, Any]) -> tuple[Any, ...]:

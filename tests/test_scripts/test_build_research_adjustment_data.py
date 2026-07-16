@@ -31,6 +31,8 @@ class _Store:
 class _MootdxClient:
     def execute(self, sql: str, _params: object | None = None):
         normalized = " ".join(sql.lower().split())
+        if "max(ingested_at)" in normalized:
+            return [(datetime(2026, 7, 16, 17, 40),)]
         if "select distinct symbol from mootdx_stock_kline final" in normalized:
             return [("000001.SZ",)]
         if "from mootdx_stock_kline final" in normalized:
@@ -45,14 +47,22 @@ class _MootdxClient:
 
 class _IncrementalStore(_Store):
     def current_run(self, _formula_version: str):
-        return {"run_id": "prior-run", "formula_version": "v1", "published_at": datetime(2026, 7, 16, 17, 25)}
+        return {
+            "run_id": "prior-run", "formula_version": "v1",
+            "published_at": datetime(2026, 7, 16, 17, 25),
+            "input_watermark": datetime(2026, 7, 16, 17, 20),
+        }
 
 
 class _IncrementalMootdxClient(_MootdxClient):
     def execute(self, sql: str, _params: object | None = None):
         normalized = " ".join(sql.lower().split())
+        if "max(ingested_at)" in normalized:
+            return [(datetime(2026, 7, 16, 17, 40),)]
         if "from research_daily_adjustment_factors final" in normalized:
             return [("600519.SH", date(2026, 7, 15), 1.0, 1.0, 0, 0, "approved")]
+        if "from research_adjustment_events final" in normalized:
+            return []
         if "select distinct symbol" in normalized and "ingested_at >" in normalized:
             # One XDXR change and one daily-bar-only change must both be rebuilt.
             if "mootdx_xdxr" in normalized:
@@ -96,6 +106,7 @@ def test_build_writes_candidates_before_publishing_complete_result() -> None:
     assert store.calls[-1][1] == {
         "run_id": "run-1", "formula_version": "v1", "completed": True,
         "expected_event_count": 0, "expected_factor_count": 1,
+        "input_watermark": None, "base_run_id": None,
     }
 
 
@@ -125,7 +136,7 @@ def test_default_incremental_no_change_is_a_successful_unpublished_no_op() -> No
             return []
 
     result = build_research_adjustment_data.build_research_adjustment_data(
-        symbols=["000001.SZ"], store=store, client=_EmptyClient()
+        store=store, client=_EmptyClient()
     )
 
     assert result == {"run_id": None, "event_count": 0, "factor_count": 0, "published": False}
@@ -154,6 +165,94 @@ def test_incremental_publish_copies_prior_unchanged_factors_and_tracks_daily_cha
     factors = store.calls[2][3]
     assert {row["symbol"] for row in factors} == {"000001.SZ", "000002.SZ", "600519.SH"}
     assert next(row for row in factors if row["symbol"] == "600519.SH")["quality_status"] == "approved"
+
+
+def test_incremental_build_uses_persisted_input_watermark_and_captured_upper_bound() -> None:
+    store = _IncrementalStore()
+
+    class _WatermarkClient(_IncrementalMootdxClient):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object | None]] = []
+
+        def execute(self, sql: str, params: object | None = None):
+            self.calls.append((sql, params))
+            normalized = " ".join(sql.lower().split())
+            if "max(ingested_at)" in normalized:
+                return [(datetime(2026, 7, 16, 17, 40),)]
+            return super().execute(sql, params)
+
+    client = _WatermarkClient()
+    build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1", store=store, client=client, run_id_factory=lambda: "run-watermark"
+    )
+
+    changed_queries = [call for call in client.calls if "ingested_at >" in call[0].lower()]
+    assert len(changed_queries) == 2
+    assert all(call[1] == {
+        "previous_input_watermark": datetime(2026, 7, 16, 17, 20),
+        "captured_input_watermark": datetime(2026, 7, 16, 17, 40),
+    } for call in changed_queries)
+    assert store.calls[-1][1]["input_watermark"] == datetime(2026, 7, 16, 17, 40)
+    assert store.calls[-1][1]["base_run_id"] == "prior-run"
+
+
+def test_incremental_build_with_legacy_run_without_input_watermark_requires_full_rebuild() -> None:
+    class _LegacyStore(_IncrementalStore):
+        def current_run(self, _formula_version: str):
+            return {"run_id": "legacy-run", "formula_version": "v1", "published_at": datetime(2026, 7, 16, 17, 25), "input_watermark": None}
+
+    try:
+        build_research_adjustment_data.build_research_adjustment_data(
+            formula_version="v1", store=_LegacyStore(), client=_IncrementalMootdxClient()
+        )
+    except ValueError as exc:
+        assert "--full" in str(exc)
+    else:
+        raise AssertionError("legacy published runs cannot establish a safe incremental input boundary")
+
+
+def test_incremental_build_copies_prior_events_with_unchanged_factor_snapshot() -> None:
+    store = _IncrementalStore()
+
+    class _EventCopyClient(_IncrementalMootdxClient):
+        def execute(self, sql: str, params: object | None = None):
+            normalized = " ".join(sql.lower().split())
+            if "max(ingested_at)" in normalized:
+                return [(datetime(2026, 7, 16, 17, 40),)]
+            if "from research_adjustment_events final" in normalized:
+                return [("600519.SH", date(2026, 6, 1), 1, "cash", "approved", 0.98, 9.8, 10.0, 9.8, 0.0, "{}")]
+            return super().execute(sql, params)
+
+    build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1", store=store, client=_EventCopyClient(), run_id_factory=lambda: "run-event-copy"
+    )
+
+    copied_events = store.calls[1][3]
+    assert {row["symbol"] for row in copied_events} == {"000001.SZ", "600519.SH"}
+    assert next(row for row in copied_events if row["symbol"] == "600519.SH")["status"] == "approved"
+
+
+def test_incremental_build_rejects_a_target_without_daily_factor_coverage() -> None:
+    store = _IncrementalStore()
+
+    class _MissingTargetClient(_IncrementalMootdxClient):
+        def execute(self, sql: str, params: object | None = None):
+            normalized = " ".join(sql.lower().split())
+            if "max(ingested_at)" in normalized:
+                return [(datetime(2026, 7, 16, 17, 40),)]
+            if "select symbol, trade_date, close from mootdx_stock_kline final" in normalized:
+                return [("000001.SZ", date(2026, 7, 15), 10.0)]
+            return super().execute(sql, params)
+
+    try:
+        build_research_adjustment_data.build_research_adjustment_data(
+            formula_version="v1", store=store, client=_MissingTargetClient(), run_id_factory=lambda: "run-missing"
+        )
+    except ValueError as exc:
+        assert "factor coverage" in str(exc)
+    else:
+        raise AssertionError("all selected targets must receive a complete daily factor history")
+    assert store.calls == []
 
 
 def test_main_reports_expected_operational_value_error_without_traceback(monkeypatch, capsys) -> None:

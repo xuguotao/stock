@@ -11,7 +11,7 @@ import json
 import sys
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -55,12 +55,20 @@ def build_research_adjustment_data(
     input_client = client if client is not None else getattr(active_store, "client", None)
     if candidate_builder is None and input_client is None:
         raise RuntimeError("Mootdx raw-data client is required to build adjustment candidates")
+    current = active_store.current_run(formula_version)
+    input_watermark = None
+    if candidate_builder is None:
+        if current is not None and not full and current.get("input_watermark") is None:
+            raise ValueError("incremental build requires a published input watermark; rerun with --full")
+        input_watermark = _capture_input_watermark(input_client)
     candidate = builder(
         symbols=list(symbols) if symbols else None,
         formula_version=formula_version,
         full=full,
         client=input_client,
         store=active_store,
+        current=current,
+        input_watermark=input_watermark,
     )
     events = list(candidate.get("events", []))
     factors = list(candidate.get("factors", []))
@@ -76,6 +84,8 @@ def build_research_adjustment_data(
         completed=True,
         expected_event_count=written_events,
         expected_factor_count=written_factors,
+        input_watermark=input_watermark,
+        base_run_id=current["run_id"] if current is not None else None,
     )
     return {"run_id": run_id, "event_count": written_events, "factor_count": written_factors}
 
@@ -104,6 +114,8 @@ def _build_candidates_from_mootdx(
     full: bool,
     client: Any,
     store: Any,
+    current: Mapping[str, Any] | None = None,
+    input_watermark: datetime | None = None,
 ) -> Mapping[str, Sequence[Mapping[str, Any]]]:
     """Build a complete factor snapshot from raw Mootdx inputs.
 
@@ -114,15 +126,19 @@ def _build_candidates_from_mootdx(
     all available daily symbols are built.  An empty incremental scope is a
     successful no-op and is deliberately not published.
     """
-    current = store.current_run(formula_version)
+    current = current if current is not None else store.current_run(formula_version)
     if current is None and symbols and not full:
         raise ValueError("initial research adjustment publication requires --full to create a complete snapshot")
-    target_symbols = _default_symbols(client, current, True) if full else (symbols or _default_symbols(client, current, False))
+    target_symbols = _default_symbols(client, current, True, input_watermark) if full else (
+        symbols or _default_symbols(client, current, False, input_watermark)
+    )
     if not target_symbols:
         return {"events": [], "factors": []}
     # Event audit rows describe only this run's recomputed symbols.  Factor rows
     # are a complete snapshot because unchanged symbols are copied below.
-    built = _validate_and_factor(_daily_bars(client, target_symbols), _xdxr_events(client, target_symbols))
+    daily_bars = _daily_bars(client, target_symbols)
+    built = _validate_and_factor(daily_bars, _xdxr_events(client, target_symbols))
+    _assert_target_factor_coverage(target_symbols, daily_bars, built["factors"])
     if current is None or full:
         return built
     targets = set(target_symbols)
@@ -130,23 +146,58 @@ def _build_candidates_from_mootdx(
         row for row in _prior_factor_rows(client, current["run_id"], formula_version)
         if str(row["symbol"]) not in targets
     ]
-    return {"events": built["events"], "factors": [*retained, *built["factors"]]}
+    retained_events = [
+        row for row in _prior_event_rows(client, current["run_id"], formula_version)
+        if str(row["symbol"]) not in targets
+    ]
+    return {"events": [*retained_events, *built["events"]], "factors": [*retained, *built["factors"]]}
 
 
-def _default_symbols(client: Any, current: Mapping[str, Any] | None, full: bool) -> list[str]:
+def _capture_input_watermark(client: Any) -> datetime | None:
+    """Capture one upper bound for the union of daily and XDXR ingestions.
+
+    Every incremental source query uses the persisted prior bound exclusively
+    below this value and this captured bound inclusively above it.  A row that
+    arrives after the capture is therefore deferred to the next run rather
+    than being half-included in this candidate snapshot.
+    """
+    rows = client.execute(
+        """
+        select max(ingested_at)
+        from (
+            select ingested_at from mootdx_stock_kline final where frequency = 'daily'
+            union all
+            select ingested_at from mootdx_xdxr final
+        )
+        """
+    )
+    return _as_datetime(rows[0][0]) if rows and rows[0][0] is not None else None
+
+
+def _default_symbols(
+    client: Any, current: Mapping[str, Any] | None, full: bool, input_watermark: datetime | None
+) -> list[str]:
     if full or current is None:
         rows = client.execute(
             "select distinct symbol from mootdx_stock_kline final where frequency = 'daily' order by symbol"
         )
         return [str(row[0]) for row in rows]
-    params = {"published_at": current["published_at"]}
+    if input_watermark is None:
+        return []
+    params = {
+        "previous_input_watermark": current["input_watermark"],
+        "captured_input_watermark": input_watermark,
+    }
     xdxr_rows = client.execute(
-        "select distinct symbol from mootdx_xdxr final where ingested_at > %(published_at)s order by symbol", params
+        """select distinct symbol from mootdx_xdxr final
+        where ingested_at > %(previous_input_watermark)s
+          and ingested_at <= %(captured_input_watermark)s order by symbol""", params
     )
     daily_rows = client.execute(
         """
         select distinct symbol from mootdx_stock_kline final
-        where frequency = 'daily' and ingested_at > %(published_at)s
+        where frequency = 'daily' and ingested_at > %(previous_input_watermark)s
+          and ingested_at <= %(captured_input_watermark)s
         order by symbol
         """,
         params,
@@ -169,6 +220,31 @@ def _prior_factor_rows(client: Any, run_id: str, formula_version: str) -> list[d
         "eligible_event_count", "excluded_event_count", "quality_status",
     )
     return [{field: value for field, value in zip(fields, row)} for row in rows]
+
+
+def _prior_event_rows(client: Any, run_id: str, formula_version: str) -> list[dict[str, Any]]:
+    rows = client.execute(
+        """
+        select symbol, event_date, category, event_name, validation_status, ratio,
+               theoretical_price, pre_close, ex_close, validation_error, event_payload
+        from research_adjustment_events final
+        where run_id = %(run_id)s and formula_version = %(formula_version)s
+        """,
+        {"run_id": run_id, "formula_version": formula_version},
+    )
+    fields = (
+        "symbol", "event_date", "category", "event_name", "validation_status", "ratio",
+        "theoretical_price", "pre_close", "ex_close", "validation_error", "event_payload",
+    )
+    return [
+        {
+            **{field: value for field, value in zip(fields, row)},
+            "status": row[4],
+            "name": row[3],
+            "error": row[9],
+        }
+        for row in rows
+    ]
 
 
 def _daily_bars(client: Any, symbols: Sequence[str]) -> dict[str, list[tuple[date, float]]]:
@@ -255,8 +331,27 @@ def _validate_and_factor(
     return {"events": validated_rows, "factors": factor_rows}
 
 
+def _assert_target_factor_coverage(
+    target_symbols: Sequence[str], bars_by_symbol: Mapping[str, Sequence[tuple[date, float]]], factors: Sequence[Mapping[str, Any]]
+) -> None:
+    factor_dates: dict[str, set[date]] = {}
+    for factor in factors:
+        factor_dates.setdefault(str(factor["symbol"]), set()).add(_as_date(factor["trade_date"]))
+    incomplete = []
+    for symbol in target_symbols:
+        expected_dates = {trade_date for trade_date, _ in bars_by_symbol.get(symbol, [])}
+        if not expected_dates or factor_dates.get(symbol, set()) != expected_dates:
+            incomplete.append(symbol)
+    if incomplete:
+        raise ValueError(f"factor coverage is incomplete for selected targets: {','.join(sorted(incomplete))}")
+
+
 def _as_date(value: object) -> date:
     return value if isinstance(value, date) else date.fromisoformat(str(value))
+
+
+def _as_datetime(value: object) -> datetime:
+    return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
 
 
 if __name__ == "__main__":

@@ -32,23 +32,66 @@ def test_ensure_tables_creates_research_derivative_tables() -> None:
     assert ddl.count("replacingmergetree") == 3
     assert "ifnull(category, -1)" in ddl
     assert "datetime64(3)" in ddl
+    assert "alter table research_adjustment_runs add column if not exists input_watermark" in ddl
 
 
 def test_completed_published_run_is_returned_as_current() -> None:
     published_at = datetime(2026, 7, 16, 17, 25)
-    client = _Client(responses=[[(1,)], [(1,)], [("run-1", "v1", published_at)]])
+    watermark = datetime(2026, 7, 16, 17, 24)
+    client = _Client(responses=[[(1,)], [(1,)], [("run-1", "v1", published_at, watermark)]])
     store = ResearchAdjustmentStore(client)
 
-    store.publish_run("run-1", "v1", completed=True, expected_event_count=1, expected_factor_count=1)
+    store.publish_run(
+        "run-1", "v1", completed=True, expected_event_count=1, expected_factor_count=1,
+        input_watermark=watermark,
+    )
     current = store.current_run("v1")
 
-    assert current == {"run_id": "run-1", "formula_version": "v1", "published_at": published_at}
+    assert current == {
+        "run_id": "run-1", "formula_version": "v1", "published_at": published_at,
+        "input_watermark": watermark,
+    }
     publish_sql, publish_params = client.calls[2]
     assert "insert into research_adjustment_runs" in publish_sql.lower()
     assert publish_params[0][:3] == ("run-1", "v1", "published")
     assert isinstance(publish_params[0][3], datetime)
     assert "status = 'published'" in client.calls[3][0].lower()
     assert "order by published_at desc, run_id desc" in client.calls[3][0].lower()
+
+
+def test_stale_base_run_cannot_publish_over_newer_snapshot() -> None:
+    client = _Client(responses=[[("newer-run", "v1", datetime(2026, 7, 16, 18), datetime(2026, 7, 16, 17, 30))]])
+    store = ResearchAdjustmentStore(client)
+
+    with pytest.raises(ValueError, match="published run changed"):
+        store.publish_run(
+            "stale-run", "v1", completed=True, expected_event_count=0, expected_factor_count=1,
+            base_run_id="prior-run",
+        )
+
+    assert all("insert into research_adjustment_runs" not in sql.lower() for sql, _ in client.calls)
+
+
+def test_second_candidate_based_on_same_snapshot_is_rejected_after_first_publish(tmp_path) -> None:
+    class _PublishingClient:
+        def __init__(self) -> None:
+            self.current_run_id = "prior-run"
+
+        def execute(self, sql: str, params: object | None = None):
+            normalized = " ".join(sql.lower().split())
+            if normalized.startswith("select run_id, formula_version"):
+                return [(self.current_run_id, "v1", datetime(2026, 7, 16, 17, 25), datetime(2026, 7, 16, 17, 20))]
+            if "select count()" in normalized:
+                return [(0,)] if "events" in normalized else [(1,)]
+            if "insert into research_adjustment_runs" in normalized:
+                self.current_run_id = params[0][0]
+            return []
+
+    store = ResearchAdjustmentStore(_PublishingClient(), lock_directory=tmp_path)
+    store.publish_run("run-a", "v1", True, 0, 1, base_run_id="prior-run")
+
+    with pytest.raises(ValueError, match="published run changed"):
+        store.publish_run("run-b", "v1", True, 0, 1, base_run_id="prior-run")
 
 
 def test_completed_run_with_no_events_and_daily_factors_can_be_published() -> None:
