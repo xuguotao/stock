@@ -35,6 +35,15 @@ class IngestionSequenceClickHouse(FakeClickHouse):
             if "status = 'succeeded'" in normalized:
                 rows = [row for row in rows if row[5] == "succeeded"]
             return [(max((int(row[0]) for row in rows), default=0),)]
+        if "select ingest_seq, status" in normalized and "mootdx_ingestion_runs" in normalized:
+            latest_by_seq = {}
+            for statement, values in self.inserts:
+                if "insert into mootdx_ingestion_runs" not in statement.lower():
+                    continue
+                for row in values:
+                    if row[0] not in latest_by_seq or row[8] > latest_by_seq[row[0]][8]:
+                        latest_by_seq[row[0]] = row
+            return [(seq, row[5]) for seq, row in sorted(latest_by_seq.items())]
         return []
 
 
@@ -235,8 +244,8 @@ def test_sync_ingest_sequences_are_monotonic_across_runs() -> None:
     assert second["ingest_seq"] == first["ingest_seq"] + 1
 
 
-def test_failed_ingestion_run_is_not_a_latest_successful_boundary() -> None:
-    from src.data.mootdx_clickhouse_sync import _latest_successful_ingest_seq, sync_mootdx_offline_data
+def test_failed_ingestion_run_advances_the_settled_boundary_without_becoming_input() -> None:
+    from src.data.mootdx_clickhouse_sync import _latest_settled_ingest_seq, sync_mootdx_offline_data
 
     client = IngestionSequenceClickHouse()
     succeeded = sync_mootdx_offline_data(
@@ -254,7 +263,31 @@ def test_failed_ingestion_run_is_not_a_latest_successful_boundary() -> None:
     ]
     assert failed["failed"]
     assert any(row[0] == failed["ingest_seq"] and row[5] == "failed" for row in ingestion_rows)
-    assert _latest_successful_ingest_seq(client) == succeeded["ingest_seq"]
+    assert _latest_settled_ingest_seq(client) == failed["ingest_seq"]
+
+
+@pytest.mark.parametrize("first_status", ["succeeded", "failed"])
+def test_settled_boundary_waits_for_lower_sequence_before_advancing(first_status: str) -> None:
+    from src.data.mootdx_clickhouse_sync import _latest_settled_ingest_seq, _write_ingestion_run_row
+
+    client = IngestionSequenceClickHouse()
+    started_at = datetime(2026, 7, 16, 12, 0, 0)
+    _write_ingestion_run_row(
+        client, ingest_seq=1, run_id="one", task_key="sync", started_at=started_at,
+        finished_at=None, status="running", row_count=0, error="", version=1,
+    )
+    _write_ingestion_run_row(
+        client, ingest_seq=2, run_id="two", task_key="sync", started_at=started_at,
+        finished_at=started_at, status="succeeded", row_count=1, error="", version=2,
+    )
+
+    assert _latest_settled_ingest_seq(client) == 0
+
+    _write_ingestion_run_row(
+        client, ingest_seq=1, run_id="one", task_key="sync", started_at=started_at,
+        finished_at=started_at, status=first_status, row_count=0, error="" if first_status == "succeeded" else "failed", version=2,
+    )
+    assert _latest_settled_ingest_seq(client) == 2
 
 
 def test_sync_marks_allocated_sequence_failed_when_symbol_resolution_raises() -> None:

@@ -37,6 +37,7 @@ def ensure_mootdx_tables(client: Any) -> None:
         client.execute(sql)
     _ensure_mootdx_xdxr_nullable_columns(client)
     _ensure_mootdx_ingest_sequence_columns(client)
+    _ensure_mootdx_ingestion_runs_retention(client)
     _ensure_mootdx_xdxr_symbol_runs_columns(client)
     _ensure_mootdx_catalog_lifecycle_columns(client)
     client.execute(MOOTDX_DAILY_XDXR_EVENTS_VIEW_SQL)
@@ -1311,6 +1312,12 @@ def _ensure_mootdx_ingest_sequence_columns(client: Any) -> None:
         client.execute(f"alter table {table} add column if not exists ingest_seq UInt64 default 0")
 
 
+def _ensure_mootdx_ingestion_runs_retention(client: Any) -> None:
+    # The settled boundary is defined from sequence 1, so this compact audit
+    # history must not age out while the raw tables remain consumable.
+    client.execute("alter table mootdx_ingestion_runs remove ttl")
+
+
 def _with_ingest_seq(rows: list[tuple], ingest_seq: int) -> list[tuple]:
     return [(*row, ingest_seq) for row in rows]
 
@@ -1352,14 +1359,28 @@ def _allocate_ingest_seq(client: Any, *, run_id: str, task_key: str, started_at:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def _latest_successful_ingest_seq(client: Any) -> int:
+def _latest_settled_ingest_seq(client: Any) -> int:
+    """Return the contiguous terminal-run watermark, never skipping a running run.
+
+    Failed runs are terminal and therefore advance the watermark, but consumers
+    must still join ``mootdx_ingestion_runs`` on ``status = 'succeeded'`` when
+    selecting input rows. This makes the watermark a safe progress boundary,
+    not an assertion that every sequence below it supplied usable input.
+    """
     rows = client.execute(
-        "select max(ingest_seq) from mootdx_ingestion_runs final where status = 'succeeded'"
+        "select ingest_seq, status from mootdx_ingestion_runs final order by ingest_seq"
     )
-    try:
-        return int(_first_clickhouse_value(rows) or 0)
-    except (TypeError, ValueError):
-        return 0
+    expected = 1
+    for row in rows:
+        try:
+            ingest_seq = int(row[0])
+            status = str(row[1])
+        except (IndexError, TypeError, ValueError):
+            return expected - 1
+        if ingest_seq != expected or status not in {"succeeded", "failed"}:
+            return expected - 1
+        expected += 1
+    return expected - 1
 
 
 def _write_ingestion_run_row(
@@ -1584,7 +1605,6 @@ MOOTDX_TABLE_SQL = [
     )
     engine = ReplacingMergeTree(version)
     order by ingest_seq
-    ttl started_at + interval 365 day delete
     """,
     """
     create table if not exists mootdx_sync_runs (
