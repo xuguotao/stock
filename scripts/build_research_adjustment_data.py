@@ -87,8 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = build_research_adjustment_data(
             symbols=args.symbols, formula_version=args.formula_version, full=args.full
         )
-    except RuntimeError as exc:
-        print(f"research adjustment build blocked: {exc}", file=sys.stderr)
+    except (RuntimeError, ValueError, OSError, ConnectionError) as exc:
+        print(f"research adjustment build failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, default=str))
     return 0
@@ -113,29 +113,61 @@ def _build_candidates_from_mootdx(
     available daily symbols are selected.  An empty scope is a successful no-op
     and is deliberately not published.
     """
-    target_symbols = symbols or _default_symbols(client, store, formula_version, full)
+    current = store.current_run(formula_version)
+    if current is None and symbols and not full:
+        raise ValueError("initial research adjustment publication requires --full to create a complete snapshot")
+    target_symbols = _default_symbols(client, current, True) if full else (symbols or _default_symbols(client, current, False))
     if not target_symbols:
         return {"events": [], "factors": []}
-    return _validate_and_factor(_daily_bars(client, target_symbols), _xdxr_events(client, target_symbols))
+    # Event audit rows describe only this run's recomputed symbols.  Factor rows
+    # are a complete snapshot because unchanged symbols are copied below.
+    built = _validate_and_factor(_daily_bars(client, target_symbols), _xdxr_events(client, target_symbols))
+    if current is None or full:
+        return built
+    targets = set(target_symbols)
+    retained = [
+        row for row in _prior_factor_rows(client, current["run_id"], formula_version)
+        if str(row["symbol"]) not in targets
+    ]
+    return {"events": built["events"], "factors": [*retained, *built["factors"]]}
 
 
-def _default_symbols(client: Any, store: Any, formula_version: str, full: bool) -> list[str]:
-    current = store.current_run(formula_version)
+def _default_symbols(client: Any, current: Mapping[str, Any] | None, full: bool) -> list[str]:
     if full or current is None:
         rows = client.execute(
             "select distinct symbol from mootdx_stock_kline final where frequency = 'daily' order by symbol"
         )
-    else:
-        rows = client.execute(
-            """
-            select distinct symbol
-            from mootdx_xdxr final
-            where ingested_at > %(published_at)s
-            order by symbol
-            """,
-            {"published_at": current["published_at"]},
-        )
-    return [str(row[0]) for row in rows]
+        return [str(row[0]) for row in rows]
+    params = {"published_at": current["published_at"]}
+    xdxr_rows = client.execute(
+        "select distinct symbol from mootdx_xdxr final where ingested_at > %(published_at)s order by symbol", params
+    )
+    daily_rows = client.execute(
+        """
+        select distinct symbol from mootdx_stock_kline final
+        where frequency = 'daily' and ingested_at > %(published_at)s
+        order by symbol
+        """,
+        params,
+    )
+    return sorted({str(row[0]) for row in [*xdxr_rows, *daily_rows]})
+
+
+def _prior_factor_rows(client: Any, run_id: str, formula_version: str) -> list[dict[str, Any]]:
+    rows = client.execute(
+        """
+        select symbol, trade_date, forward_factor, backward_factor,
+               eligible_event_count, excluded_event_count, quality_status
+        from research_daily_adjustment_factors final
+        where run_id = %(run_id)s and formula_version = %(formula_version)s
+        """,
+        {"run_id": run_id, "formula_version": formula_version},
+    )
+    fields = (
+        "symbol", "trade_date", "forward_factor", "backward_factor",
+        "eligible_event_count", "excluded_event_count", "quality_status",
+    )
+    return [{field: value for field, value in zip(fields, row)} for row in rows]
 
 
 def _daily_bars(client: Any, symbols: Sequence[str]) -> dict[str, list[tuple[date, float]]]:

@@ -1,7 +1,7 @@
 """Tests for explicit, fail-closed research adjustment builds."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from scripts import build_research_adjustment_data
 
@@ -37,6 +37,32 @@ class _MootdxClient:
             return [
                 ("000001.SZ", date(2026, 7, 15), 10.0),
                 ("000001.SZ", date(2026, 7, 16), 9.0),
+            ]
+        if "from mootdx_xdxr final" in normalized:
+            return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
+        raise AssertionError(sql)
+
+
+class _IncrementalStore(_Store):
+    def current_run(self, _formula_version: str):
+        return {"run_id": "prior-run", "formula_version": "v1", "published_at": datetime(2026, 7, 16, 17, 25)}
+
+
+class _IncrementalMootdxClient(_MootdxClient):
+    def execute(self, sql: str, _params: object | None = None):
+        normalized = " ".join(sql.lower().split())
+        if "from research_daily_adjustment_factors final" in normalized:
+            return [("600519.SH", date(2026, 7, 15), 1.0, 1.0, 0, 0, "approved")]
+        if "select distinct symbol" in normalized and "ingested_at >" in normalized:
+            # One XDXR change and one daily-bar-only change must both be rebuilt.
+            if "mootdx_xdxr" in normalized:
+                return [("000001.SZ",)]
+            return [("000002.SZ",)]
+        if "from mootdx_stock_kline final" in normalized:
+            return [
+                ("000001.SZ", date(2026, 7, 15), 10.0),
+                ("000001.SZ", date(2026, 7, 16), 9.0),
+                ("000002.SZ", date(2026, 7, 15), 20.0),
             ]
         if "from mootdx_xdxr final" in normalized:
             return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
@@ -92,7 +118,7 @@ def test_default_build_constructs_candidates_from_mootdx_raw_inputs() -> None:
 
 
 def test_default_incremental_no_change_is_a_successful_unpublished_no_op() -> None:
-    store = _Store()
+    store = _IncrementalStore()
 
     class _EmptyClient:
         def execute(self, _sql: str, _params: object | None = None):
@@ -104,6 +130,40 @@ def test_default_incremental_no_change_is_a_successful_unpublished_no_op() -> No
 
     assert result == {"run_id": None, "event_count": 0, "factor_count": 0, "published": False}
     assert store.calls == []
+
+
+def test_initial_explicit_symbol_build_refuses_to_publish_a_partial_snapshot() -> None:
+    try:
+        build_research_adjustment_data.build_research_adjustment_data(
+            symbols=["000001.SZ"], store=_Store(), client=_MootdxClient()
+        )
+    except ValueError as exc:
+        assert "--full" in str(exc)
+    else:
+        raise AssertionError("initial partial snapshot must not be published")
+
+
+def test_incremental_publish_copies_prior_unchanged_factors_and_tracks_daily_changes() -> None:
+    store = _IncrementalStore()
+
+    result = build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1", store=store, client=_IncrementalMootdxClient(), run_id_factory=lambda: "run-next"
+    )
+
+    assert result == {"run_id": "run-next", "event_count": 1, "factor_count": 4}
+    factors = store.calls[2][3]
+    assert {row["symbol"] for row in factors} == {"000001.SZ", "000002.SZ", "600519.SH"}
+    assert next(row for row in factors if row["symbol"] == "600519.SH")["quality_status"] == "approved"
+
+
+def test_main_reports_expected_operational_value_error_without_traceback(monkeypatch, capsys) -> None:
+    def _raise_value_error(**_kwargs: object):
+        raise ValueError("factor rows are invalid")
+
+    monkeypatch.setattr(build_research_adjustment_data, "build_research_adjustment_data", _raise_value_error)
+
+    assert build_research_adjustment_data.main([]) == 2
+    assert "research adjustment build failed: ValueError: factor rows are invalid" in capsys.readouterr().err
 
 
 def test_script_does_not_depend_on_online_data_aggregator() -> None:
