@@ -464,6 +464,27 @@ def test_stock_catalog_inserts_changed_symbols() -> None:
     assert any("optimize" in s.lower() and "mootdx_stock_catalog" in s for s in client.sql)
 
 
+def test_stock_catalog_normalizes_numeric_source_codes_before_insert() -> None:
+    from src.data.models import StockInfo
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    class NumericCodeSource(FakeSource):
+        def fetch_stock_list(self):
+            return [StockInfo(symbol="001234.SZ", code=1234, name="测试新股")]
+
+    client = FakeClickHouse()
+    result = sync_mootdx_offline_data(
+        client=client,
+        source=NumericCodeSource(),
+        tasks=["stock_catalog"],
+        ensure_tables=False,
+    )
+
+    assert result["failed"] == {}
+    catalog_insert = next(params for sql, params in client.inserts if "insert into mootdx_stock_catalog" in sql.lower())
+    assert catalog_insert[0][3] == "1234"
+
+
 def test_stock_catalog_uses_source_as_authoritative_pool_and_reports_changes() -> None:
     from src.data.models import StockInfo
     from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data

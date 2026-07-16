@@ -304,7 +304,9 @@ def _stock_catalog_rows(
             continue
         market_code = _market_code(stock.symbol)
         is_st_flag = 1 if stock.is_st or is_st(stock.name) else 0
-        source_snapshot[stock.symbol] = (market_code, stock.code, stock.name, is_st_flag)
+        # Mootdx may expose newly listed stock codes as integers, while the
+        # ClickHouse catalog schema stores ``code`` as String.
+        source_snapshot[stock.symbol] = (market_code, str(stock.code or ""), stock.name, is_st_flag)
     source_symbols = set(source_snapshot)
     common_symbols = source_symbols & set(latest)
     previous_active_symbols = {symbol for symbol, snapshot in latest.items() if snapshot[4]}
