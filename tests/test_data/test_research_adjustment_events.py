@@ -1,0 +1,54 @@
+"""Tests for research-only corporate-action event helpers."""
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+
+from src.data.research_adjustment_events import daily_ratio
+from src.data.research_adjustment_validation import validate_event
+
+
+def test_validate_event_approves_cash_dividend_with_matching_ex_close() -> None:
+    result = validate_event(
+        {"event_date": date(2024, 1, 10), "fenhong": 1.0},
+        pre_close=10.0,
+        ex_close=9.0,
+    )
+
+    assert result.status == "approved"
+    assert result.ratio == 0.9
+    assert result.theoretical_price == 9.0
+    assert result.error == 0.0
+
+
+def test_validate_event_requires_an_ex_date_bar() -> None:
+    result = validate_event(
+        {"event_date": date(2024, 1, 10), "fenhong": 1.0},
+        pre_close=10.0,
+        ex_close=None,
+    )
+
+    assert result.status == "missing_ex_date_bar"
+    assert result.ratio is None
+
+
+def test_validate_event_treats_missing_suogu_as_no_consolidation() -> None:
+    result = validate_event(
+        {"event_date": date(2024, 1, 10), "fenhong": 1.0, "suogu": None},
+        pre_close=10.0,
+        ex_close=9.0,
+    )
+
+    assert result.status == "approved"
+    assert result.ratio == 0.9
+
+
+def test_daily_ratio_uses_only_approved_events_in_stable_order() -> None:
+    events = [
+        {"event_date": date(2024, 1, 10), "category": 2, "name": "later", "status": "approved", "ratio": 0.8},
+        {"event_date": date(2024, 1, 10), "category": 1, "name": "first", "status": "approved", "ratio": 0.9},
+        {"event_date": date(2024, 1, 10), "category": 0, "name": "excluded", "status": "formula_invalid", "ratio": 0.5},
+    ]
+
+    assert daily_ratio(events) == pytest.approx(0.72)
