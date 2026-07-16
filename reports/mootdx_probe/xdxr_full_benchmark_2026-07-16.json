@@ -1,0 +1,56 @@
+{
+  "mode": "read_only",
+  "catalog_size": 5203,
+  "bucket_counts": {
+    "sh_main": 2228,
+    "sz_main": 1413,
+    "chi_next": 1354,
+    "st": 208
+  },
+  "sample_count": 5203,
+  "selection_mode": "all",
+  "bestip": false,
+  "success_count": 5200,
+  "empty_count": 3,
+  "error_count": 0,
+  "event_rows": 174864,
+  "request_seconds": 253.299,
+  "p50": 42.834,
+  "p95": 50.966,
+  "p99": 82.835,
+  "p50_ms": 42.834,
+  "p95_ms": 50.966,
+  "p99_ms": 82.835,
+  "bucket_results": {
+    "sz_main": {
+      "requested_count": 1413,
+      "success_count": 1413,
+      "empty_count": 0,
+      "error_count": 0,
+      "event_rows": 64024
+    },
+    "st": {
+      "requested_count": 208,
+      "success_count": 208,
+      "empty_count": 0,
+      "error_count": 0,
+      "event_rows": 7129
+    },
+    "chi_next": {
+      "requested_count": 1354,
+      "success_count": 1353,
+      "empty_count": 1,
+      "error_count": 0,
+      "event_rows": 40765
+    },
+    "sh_main": {
+      "requested_count": 2228,
+      "success_count": 2226,
+      "empty_count": 2,
+      "error_count": 0,
+      "event_rows": 62946
+    }
+  },
+  "error_types": {},
+  "failed_symbols_sample": []
+}
