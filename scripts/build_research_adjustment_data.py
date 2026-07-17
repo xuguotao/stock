@@ -191,11 +191,11 @@ def _default_symbols(
         if input_ingest_seq <= 0:
             return []
         rows = client.execute(
-            """select distinct symbol from mootdx_stock_kline final
+            """select distinct symbol from mootdx_stock_kline as k
             inner join mootdx_ingestion_runs final as ingestion
-              on mootdx_stock_kline.ingest_seq = ingestion.ingest_seq
+              on k.ingest_seq = ingestion.ingest_seq
             where frequency = 'daily' and ingestion.status = 'succeeded'
-              and mootdx_stock_kline.ingest_seq <= %(captured_input_ingest_seq)s
+              and k.ingest_seq <= %(captured_input_ingest_seq)s
             order by symbol""",
             {"captured_input_ingest_seq": input_ingest_seq},
         )
@@ -207,21 +207,21 @@ def _default_symbols(
         "captured_input_ingest_seq": input_ingest_seq,
     }
     xdxr_rows = client.execute(
-        """select distinct symbol from mootdx_xdxr final
+        """select distinct symbol from mootdx_xdxr as x
         inner join mootdx_ingestion_runs final as ingestion
-          on mootdx_xdxr.ingest_seq = ingestion.ingest_seq
+          on x.ingest_seq = ingestion.ingest_seq
         where ingestion.status = 'succeeded'
-          and mootdx_xdxr.ingest_seq > %(previous_input_ingest_seq)s
-          and mootdx_xdxr.ingest_seq <= %(captured_input_ingest_seq)s order by symbol""", params
+          and x.ingest_seq > %(previous_input_ingest_seq)s
+          and x.ingest_seq <= %(captured_input_ingest_seq)s order by symbol""", params
     )
     daily_rows = client.execute(
         """
-        select distinct symbol from mootdx_stock_kline final
+        select distinct symbol from mootdx_stock_kline as k
         inner join mootdx_ingestion_runs final as ingestion
-          on mootdx_stock_kline.ingest_seq = ingestion.ingest_seq
+          on k.ingest_seq = ingestion.ingest_seq
         where frequency = 'daily' and ingestion.status = 'succeeded'
-          and mootdx_stock_kline.ingest_seq > %(previous_input_ingest_seq)s
-          and mootdx_stock_kline.ingest_seq <= %(captured_input_ingest_seq)s
+          and k.ingest_seq > %(previous_input_ingest_seq)s
+          and k.ingest_seq <= %(captured_input_ingest_seq)s
         order by symbol
         """,
         params,
@@ -293,13 +293,21 @@ def _daily_bars(
 ) -> dict[str, list[tuple[date, float]]]:
     rows = client.execute(
         """
-        select symbol, trade_date, open, high, low, close, volume, amount, ingested_at
-        from mootdx_stock_kline
-        inner join mootdx_ingestion_runs final as ingestion
-          on mootdx_stock_kline.ingest_seq = ingestion.ingest_seq
-        where frequency = 'daily' and symbol in %(symbols)s
-          and ingestion.status = 'succeeded'
-          and mootdx_stock_kline.ingest_seq <= %(captured_input_ingest_seq)s
+        select symbol, trade_date,
+               argMax(open, version_key), argMax(high, version_key),
+               argMax(low, version_key), argMax(close, version_key),
+               argMax(volume, version_key), argMax(amount, version_key),
+               argMax(ingested_at, version_key)
+        from (
+            select k.*, tuple(k.ingest_seq, k.ingested_at, k.raw_json) as version_key
+            from mootdx_stock_kline as k
+            inner join mootdx_ingestion_runs final as ingestion
+              on k.ingest_seq = ingestion.ingest_seq
+            where k.frequency = 'daily' and k.symbol in %(symbols)s
+              and ingestion.status = 'succeeded'
+              and k.ingest_seq <= %(captured_input_ingest_seq)s
+        )
+        group by frequency, symbol, datetime, trade_date
         order by symbol, trade_date
         """,
         {"symbols": tuple(symbols), "captured_input_ingest_seq": input_ingest_seq},
@@ -320,14 +328,20 @@ def _daily_bars(
 def _xdxr_events(client: Any, symbols: Sequence[str], input_ingest_seq: int) -> list[dict[str, Any]]:
     rows = client.execute(
         """
-        select symbol, event_date, category, name, fenhong, peigujia,
-               songzhuangu, peigu, suogu
-        from mootdx_xdxr final
-        inner join mootdx_ingestion_runs final as ingestion
-          on mootdx_xdxr.ingest_seq = ingestion.ingest_seq
-        where symbol in %(symbols)s
-          and ingestion.status = 'succeeded'
-          and mootdx_xdxr.ingest_seq <= %(captured_input_ingest_seq)s
+        select symbol, event_date, category,
+               argMax(name, version_key) as name, argMax(fenhong, version_key),
+               argMax(peigujia, version_key), argMax(songzhuangu, version_key),
+               argMax(peigu, version_key), argMax(suogu, version_key)
+        from (
+            select x.*, tuple(x.ingest_seq, x.ingested_at, x.raw_json) as version_key
+            from mootdx_xdxr as x
+            inner join mootdx_ingestion_runs final as ingestion
+              on x.ingest_seq = ingestion.ingest_seq
+            where x.symbol in %(symbols)s
+              and ingestion.status = 'succeeded'
+              and x.ingest_seq <= %(captured_input_ingest_seq)s
+        )
+        group by symbol, event_date, category
         order by symbol, event_date, category, name
         """,
         {"symbols": tuple(symbols), "captured_input_ingest_seq": input_ingest_seq},

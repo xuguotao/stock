@@ -37,14 +37,14 @@ class _MootdxClient:
         normalized = " ".join(sql.lower().split())
         if "select ingest_seq, status from mootdx_ingestion_runs" in normalized:
             return [(1, "succeeded")]
-        if "select distinct symbol from mootdx_stock_kline final" in normalized:
+        if "select distinct symbol from mootdx_stock_kline as k" in normalized:
             return [("000001.SZ",)]
         if "from mootdx_stock_kline" in normalized:
             return [
                 ("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, datetime(2026, 7, 16, 17, 20)),
                 ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, datetime(2026, 7, 16, 17, 20)),
             ]
-        if "from mootdx_xdxr final" in normalized:
+        if "argmax(name, version_key)" in normalized and "from mootdx_xdxr" in normalized:
             return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
         raise AssertionError(sql)
 
@@ -81,7 +81,7 @@ class _IncrementalMootdxClient(_MootdxClient):
                 ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, datetime(2026, 7, 16, 17, 20)),
                 ("000002.SZ", date(2026, 7, 15), 20.0, 20.0, 20.0, 20.0, 100, 2000.0, datetime(2026, 7, 16, 17, 20)),
             ]
-        if "from mootdx_xdxr final" in normalized:
+        if "argmax(name, version_key)" in normalized and "from mootdx_xdxr" in normalized:
             return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
         raise AssertionError(sql)
 
@@ -143,14 +143,14 @@ def test_candidate_reads_are_bounded_by_captured_input_ingest_sequence() -> None
     class _StableSnapshotClient(_MootdxClient):
         def execute(self, sql: str, params: object | None = None):
             normalized = " ".join(sql.lower().split())
-            if "select symbol, trade_date, open, high, low, close, volume, amount, ingested_at from mootdx_stock_kline" in normalized:
+            if "argmax(close, version_key)" in normalized and "from mootdx_stock_kline" in normalized:
                 assert params == {"symbols": ("000001.SZ",), "captured_input_ingest_seq": captured}
                 # A later bar must remain for the following build.
                 return [
                     ("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, captured),
                     ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, captured),
                 ]
-            if "from mootdx_xdxr final" in normalized:
+            if "argmax(name, version_key)" in normalized and "from mootdx_xdxr" in normalized:
                 assert params == {"symbols": ("000001.SZ",), "captured_input_ingest_seq": captured}
                 # The post-capture event is likewise absent from this snapshot.
                 return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
@@ -170,7 +170,7 @@ def test_full_build_selects_targets_only_through_captured_input_ingest_sequence(
     class _StableTargetClient(_MootdxClient):
         def execute(self, sql: str, params: object | None = None):
             normalized = " ".join(sql.lower().split())
-            if "select distinct symbol from mootdx_stock_kline final" in normalized:
+            if "select distinct symbol from mootdx_stock_kline as k" in normalized:
                 assert "frequency = 'daily'" in normalized
                 assert "ingest_seq <= %(captured_input_ingest_seq)s" in normalized
                 assert params == {"captured_input_ingest_seq": captured}
@@ -242,6 +242,49 @@ def test_incremental_uses_only_succeeded_sequences_between_published_and_settled
     assert all("ingestion.status = 'succeeded'" in sql.lower() for sql, _ in changed)
     assert all(params == {"previous_input_ingest_seq": 17, "captured_input_ingest_seq": 21} for _, params in changed)
     assert store.calls[-1][1]["input_ingest_seq"] == 21
+
+
+def test_daily_bars_selects_as_of_sequence_version_without_physical_duplicates() -> None:
+    class _DuplicateBarClient:
+        def execute(self, sql: str, params: object | None = None):
+            normalized = " ".join(sql.lower().split())
+            old = ("000001.SZ", date(2026, 7, 16), 10., 10., 10., 10., 1, 10., datetime(2026, 7, 16))
+            new = ("000001.SZ", date(2026, 7, 16), 11., 11., 11., 11., 1, 11., datetime(2026, 7, 17))
+            # This models physical ReplacingMergeTree duplicates from seq 17/21.
+            if "argmax" in normalized:
+                return [old] if params["captured_input_ingest_seq"] == 17 else [new]
+            return [old, new]
+
+    bars = build_research_adjustment_data._daily_bars(
+        _DuplicateBarClient(), ["000001.SZ"], input_ingest_seq=17
+    )
+
+    assert bars == {"000001.SZ": [(date(2026, 7, 16), 10.0)]}
+    assert [row["close"] for row in bars.raw_rows] == [10.0]
+
+    newer_bars = build_research_adjustment_data._daily_bars(
+        _DuplicateBarClient(), ["000001.SZ"], input_ingest_seq=21
+    )
+    assert newer_bars == {"000001.SZ": [(date(2026, 7, 16), 11.0)]}
+
+
+def test_xdxr_events_select_as_of_sequence_version_without_final_after_filter() -> None:
+    class _DuplicateEventClient:
+        def execute(self, sql: str, _params: object | None = None):
+            normalized = " ".join(sql.lower().split())
+            old = ("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)
+            new = ("000001.SZ", date(2026, 7, 16), 1, "cash", 2.0, 0.0, 0.0, 0.0, 1.0)
+            return [old] if "argmax(name, version_key)" in normalized else [old, new]
+
+    events = build_research_adjustment_data._xdxr_events(
+        _DuplicateEventClient(), ["000001.SZ"], input_ingest_seq=17
+    )
+
+    assert events == [{
+        "symbol": "000001.SZ", "event_date": date(2026, 7, 16), "category": 1,
+        "name": "cash", "fenhong": 1.0, "peigujia": 0.0, "songzhuangu": 0.0,
+        "peigu": 0.0, "suogu": 1.0,
+    }]
 
 
 def test_initial_explicit_symbol_build_refuses_to_publish_a_partial_snapshot() -> None:
@@ -359,7 +402,7 @@ def test_incremental_build_rejects_a_target_without_daily_factor_coverage() -> N
             normalized = " ".join(sql.lower().split())
             if "max(ingested_at)" in normalized:
                 return [(datetime(2026, 7, 16, 17, 40),)]
-            if "select symbol, trade_date, open, high, low, close, volume, amount, ingested_at from mootdx_stock_kline" in normalized:
+            if "argmax(close, version_key)" in normalized and "from mootdx_stock_kline" in normalized:
                 return [("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, datetime(2026, 7, 16, 17, 20))]
             return super().execute(sql, params)
 
