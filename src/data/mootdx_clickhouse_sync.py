@@ -37,7 +37,6 @@ def ensure_mootdx_tables(client: Any) -> None:
     for sql in MOOTDX_TABLE_SQL:
         client.execute(sql)
     client.execute(MOOTDX_XDXR_CURRENT_VIEW_SQL)
-    _ensure_mootdx_xdxr_nullable_columns(client)
     _ensure_mootdx_ingest_sequence_columns(client)
     _ensure_mootdx_ingestion_runs_retention(client)
     _ensure_mootdx_xdxr_symbol_runs_columns(client)
@@ -146,7 +145,7 @@ def sync_mootdx_offline_data(
                 if not rows:
                     inserted[table] = inserted.get(table, 0)
                     continue
-                rows_to_insert = _with_ingest_seq(rows, ingest_seq) if table in {"mootdx_stock_kline", "mootdx_xdxr"} else rows
+                rows_to_insert = _with_ingest_seq(rows, ingest_seq) if table == "mootdx_stock_kline" else rows
                 _insert_rows(clickhouse, table, rows_to_insert)
                 inserted[table] = inserted.get(table, 0) + len(rows)
                 if table == "mootdx_stock_catalog":
@@ -270,8 +269,6 @@ def _run_task(
         if diagnostics is not None:
             diagnostics["xdxr"] = xdxr_diagnostics
         return {
-            # Kept only until Task 3 replaces this table with the compatible current view.
-            "mootdx_xdxr": rows,
             "mootdx_xdxr_event_versions": version_rows,
             "mootdx_xdxr_symbol_observations": observation_rows,
             "mootdx_xdxr_symbol_runs": audit_rows,
@@ -1415,19 +1412,6 @@ def _insert_rows(client: Any, table: str, rows: list[tuple]) -> None:
         for batch in batches.values():
             client.execute(f"insert into {table} values", batch)
         return
-    if table == "mootdx_xdxr":
-        batches: dict[tuple[int, int], list[tuple]] = {}
-        for row in rows:
-            event_date = row[1]
-            batches.setdefault((event_date.year, event_date.month), []).append(row)
-        for batch in batches.values():
-            client.execute(
-                "insert into mootdx_xdxr "
-                "(symbol, event_date, category, name, fenhong, peigujia, songzhuangu, peigu, suogu, "
-                "panqianliutong, panhouliutong, qianzongguben, houzongguben, ingested_at, raw_json, ingest_seq) values",
-                batch,
-            )
-        return
     if table == "mootdx_xdxr_event_versions":
         batches: dict[tuple[int, int], list[tuple]] = {}
         for row in rows:
@@ -1458,15 +1442,9 @@ def _insert_rows(client: Any, table: str, rows: list[tuple]) -> None:
     client.execute(f"insert into {table} values", rows)
 
 
-def _ensure_mootdx_xdxr_nullable_columns(client: Any) -> None:
-    for column in MOOTDX_XDXR_NULLABLE_FLOAT_COLUMNS:
-        client.execute(f"alter table mootdx_xdxr modify column {column} Nullable(Float64)")
-
-
 def _ensure_mootdx_ingest_sequence_columns(client: Any) -> None:
     """Backfill the sequence marker without rewriting existing Mootdx raw rows."""
-    for table in ("mootdx_stock_kline", "mootdx_xdxr"):
-        client.execute(f"alter table {table} add column if not exists ingest_seq UInt64 default 0")
+    client.execute("alter table mootdx_stock_kline add column if not exists ingest_seq UInt64 default 0")
 
 
 def _ensure_mootdx_ingestion_runs_retention(client: Any) -> None:
@@ -1949,29 +1927,6 @@ MOOTDX_TABLE_SQL = [
     partition by (trade_date, frequency)
     order by (frequency, symbol, datetime)
     ttl trade_date + interval 1095 day delete
-    """,
-    """
-    create table if not exists mootdx_xdxr (
-        symbol String,
-        event_date Date,
-        category Int16,
-        name String,
-        fenhong Nullable(Float64),
-        peigujia Nullable(Float64),
-        songzhuangu Nullable(Float64),
-        peigu Nullable(Float64),
-        suogu Nullable(Float64),
-        panqianliutong Nullable(Float64),
-        panhouliutong Nullable(Float64),
-        qianzongguben Nullable(Float64),
-        houzongguben Nullable(Float64),
-        ingested_at DateTime,
-        raw_json String,
-        ingest_seq UInt64 default 0
-    )
-    engine = ReplacingMergeTree(ingested_at)
-    partition by toYYYYMM(event_date)
-    order by (symbol, event_date, category)
     """,
     """
     create table if not exists mootdx_xdxr_event_versions (

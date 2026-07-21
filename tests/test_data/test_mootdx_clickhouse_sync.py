@@ -223,7 +223,7 @@ def test_ensure_mootdx_tables_migrates_raw_tables_and_creates_ingestion_audit() 
     assert "create table if not exists mootdx_ingestion_runs" in joined
     assert "ingest_seq uint64" in joined
     assert "alter table mootdx_stock_kline add column if not exists ingest_seq uint64 default 0" in joined
-    assert "alter table mootdx_xdxr add column if not exists ingest_seq uint64 default 0" in joined
+    assert "alter table mootdx_xdxr add column if not exists ingest_seq uint64 default 0" not in joined
 
 
 def test_ensure_mootdx_tables_does_not_remove_missing_ingestion_run_ttl() -> None:
@@ -278,10 +278,10 @@ def test_sync_assigns_one_ingest_sequence_to_daily_kline_and_xdxr_rows() -> None
     )
 
     kline_rows = next(rows for sql, rows in client.inserts if "insert into mootdx_stock_kline" in sql.lower())
-    xdxr_rows = next(rows for sql, rows in client.inserts if "insert into mootdx_xdxr" in sql.lower())
+    xdxr_rows = next(rows for sql, rows in client.inserts if "insert into mootdx_xdxr_event_versions" in sql.lower())
     assert result["ingest_seq"] > 0
     assert {row[-1] for row in kline_rows} == {result["ingest_seq"]}
-    assert {row[-1] for row in xdxr_rows} == {result["ingest_seq"]}
+    assert {row[0] for row in xdxr_rows} == {result["ingest_seq"]}
 
 
 def test_sync_ingest_sequences_are_monotonic_across_runs() -> None:
@@ -404,10 +404,7 @@ def test_ensure_mootdx_tables_makes_xdxr_numeric_fields_nullable() -> None:
     joined = "\n".join(client.sql).lower()
     assert "fenhong nullable(float64)" in joined
     assert "suogu nullable(float64)" in joined
-    assert any(
-        "alter table mootdx_xdxr modify column suogu nullable(float64)" in sql.lower()
-        for sql in client.sql
-    )
+    assert not any("alter table mootdx_xdxr modify column" in sql.lower() for sql in client.sql)
 
 
 def test_ensure_mootdx_tables_creates_daily_xdxr_events_view() -> None:
@@ -1473,25 +1470,8 @@ def test_stock_kline_daily_backfill_fetches_once_and_filters_date_range() -> Non
     assert any("'2026-07-09','daily'" in sql for sql in optimize_sql)
 
 
-def test_xdxr_insert_is_batched_by_event_month() -> None:
-    from src.data.mootdx_clickhouse_sync import _insert_rows
-
-    client = FakeClickHouse()
-    rows = [
-        ("000001.SZ", date(1990, 3, 1), 1, "除权除息"),
-        ("000001.SZ", date(1990, 3, 8), 1, "除权除息"),
-        ("000001.SZ", date(2026, 6, 12), 1, "除权除息"),
-    ]
-
-    _insert_rows(client, "mootdx_xdxr", rows)
-
-    xdxr_batches = [params for sql, params in client.inserts if "insert into mootdx_xdxr" in sql.lower()]
-    assert len(xdxr_batches) == 2
-    assert sorted(len(batch) for batch in xdxr_batches) == [1, 2]
-
-
 def test_xdxr_rows_preserve_nulls_skip_invalid_dates_and_report_diagnostics() -> None:
-    from src.data.mootdx_clickhouse_sync import _run_task
+    from src.data.mootdx_clickhouse_sync import _xdxr_rows
 
     class XdxrSource:
         def fetch_xdxr(self, symbol):
@@ -1526,18 +1506,10 @@ def test_xdxr_rows_preserve_nulls_skip_invalid_dates_and_report_diagnostics() ->
                 ])
             return pd.DataFrame()
 
-    diagnostics = {}
-
-    result = _run_task(
-        task="xdxr",
+    rows, _audit_rows, diagnostics = _xdxr_rows(
         source=XdxrSource(),
         symbols=["000001.SZ", "000002.SZ"],
-        trade_date=date(2026, 7, 14),
-        frequencies=["daily"],
-        diagnostics=diagnostics,
     )
-
-    rows = result["mootdx_xdxr"]
     assert [(row[0], row[1], row[2]) for row in rows] == [
         ("000001.SZ", date(2026, 6, 12), 1),
         ("000001.SZ", date(2026, 6, 12), 2),
@@ -1545,7 +1517,7 @@ def test_xdxr_rows_preserve_nulls_skip_invalid_dates_and_report_diagnostics() ->
     assert rows[0][8] is None
     assert rows[0][9] is None
     assert rows[1][8] is None
-    assert {key: diagnostics["xdxr"][key] for key in (
+    assert {key: diagnostics[key] for key in (
         "target_symbols",
         "requested_symbols",
         "success_symbols",
@@ -1566,8 +1538,8 @@ def test_xdxr_rows_preserve_nulls_skip_invalid_dates_and_report_diagnostics() ->
         "failed_symbols_sample": [],
         "circuit_breaker_triggered": False,
     }
-    assert diagnostics["xdxr"]["request_seconds"] >= 0
-    assert diagnostics["xdxr"]["parse_seconds"] >= 0
+    assert diagnostics["request_seconds"] >= 0
+    assert diagnostics["parse_seconds"] >= 0
 
 
 def test_xdxr_task_writes_per_symbol_audits_and_stops_after_three_errors() -> None:
@@ -1681,15 +1653,11 @@ def test_xdxr_sync_writes_event_and_symbol_audit_rows() -> None:
     )
 
     assert result["inserted"] == {
-        "mootdx_xdxr": 1,
         "mootdx_xdxr_event_versions": 1,
         "mootdx_xdxr_symbol_observations": 1,
         "mootdx_xdxr_symbol_runs": 1,
     }
-    assert any(
-        "insert into mootdx_xdxr (symbol, event_date" in sql.lower()
-        for sql, _ in client.inserts
-    )
+    assert not any("insert into mootdx_xdxr (symbol, event_date" in sql.lower() for sql, _ in client.inserts)
     assert any("insert into mootdx_xdxr_symbol_runs" in sql.lower() for sql, _ in client.inserts)
     assert any("insert into mootdx_xdxr_event_versions" in sql.lower() for sql, _ in client.inserts)
     assert any("insert into mootdx_xdxr_symbol_observations" in sql.lower() for sql, _ in client.inserts)
