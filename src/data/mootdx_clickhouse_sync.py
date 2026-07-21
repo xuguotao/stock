@@ -115,11 +115,19 @@ def sync_mootdx_offline_data(
     for index, task in enumerate(selected_tasks, start=1):
         try:
             _progress(progress, 15 + int(index / task_count * 75), task, f"执行 mootdx 离线任务 {task}")
+            task_symbols = target_symbols
+            if task == "xdxr" and symbols is None:
+                task_symbols = _resolve_xdxr_symbols(
+                    data_source,
+                    limit=limit,
+                    client=clickhouse,
+                    include_beijing=include_beijing,
+                )
             rows_by_table = _run_task(
                 task=task,
                 source=data_source,
                 baostock_source=baostock_source,
-                symbols=target_symbols,
+                symbols=task_symbols,
                 catalog_symbols=symbols,
                 run_id=run_id,
                 trade_date=selected_trade_date,
@@ -306,7 +314,32 @@ def _resolve_symbols(
     return result
 
 
-def _latest_catalog_symbols(client: Any | None, *, include_beijing: bool) -> list[str]:
+def _resolve_xdxr_symbols(
+    source: Any,
+    *,
+    limit: int,
+    client: Any | None = None,
+    include_beijing: bool = False,
+) -> list[str]:
+    """Resolve the historical company-action universe, not the strategy universe."""
+    result = _latest_catalog_symbols(
+        client,
+        include_beijing=include_beijing,
+        include_st=True,
+        include_inactive=True,
+    )
+    if not result:
+        result = [stock.symbol for stock in source.fetch_stock_list()]
+    return result[:limit] if limit > 0 else result
+
+
+def _latest_catalog_symbols(
+    client: Any | None,
+    *,
+    include_beijing: bool,
+    include_st: bool = False,
+    include_inactive: bool = False,
+) -> list[str]:
     if client is None:
         return []
     try:
@@ -323,7 +356,12 @@ def _latest_catalog_symbols(client: Any | None, *, include_beijing: bool) -> lis
         market = int(row[1])
         is_st_flag = int(row[2])
         is_active_flag = int(row[3]) if len(row) > 3 else 1
-        if symbol and market in allowed_markets and not is_st_flag and is_active_flag:
+        if (
+            symbol
+            and market in allowed_markets
+            and (include_st or not is_st_flag)
+            and (include_inactive or is_active_flag)
+        ):
             symbols.append(symbol)
     return symbols
 

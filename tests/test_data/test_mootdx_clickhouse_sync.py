@@ -1039,6 +1039,49 @@ def test_stock_kline_daily_uses_latest_catalog_pool_when_symbols_not_provided() 
     assert result["symbols"] == ["000001.SZ", "000002.SZ", "600000.SH"]
 
 
+def test_xdxr_uses_catalog_pool_including_st_and_inactive_without_widening_daily_pool() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    class CatalogPoolClient(FakeClickHouse):
+        def execute(self, sql: str, params=None):
+            self.sql.append(sql)
+            if "insert into" in sql.lower():
+                self.inserts.append((sql, params or []))
+                return []
+            if "from mootdx_stock_catalog" in sql.lower():
+                return [
+                    ("000001.SZ", 0, 0, 1),
+                    ("002598.SZ", 0, 1, 1),
+                    ("000004.SZ", 0, 0, 0),
+                ]
+            return []
+
+    class HistoricalXdxrSource(FakeSource):
+        def __init__(self) -> None:
+            self.daily_symbols: list[str] = []
+            self.xdxr_symbols: list[str] = []
+
+        def fetch_bars(self, symbol, start, end, frequency="daily", offset=None):
+            self.daily_symbols.append(symbol)
+            return super().fetch_bars(symbol, start, end, frequency, offset=offset)
+
+        def fetch_xdxr(self, symbol):
+            self.xdxr_symbols.append(symbol)
+            return pd.DataFrame()
+
+    source = HistoricalXdxrSource()
+    sync_mootdx_offline_data(
+        client=CatalogPoolClient(),
+        source=source,
+        trade_date=date(2026, 7, 9),
+        tasks=["stock_kline_daily", "xdxr"],
+        ensure_tables=False,
+    )
+
+    assert source.daily_symbols == ["000001.SZ"]
+    assert source.xdxr_symbols == ["000001.SZ", "002598.SZ", "000004.SZ"]
+
+
 def test_stock_kline_daily_skips_symbols_marked_no_data() -> None:
     from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
 
