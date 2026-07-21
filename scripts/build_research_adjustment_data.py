@@ -228,7 +228,7 @@ def _default_symbols(
     daily_rows = client.execute(
         """
         select distinct symbol from mootdx_stock_kline as k
-        inner join mootdx_ingestion_runs final as ingestion
+        inner join (select * from mootdx_ingestion_runs final) as ingestion
           on k.ingest_seq = ingestion.ingest_seq
         where frequency = 'daily' and ingestion.status = 'succeeded'
           and k.ingest_seq > %(previous_input_ingest_seq)s

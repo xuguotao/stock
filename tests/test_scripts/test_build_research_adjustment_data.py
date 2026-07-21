@@ -400,6 +400,8 @@ def test_incremental_symbol_selection_uses_strict_sequence_boundaries() -> None:
     queries = [sql for sql, _ in client.calls if "select distinct symbol" in sql.lower() and "ingest_seq" in sql.lower()]
     assert len(queries) == 2
     assert all("ingest_seq > %(previous_input_ingest_seq)s" in sql.lower() for sql in queries)
+    daily_query = next(sql for sql in queries if "mootdx_stock_kline" in sql.lower())
+    assert "inner join (select * from mootdx_ingestion_runs final) as ingestion" in daily_query.lower()
 
 
 def test_incremental_build_with_legacy_run_without_input_sequence_requires_full_rebuild() -> None:
