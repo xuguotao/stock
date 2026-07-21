@@ -203,11 +203,33 @@ def test_ensure_mootdx_tables_migrates_raw_tables_and_creates_ingestion_audit() 
     client = FakeClickHouse()
     ensure_mootdx_tables(client)
 
-    joined = "\n".join(client.sql).lower()
+    joined = " ".join("\n".join(client.sql).lower().split())
     assert "create table if not exists mootdx_ingestion_runs" in joined
     assert "ingest_seq uint64" in joined
     assert "alter table mootdx_stock_kline add column if not exists ingest_seq uint64 default 0" in joined
     assert "alter table mootdx_xdxr add column if not exists ingest_seq uint64 default 0" in joined
+
+
+def test_ensure_mootdx_tables_creates_append_only_xdxr_versions_and_current_view() -> None:
+    from src.data.mootdx_clickhouse_sync import ensure_mootdx_tables
+
+    client = FakeClickHouse()
+    ensure_mootdx_tables(client)
+
+    joined = " ".join("\n".join(client.sql).lower().split())
+    assert "create table if not exists mootdx_xdxr_event_versions" in joined
+    assert "create table if not exists mootdx_xdxr_symbol_observations" in joined
+    assert "create view if not exists mootdx_xdxr_current" in joined
+    assert "argmax( tuple(" in joined
+    assert "engine = mergetree" in joined
+
+
+def test_xdxr_current_view_selects_whole_latest_tuple_including_nulls() -> None:
+    from src.data.mootdx_clickhouse_sync import MOOTDX_XDXR_CURRENT_VIEW_SQL
+
+    sql = " ".join(MOOTDX_XDXR_CURRENT_VIEW_SQL.lower().split())
+    assert "argmax( tuple( version.fenhong, version.peigujia, version.songzhuangu, version.peigu, version.suogu" in sql
+    assert "argmax(fenhong" not in sql
 
 
 def test_sync_assigns_one_ingest_sequence_to_daily_kline_and_xdxr_rows() -> None:

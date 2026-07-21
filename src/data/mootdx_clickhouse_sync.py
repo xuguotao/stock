@@ -35,6 +35,7 @@ _INGESTION_SEQUENCE_LOCK = Path("/tmp/mootdx_ingestion_sequence.lock")
 def ensure_mootdx_tables(client: Any) -> None:
     for sql in MOOTDX_TABLE_SQL:
         client.execute(sql)
+    client.execute(MOOTDX_XDXR_CURRENT_VIEW_SQL)
     _ensure_mootdx_xdxr_nullable_columns(client)
     _ensure_mootdx_ingest_sequence_columns(client)
     _ensure_mootdx_ingestion_runs_retention(client)
@@ -1808,6 +1809,47 @@ MOOTDX_TABLE_SQL = [
     order by (symbol, event_date, category)
     """,
     """
+    create table if not exists mootdx_xdxr_event_versions (
+        ingest_seq UInt64,
+        symbol String,
+        event_date Date,
+        category Int16,
+        name String,
+        fenhong Nullable(Float64),
+        peigujia Nullable(Float64),
+        songzhuangu Nullable(Float64),
+        peigu Nullable(Float64),
+        suogu Nullable(Float64),
+        panqianliutong Nullable(Float64),
+        panhouliutong Nullable(Float64),
+        qianzongguben Nullable(Float64),
+        houzongguben Nullable(Float64),
+        content_hash String,
+        raw_json String,
+        observed_at DateTime,
+        migration_baseline UInt8 default 0
+    )
+    engine = MergeTree
+    partition by toYYYYMM(event_date)
+    order by (symbol, event_date, category, ingest_seq)
+    """,
+    """
+    create table if not exists mootdx_xdxr_symbol_observations (
+        ingest_seq UInt64,
+        symbol String,
+        observed_at DateTime,
+        status LowCardinality(String),
+        event_count UInt32,
+        event_set_hash String,
+        request_ms Nullable(Float64),
+        parse_ms Nullable(Float64),
+        error String
+    )
+    engine = MergeTree
+    partition by toYYYYMM(observed_at)
+    order by (symbol, ingest_seq)
+    """,
+    """
     create table if not exists mootdx_xdxr_symbol_runs (
         run_id String,
         symbol String,
@@ -1916,6 +1958,49 @@ MOOTDX_TABLE_SQL = [
     ttl captured_at + interval 365 day delete
     """,
 ]
+
+
+MOOTDX_XDXR_CURRENT_VIEW_SQL = """
+create view if not exists mootdx_xdxr_current as
+select
+    symbol,
+    event_date,
+    category,
+    tupleElement(event_version, 6) as name,
+    tupleElement(event_version, 1) as fenhong,
+    tupleElement(event_version, 2) as peigujia,
+    tupleElement(event_version, 3) as songzhuangu,
+    tupleElement(event_version, 4) as peigu,
+    tupleElement(event_version, 5) as suogu,
+    tupleElement(event_version, 7) as panqianliutong,
+    tupleElement(event_version, 8) as panhouliutong,
+    tupleElement(event_version, 9) as qianzongguben,
+    tupleElement(event_version, 10) as houzongguben,
+    tupleElement(event_version, 11) as content_hash,
+    tupleElement(event_version, 12) as raw_json,
+    tupleElement(event_version, 13) as observed_at,
+    tupleElement(event_version, 14) as ingest_seq
+from (
+    select
+        version.symbol as symbol,
+        version.event_date as event_date,
+        version.category as category,
+        argMax(
+            tuple(
+                version.fenhong, version.peigujia, version.songzhuangu, version.peigu, version.suogu,
+                version.name, version.panqianliutong, version.panhouliutong,
+                version.qianzongguben, version.houzongguben, version.content_hash,
+                version.raw_json, version.observed_at, version.ingest_seq
+            ),
+            version.ingest_seq
+        ) as event_version
+    from mootdx_xdxr_event_versions as version
+    inner join (
+        select ingest_seq from mootdx_ingestion_runs final where status = 'succeeded'
+    ) as ingestion on version.ingest_seq = ingestion.ingest_seq
+    group by version.symbol, version.event_date, version.category
+)
+"""
 
 MOOTDX_XDXR_NULLABLE_FLOAT_COLUMNS = (
     "fenhong",
