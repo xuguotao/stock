@@ -158,6 +158,14 @@ def default_task_configs() -> list[DataOpsTaskConfig]:
             max_runtime_seconds=3600,
             stale_after_seconds=900,
         ),
+        DataOpsTaskConfig(
+            task_key="research_adjustment_refresh",
+            enabled=True,
+            schedule_kind="daily_time",
+            schedule_config={"time": "17:25"},
+            max_runtime_seconds=3600,
+            stale_after_seconds=600,
+        ),
         *[
             DataOpsTaskConfig(
                 task_key=definition.task_key,

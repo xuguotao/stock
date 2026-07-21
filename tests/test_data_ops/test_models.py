@@ -26,6 +26,7 @@ def test_default_task_configs_cover_first_runner_tasks() -> None:
         "quality_snapshot",
         "stock_readiness_snapshot",
         "stock_readiness_repair",
+        "research_adjustment_refresh",
         "mootdx_stock_catalog_sync",
         "mootdx_daily_kline_sync",
         "mootdx_daily_kline_reconcile",

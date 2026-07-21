@@ -218,12 +218,25 @@ def _default_symbols(
         "captured_input_ingest_seq": input_ingest_seq,
     }
     xdxr_rows = client.execute(
-        """select distinct symbol from mootdx_xdxr_event_versions as version
+        """select distinct symbol from (
+        select version.symbol as symbol from mootdx_xdxr_event_versions as version
         inner join (select * from mootdx_ingestion_runs final) as ingestion
           on version.ingest_seq = ingestion.ingest_seq
         where ingestion.status = 'succeeded'
           and version.ingest_seq > %(previous_input_ingest_seq)s
-          and version.ingest_seq <= %(captured_input_ingest_seq)s order by symbol""", params
+          and version.ingest_seq <= %(captured_input_ingest_seq)s
+          and version.symbol in (
+              select distinct daily.symbol from mootdx_stock_kline as daily
+              left join (select * from mootdx_ingestion_runs final) as daily_ingestion
+                on daily.ingest_seq = daily_ingestion.ingest_seq
+              where daily.frequency = 'daily'
+                and (
+                    daily.ingest_seq = 0
+                    or (daily_ingestion.status = 'succeeded'
+                        and daily.ingest_seq <= %(captured_input_ingest_seq)s)
+                )
+          )
+        ) order by symbol""", params
     )
     daily_rows = client.execute(
         """

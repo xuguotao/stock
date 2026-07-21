@@ -27,6 +27,7 @@ def build_default_handlers(
     stock_readiness_repair_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     mootdx_sync_runner: Callable[..., dict[str, Any]] | None = None,
     stock_universe_profile_runner: Callable[..., dict[str, Any]] | None = None,
+    research_adjustment_refresh_runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, TaskHandler]:
     if stock_master_runner is None:
         from src.data.clickhouse_stock_master_sync import sync_clickhouse_stock_master
@@ -78,6 +79,11 @@ def build_default_handlers(
         stock_universe_profile_runner = lambda **kwargs: refresh_stock_universe_profiles(
             client=ClickHouseStockDataSource()._client_instance(), **kwargs
         )
+    if research_adjustment_refresh_runner is None:
+        from src.data.research_adjustment_refresh import refresh_research_adjustments
+        research_adjustment_refresh_runner = lambda **_kwargs: refresh_research_adjustments(
+            client=ClickHouseStockDataSource()._client_instance()
+        )
 
     return {
         "stock_master_sync": lambda params: run_stock_master_sync(params, stock_master_runner),
@@ -106,6 +112,7 @@ def build_default_handlers(
             if task_key != "stock_universe_profile_refresh"
         },
         "stock_universe_profile_refresh": lambda params: run_stock_universe_profile_refresh(params, stock_universe_profile_runner),
+        "research_adjustment_refresh": lambda _params: research_adjustment_refresh_runner(),
     }
 
 

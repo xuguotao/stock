@@ -288,6 +288,30 @@ def test_incremental_uses_only_succeeded_sequences_between_published_and_settled
     assert store.calls[-1][1]["input_ingest_seq"] == 21
 
 
+def test_incremental_xdxr_change_without_existing_daily_factor_is_not_a_rebuild_target() -> None:
+    class _Client:
+        def execute(self, sql: str, _params: object | None = None):
+            normalized = " ".join(sql.lower().split())
+            if "mootdx_xdxr_event_versions" in normalized:
+                assert "version.symbol in" in normalized
+                assert "mootdx_stock_kline as daily" in normalized
+                return []  # the database intersection removes no-daily.SZ
+            if "mootdx_stock_kline" in normalized:
+                return []
+            if "research_daily_adjustment_factors" in normalized:
+                return []
+            raise AssertionError(sql)
+
+    symbols = build_research_adjustment_data._default_symbols(
+        _Client(),
+        {"run_id": "published", "formula_version": "v1", "input_ingest_seq": 4},
+        False,
+        5,
+    )
+
+    assert symbols == []
+
+
 def test_daily_bars_selects_as_of_sequence_version_without_physical_duplicates() -> None:
     class _DuplicateBarClient:
         def execute(self, sql: str, params: object | None = None):
