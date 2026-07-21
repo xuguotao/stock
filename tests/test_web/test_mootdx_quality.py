@@ -27,7 +27,7 @@ def test_xdxr_quality_keeps_run_health_separate_from_fact_summary() -> None:
                 }, "")]
             if "from mootdx_xdxr_symbol_runs final" in query:
                 return []
-            if "from mootdx_xdxr final" in query:
+            if "from mootdx_xdxr_current" in query:
                 return [(4997, 170822, datetime(2026, 7, 15, 12, 30, 23), 170814)]
             raise AssertionError(query)
 
@@ -52,7 +52,7 @@ def test_xdxr_quality_returns_a_stable_empty_payload() -> None:
 
     class EmptyClient:
         def execute(self, query, params=None):
-            if "from mootdx_sync_runs" in query or "from mootdx_xdxr final" in query:
+            if "from mootdx_sync_runs" in query or "from mootdx_xdxr_current" in query:
                 return []
             raise AssertionError(query)
 
@@ -77,7 +77,7 @@ def test_xdxr_quality_parameterizes_history_filters() -> None:
             if "from mootdx_sync_runs" in query:
                 self.query, self.params = query, params
                 return []
-            if "from mootdx_xdxr final" in query:
+            if "from mootdx_xdxr_current" in query:
                 return []
             raise AssertionError(query)
 
@@ -141,7 +141,7 @@ def test_xdxr_quality_normalizes_json_diagnostics_and_malformed_failed_samples()
         def execute(self, query, params=None):
             if "from mootdx_sync_runs" in query:
                 return [("run-1", datetime(2026, 7, 15, 12), None, "error", '{"diagnostics":{"xdxr":{"failed_symbols_sample":[{"symbol":"000001.SZ"},"000002.SZ",3,{"symbol":null},{}]}}}', "")]
-            if "from mootdx_xdxr final" in query:
+            if "from mootdx_xdxr_current" in query:
                 return []
             raise AssertionError(query)
 

@@ -414,9 +414,10 @@ def test_ensure_mootdx_tables_creates_daily_xdxr_events_view() -> None:
     ensure_mootdx_tables(client)
 
     view_sql = "\n".join(sql for sql in client.sql if "mootdx_daily_xdxr_events_view" in sql).lower()
-    assert "create view if not exists mootdx_daily_xdxr_events_view" in view_sql
+    assert "create or replace view mootdx_daily_xdxr_events_view" in view_sql
     assert "mootdx_stock_kline final" in view_sql
-    assert "mootdx_xdxr final" in view_sql
+    assert "mootdx_xdxr_current" in view_sql
+    assert "mootdx_xdxr final" not in view_sql
     assert "groupuniqarray(category)" in view_sql
     assert "countif(category = 1)" in view_sql
     assert "k.symbol = e.symbol and k.trade_date = e.event_date" in view_sql

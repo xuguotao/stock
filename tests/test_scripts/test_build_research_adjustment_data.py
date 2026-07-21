@@ -44,7 +44,7 @@ class _MootdxClient:
                 ("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, datetime(2026, 7, 16, 17, 20)),
                 ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, datetime(2026, 7, 16, 17, 20)),
             ]
-        if "argmax(name, version_key)" in normalized and "from mootdx_xdxr" in normalized:
+        if "tupleelement(event_version, 1)" in normalized and "from mootdx_xdxr_event_versions" in normalized:
             return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
         raise AssertionError(sql)
 
@@ -72,7 +72,7 @@ class _IncrementalMootdxClient(_MootdxClient):
             return []
         if "select distinct symbol" in normalized and "ingest_seq >" in normalized:
             # One XDXR change and one daily-bar-only change must both be rebuilt.
-            if "mootdx_xdxr" in normalized:
+            if "mootdx_xdxr_event_versions" in normalized:
                 return [("000001.SZ",)]
             return [("000002.SZ",)]
         if "from mootdx_stock_kline" in normalized:
@@ -81,7 +81,7 @@ class _IncrementalMootdxClient(_MootdxClient):
                 ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, datetime(2026, 7, 16, 17, 20)),
                 ("000002.SZ", date(2026, 7, 15), 20.0, 20.0, 20.0, 20.0, 100, 2000.0, datetime(2026, 7, 16, 17, 20)),
             ]
-        if "argmax(name, version_key)" in normalized and "from mootdx_xdxr" in normalized:
+        if "tupleelement(event_version, 1)" in normalized and "from mootdx_xdxr_event_versions" in normalized:
             return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
         raise AssertionError(sql)
 
@@ -150,7 +150,7 @@ def test_candidate_reads_are_bounded_by_captured_input_ingest_sequence() -> None
                     ("000001.SZ", date(2026, 7, 15), 10.0, 10.0, 10.0, 10.0, 100, 1000.0, captured),
                     ("000001.SZ", date(2026, 7, 16), 9.0, 9.0, 9.0, 9.0, 100, 900.0, captured),
                 ]
-            if "argmax(name, version_key)" in normalized and "from mootdx_xdxr" in normalized:
+            if "tupleelement(event_version, 1)" in normalized and "from mootdx_xdxr_event_versions" in normalized:
                 assert params == {"symbols": ("000001.SZ",), "captured_input_ingest_seq": captured}
                 # The post-capture event is likewise absent from this snapshot.
                 return [("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)]
@@ -214,7 +214,7 @@ def test_incremental_uses_only_succeeded_sequences_between_published_and_settled
             normalized = " ".join(sql.lower().split())
             if "select ingest_seq, status from mootdx_ingestion_runs" in normalized:
                 return [(seq, "succeeded" if seq in {18, 21} else "failed") for seq in range(1, 22)]
-            if "select distinct symbol" in normalized and "mootdx_xdxr" in normalized:
+            if "select distinct symbol" in normalized and "mootdx_xdxr_event_versions" in normalized:
                 return [("000001.SZ",)]
             if "select distinct symbol" in normalized and "mootdx_stock_kline" in normalized:
                 return [("000002.SZ",)]
@@ -223,7 +223,7 @@ def test_incremental_uses_only_succeeded_sequences_between_published_and_settled
                     ("000001.SZ", date(2026, 7, 15), 10., 10., 10., 10., 1, 10., datetime.now()),
                     ("000002.SZ", date(2026, 7, 15), 20., 20., 20., 20., 1, 20., datetime.now()),
                 ]
-            if "from mootdx_xdxr" in normalized:
+            if "from mootdx_xdxr_event_versions" in normalized:
                 return []
             if "research_daily_adjustment_factors" in normalized:
                 return []
@@ -274,7 +274,7 @@ def test_xdxr_events_select_as_of_sequence_version_without_final_after_filter() 
             normalized = " ".join(sql.lower().split())
             old = ("000001.SZ", date(2026, 7, 16), 1, "cash", 1.0, 0.0, 0.0, 0.0, 1.0)
             new = ("000001.SZ", date(2026, 7, 16), 1, "cash", 2.0, 0.0, 0.0, 0.0, 1.0)
-            return [old] if "argmax(name, version_key)" in normalized else [old, new]
+            return [old] if "tupleelement(event_version, 1)" in normalized else [old, new]
 
     events = build_research_adjustment_data._xdxr_events(
         _DuplicateEventClient(), ["000001.SZ"], input_ingest_seq=17

@@ -58,8 +58,8 @@ class MootdxQualityService:
         )
         run_records = [_xdxr_run_record(row) for row in runs]
         fact_rows = self._query(
-            "select uniqExact(symbol), count(), max(ingested_at), countIf(isNull(suogu)) "
-            "from mootdx_xdxr final"
+            "select uniqExact(symbol), count(), max(observed_at), countIf(isNull(suogu)) "
+            "from mootdx_xdxr_current"
         )
         return {
             "latest_run": run_records[0] if run_records else None,

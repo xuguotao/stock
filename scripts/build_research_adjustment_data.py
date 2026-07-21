@@ -207,12 +207,12 @@ def _default_symbols(
         "captured_input_ingest_seq": input_ingest_seq,
     }
     xdxr_rows = client.execute(
-        """select distinct symbol from mootdx_xdxr as x
-        inner join mootdx_ingestion_runs final as ingestion
-          on x.ingest_seq = ingestion.ingest_seq
+        """select distinct symbol from mootdx_xdxr_event_versions as version
+        inner join (select * from mootdx_ingestion_runs final) as ingestion
+          on version.ingest_seq = ingestion.ingest_seq
         where ingestion.status = 'succeeded'
-          and x.ingest_seq > %(previous_input_ingest_seq)s
-          and x.ingest_seq <= %(captured_input_ingest_seq)s order by symbol""", params
+          and version.ingest_seq > %(previous_input_ingest_seq)s
+          and version.ingest_seq <= %(captured_input_ingest_seq)s order by symbol""", params
     )
     daily_rows = client.execute(
         """
@@ -329,19 +329,29 @@ def _xdxr_events(client: Any, symbols: Sequence[str], input_ingest_seq: int) -> 
     rows = client.execute(
         """
         select symbol, event_date, category,
-               argMax(name, version_key) as name, argMax(fenhong, version_key),
-               argMax(peigujia, version_key), argMax(songzhuangu, version_key),
-               argMax(peigu, version_key), argMax(suogu, version_key)
+               tupleElement(event_version, 1) as name,
+               tupleElement(event_version, 2) as fenhong,
+               tupleElement(event_version, 3) as peigujia,
+               tupleElement(event_version, 4) as songzhuangu,
+               tupleElement(event_version, 5) as peigu,
+               tupleElement(event_version, 6) as suogu
         from (
-            select x.*, tuple(x.ingest_seq, x.ingested_at, x.raw_json) as version_key
-            from mootdx_xdxr as x
-            inner join mootdx_ingestion_runs final as ingestion
-              on x.ingest_seq = ingestion.ingest_seq
-            where x.symbol in %(symbols)s
+            select version.symbol as symbol, version.event_date as event_date, version.category as category,
+                   argMax(
+                       tuple(
+                           version.name, version.fenhong, version.peigujia, version.songzhuangu,
+                           version.peigu, version.suogu
+                       ),
+                       version.ingest_seq
+                   ) as event_version
+            from mootdx_xdxr_event_versions as version
+            inner join (select * from mootdx_ingestion_runs final) as ingestion
+              on version.ingest_seq = ingestion.ingest_seq
+            where version.symbol in %(symbols)s
               and ingestion.status = 'succeeded'
-              and x.ingest_seq <= %(captured_input_ingest_seq)s
+              and version.ingest_seq <= %(captured_input_ingest_seq)s
+            group by version.symbol, version.event_date, version.category
         )
-        group by symbol, event_date, category
         order by symbol, event_date, category, name
         """,
         {"symbols": tuple(symbols), "captured_input_ingest_seq": input_ingest_seq},

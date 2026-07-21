@@ -2122,20 +2122,8 @@ from (
 )
 """
 
-MOOTDX_XDXR_NULLABLE_FLOAT_COLUMNS = (
-    "fenhong",
-    "peigujia",
-    "songzhuangu",
-    "peigu",
-    "suogu",
-    "panqianliutong",
-    "panhouliutong",
-    "qianzongguben",
-    "houzongguben",
-)
-
 MOOTDX_DAILY_XDXR_EVENTS_VIEW_SQL = """
-create view if not exists mootdx_daily_xdxr_events_view as
+create or replace view mootdx_daily_xdxr_events_view as
 select
     k.datetime,
     k.trade_date,
@@ -2172,7 +2160,7 @@ left join
             sum(ifNull(fenhong, 0.0)) as fenhong_sum,
             sum(ifNull(songzhuangu, 0.0)) as songzhuangu_sum,
             sum(ifNull(peigu, 0.0)) as peigu_sum
-        from mootdx_xdxr final
+        from mootdx_xdxr_current
         group by symbol, event_date
     ) as e
 on k.symbol = e.symbol and k.trade_date = e.event_date
