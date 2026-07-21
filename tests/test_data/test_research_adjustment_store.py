@@ -188,6 +188,27 @@ def test_candidate_event_rejects_an_unknown_validation_status() -> None:
     assert client.calls == []
 
 
+def test_candidate_events_are_inserted_in_monthly_partition_batches() -> None:
+    client = _Client()
+    store = ResearchAdjustmentStore(client)
+
+    written = store.write_candidate_events(
+        "run-1",
+        "v1",
+        [
+            {"symbol": "000001.SZ", "event_date": date(2024, 1, 2), "status": "approved"},
+            {"symbol": "000001.SZ", "event_date": date(2024, 2, 2), "status": "approved"},
+            {"symbol": "000002.SZ", "event_date": date(2024, 1, 3), "status": "approved"},
+        ],
+    )
+
+    inserts = [(sql, params) for sql, params in client.calls if "insert into research_adjustment_events" in sql.lower()]
+    assert written == 3
+    assert len(inserts) == 2
+    assert {row[3].month for _, rows in inserts for row in rows} == {1, 2}
+    assert all(len({row[3].month for row in rows}) == 1 for _, rows in inserts)
+
+
 @pytest.mark.parametrize("actual_events, actual_factors, expected_events, expected_factors", [(0, 0, 0, 0), (1, 1, 2, 1)])
 def test_empty_or_partial_candidate_cannot_be_published(
     actual_events: int, actual_factors: int, expected_events: int, expected_factors: int

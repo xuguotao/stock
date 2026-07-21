@@ -135,16 +135,17 @@ class ResearchAdjustmentStore:
         values = [self._event_row(run_id, formula_version, row) for row in rows]
         if not values:
             return 0
-        self.client.execute(
-            """
-            insert into research_adjustment_events
-                (run_id, formula_version, symbol, event_date, category, event_name,
-                 validation_status, ratio, theoretical_price, pre_close, ex_close,
-                 validation_error, event_payload, computed_at)
-            values
-            """,
-            values,
-        )
+        for batch in _monthly_batches(values):
+            self.client.execute(
+                """
+                insert into research_adjustment_events
+                    (run_id, formula_version, symbol, event_date, category, event_name,
+                     validation_status, ratio, theoretical_price, pre_close, ex_close,
+                     validation_error, event_payload, computed_at)
+                values
+                """,
+                batch,
+            )
         return len(values)
 
     def write_candidate_factors(
@@ -154,16 +155,17 @@ class ResearchAdjustmentStore:
         values = [self._factor_row(run_id, formula_version, row) for row in rows]
         if not values:
             return 0
-        self.client.execute(
-            """
-            insert into research_daily_adjustment_factors
-                (run_id, formula_version, symbol, trade_date, forward_factor,
-                 backward_factor, eligible_event_count, excluded_event_count,
-                 quality_status, input_snapshot_at, computed_at)
-            values
-            """,
-            values,
-        )
+        for batch in _monthly_batches(values):
+            self.client.execute(
+                """
+                insert into research_daily_adjustment_factors
+                    (run_id, formula_version, symbol, trade_date, forward_factor,
+                     backward_factor, eligible_event_count, excluded_event_count,
+                     quality_status, input_snapshot_at, computed_at)
+                values
+                """,
+                batch,
+            )
         return len(values)
 
     def write_candidate_raw_bars(
@@ -172,12 +174,13 @@ class ResearchAdjustmentStore:
         values = [self._raw_bar_row(run_id, formula_version, row) for row in rows]
         if not values:
             return 0
-        self.client.execute(
-            """insert into research_adjustment_raw_bars
-            (run_id, formula_version, symbol, trade_date, open, high, low, close,
-             volume, amount, source_ingested_at, computed_at) values""",
-            values,
-        )
+        for batch in _monthly_batches(values):
+            self.client.execute(
+                """insert into research_adjustment_raw_bars
+                (run_id, formula_version, symbol, trade_date, open, high, low, close,
+                 volume, amount, source_ingested_at, computed_at) values""",
+                batch,
+            )
         return len(values)
 
     def publish_run(
@@ -345,6 +348,20 @@ def _as_date(value: Any) -> date:
     if isinstance(value, datetime):
         return value.date()
     return value if isinstance(value, date) else date.fromisoformat(str(value))
+
+
+def _monthly_batches(values: Sequence[tuple[Any, ...]]) -> list[list[tuple[Any, ...]]]:
+    """Keep each ClickHouse INSERT inside one monthly table partition.
+
+    All three research candidate tables partition on the date at tuple index 3.
+    Grouping first prevents a historical full build from exceeding ClickHouse's
+    maximum partitions-per-insert safety limit.
+    """
+    batches: dict[tuple[int, int], list[tuple[Any, ...]]] = {}
+    for value in values:
+        partition_date = _as_date(value[3])
+        batches.setdefault((partition_date.year, partition_date.month), []).append(value)
+    return [batches[key] for key in sorted(batches)]
 
 
 def _as_datetime(value: Any) -> datetime:

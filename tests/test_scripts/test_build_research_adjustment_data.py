@@ -118,6 +118,27 @@ def test_build_writes_candidates_before_publishing_complete_result() -> None:
     }
 
 
+def test_initial_build_creates_research_tables_before_reading_current_run() -> None:
+    class _InitialStore(_Store):
+        def current_run(self, _formula_version: str):
+            assert self.calls == [("ensure_tables",)]
+            return None
+
+    build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1",
+        store=_InitialStore(),
+        candidate_builder=lambda **_kwargs: {
+            "events": [],
+            "factors": [{"symbol": "000001.SZ", "trade_date": "2026-07-16"}],
+            "raw_bars": [{
+                "symbol": "000001.SZ", "trade_date": "2026-07-16",
+                "open": 1, "high": 1, "low": 1, "close": 1,
+                "volume": 1, "amount": 1, "source_ingested_at": datetime(2026, 7, 16),
+            }],
+        },
+    )
+
+
 def test_default_build_constructs_candidates_from_mootdx_raw_inputs() -> None:
     store = _Store()
 
@@ -185,6 +206,29 @@ def test_full_build_selects_targets_only_through_captured_input_ingest_sequence(
     assert result == {"run_id": "run-targets", "event_count": 1, "factor_count": 2}
 
 
+def test_initial_full_build_includes_legacy_daily_baseline_rows() -> None:
+    """Pre-sequence daily history is allowed only while establishing v1."""
+    store = _Store()
+
+    class _LegacyDailyClient(_MootdxClient):
+        def __init__(self) -> None:
+            self.daily_queries: list[str] = []
+
+        def execute(self, sql: str, params: object | None = None):
+            if "from mootdx_stock_kline" in sql.lower():
+                self.daily_queries.append(sql)
+            return super().execute(sql, params)
+
+    client = _LegacyDailyClient()
+    result = build_research_adjustment_data.build_research_adjustment_data(
+        formula_version="v1", full=True, store=store, client=client, run_id_factory=lambda: "run-legacy"
+    )
+
+    assert result == {"run_id": "run-legacy", "event_count": 1, "factor_count": 2}
+    assert len(client.daily_queries) == 2
+    assert all("k.ingest_seq = 0" in query.lower() for query in client.daily_queries)
+
+
 def test_default_incremental_no_change_is_a_successful_unpublished_no_op() -> None:
     store = _IncrementalStore()
 
@@ -197,7 +241,7 @@ def test_default_incremental_no_change_is_a_successful_unpublished_no_op() -> No
     )
 
     assert result == {"run_id": None, "event_count": 0, "factor_count": 0, "published": False}
-    assert store.calls == []
+    assert store.calls == [("ensure_tables",)]
 
 
 def test_incremental_uses_only_succeeded_sequences_between_published_and_settled_bound() -> None:
@@ -414,7 +458,7 @@ def test_incremental_build_rejects_a_target_without_daily_factor_coverage() -> N
         assert "factor coverage" in str(exc)
     else:
         raise AssertionError("all selected targets must receive a complete daily factor history")
-    assert store.calls == []
+    assert store.calls == [("ensure_tables",)]
 
 
 def test_main_reports_expected_operational_value_error_without_traceback(monkeypatch, capsys) -> None:

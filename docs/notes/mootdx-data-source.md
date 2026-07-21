@@ -192,6 +192,12 @@ refresh_stock_universe_profiles(
 
 日线请求成功但未返回目标日有效数据时，任务会按需调用 Baostock 复查相同标的和日期范围，不会启动独立 Baostock 定时任务。复查有数据则以 `source='baostock'` 写回 `mootdx_stock_kline`；无数据和查询错误分别写入 `mootdx_daily_gap_verifications`，供日线质量页判定。
 
+### 研究复权的历史日线基线
+
+`mootdx_stock_kline.ingest_seq=0` 表示全局入库序号启用前已经存在的历史日线。它不属于后续增量消费范围：增量研究复权只读取关联 `mootdx_ingestion_runs` 且状态为 `succeeded` 的非零序号。
+
+首次研究复权发布必须显式执行 `scripts/build_research_adjustment_data.py --full`。该唯一路径会把零序号历史日线作为一次性基线读入，并将完整 OHLCV 副本写入 `research_adjustment_raw_bars`；随后发布的 `research_adjustment_runs` 和后续增量均由 `input_ingest_seq` 固定边界。原始日线不会因研究复权基线而被改写。
+
 人工执行日线缺口核对：
 
 ```bash

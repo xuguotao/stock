@@ -51,6 +51,10 @@ def build_research_adjustment_data(
     An injected builder remains available for deterministic formula tests.
     """
     active_store = store or ResearchAdjustmentStore(client=client)
+    # First publication has no tables or current-run row yet.  Establish the
+    # storage schema before reading that pointer so an empty deployment can
+    # safely create its initial complete snapshot.
+    active_store.ensure_tables()
     builder = candidate_builder or _build_candidates_from_mootdx
     input_client = client if client is not None else getattr(active_store, "client", None)
     if candidate_builder is None and input_client is None:
@@ -76,7 +80,6 @@ def build_research_adjustment_data(
     if not factors:
         return {"run_id": None, "event_count": 0, "factor_count": 0, "published": False}
     run_id = (run_id_factory or (lambda: str(uuid.uuid4())))()
-    active_store.ensure_tables()
     written_events = active_store.write_candidate_events(run_id, formula_version, events)
     written_factors = active_store.write_candidate_factors(run_id, formula_version, factors)
     written_raw_bars = active_store.write_candidate_raw_bars(run_id, formula_version, raw_bars)
@@ -139,7 +142,12 @@ def _build_candidates_from_mootdx(
         return {"events": [], "factors": []}
     # Event audit rows describe only this run's recomputed symbols.  Factor rows
     # are a complete snapshot because unchanged symbols are copied below.
-    daily_bars = _daily_bars(client, target_symbols, input_ingest_seq)
+    daily_bars = _daily_bars(
+        client,
+        target_symbols,
+        input_ingest_seq,
+        include_legacy_baseline=current is None,
+    )
     built = _validate_and_factor(daily_bars, _xdxr_events(client, target_symbols, input_ingest_seq))
     _assert_target_factor_coverage(target_symbols, daily_bars, built["factors"])
     if current is None or full:
@@ -192,10 +200,13 @@ def _default_symbols(
             return []
         rows = client.execute(
             """select distinct symbol from mootdx_stock_kline as k
-            inner join mootdx_ingestion_runs final as ingestion
+            left join (select * from mootdx_ingestion_runs final) as ingestion
               on k.ingest_seq = ingestion.ingest_seq
-            where frequency = 'daily' and ingestion.status = 'succeeded'
-              and k.ingest_seq <= %(captured_input_ingest_seq)s
+            where frequency = 'daily'
+              and (
+                  k.ingest_seq = 0
+                  or (ingestion.status = 'succeeded' and k.ingest_seq <= %(captured_input_ingest_seq)s)
+              )
             order by symbol""",
             {"captured_input_ingest_seq": input_ingest_seq},
         )
@@ -289,10 +300,15 @@ class _DailyBars(dict[str, list[tuple[date, float]]]):
 
 
 def _daily_bars(
-    client: Any, symbols: Sequence[str], input_ingest_seq: int
+    client: Any,
+    symbols: Sequence[str],
+    input_ingest_seq: int,
+    *,
+    include_legacy_baseline: bool = False,
 ) -> dict[str, list[tuple[date, float]]]:
+    legacy_filter = "or k.ingest_seq = 0" if include_legacy_baseline else ""
     rows = client.execute(
-        """
+        f"""
         select symbol, trade_date,
                argMax(open, version_key), argMax(high, version_key),
                argMax(low, version_key), argMax(close, version_key),
@@ -301,11 +317,14 @@ def _daily_bars(
         from (
             select k.*, tuple(k.ingest_seq, k.ingested_at, k.raw_json) as version_key
             from mootdx_stock_kline as k
-            inner join mootdx_ingestion_runs final as ingestion
+            left join (select * from mootdx_ingestion_runs final) as ingestion
               on k.ingest_seq = ingestion.ingest_seq
             where k.frequency = 'daily' and k.symbol in %(symbols)s
-              and ingestion.status = 'succeeded'
-              and k.ingest_seq <= %(captured_input_ingest_seq)s
+              and (
+                  (ingestion.status = 'succeeded'
+                   and k.ingest_seq <= %(captured_input_ingest_seq)s)
+                  {legacy_filter}
+              )
         )
         group by frequency, symbol, datetime, trade_date
         order by symbol, trade_date
