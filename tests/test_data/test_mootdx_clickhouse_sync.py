@@ -47,6 +47,22 @@ class IngestionSequenceClickHouse(FakeClickHouse):
         return []
 
 
+class XdxrVersionClickHouse(IngestionSequenceClickHouse):
+    """Test double which exposes previously written XDXR version hashes."""
+
+    def execute(self, sql: str, params=None):
+        result = super().execute(sql, params)
+        if "from mootdx_xdxr_event_versions" not in sql.lower():
+            return result
+        latest_by_key = {}
+        for statement, values in self.inserts:
+            if "insert into mootdx_xdxr_event_versions" not in statement.lower():
+                continue
+            for row in values:
+                latest_by_key[(row[1], row[2], row[3])] = row[14]
+        return [(*key, content_hash) for key, content_hash in latest_by_key.items()]
+
+
 class FakeSource:
     def fetch_stock_list(self):
         from src.data.models import StockInfo
@@ -1621,9 +1637,120 @@ def test_xdxr_sync_writes_event_and_symbol_audit_rows() -> None:
         ensure_tables=False,
     )
 
-    assert result["inserted"] == {"mootdx_xdxr": 1, "mootdx_xdxr_symbol_runs": 1}
+    assert result["inserted"] == {
+        "mootdx_xdxr": 1,
+        "mootdx_xdxr_event_versions": 1,
+        "mootdx_xdxr_symbol_observations": 1,
+        "mootdx_xdxr_symbol_runs": 1,
+    }
     assert any(
         "insert into mootdx_xdxr (symbol, event_date" in sql.lower()
         for sql, _ in client.inserts
     )
     assert any("insert into mootdx_xdxr_symbol_runs" in sql.lower() for sql, _ in client.inserts)
+    assert any("insert into mootdx_xdxr_event_versions" in sql.lower() for sql, _ in client.inserts)
+    assert any("insert into mootdx_xdxr_symbol_observations" in sql.lower() for sql, _ in client.inserts)
+
+
+def test_repeated_identical_xdxr_fetch_writes_observation_not_new_version() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    client = XdxrVersionClickHouse()
+    source = FakeSource()
+
+    first = sync_mootdx_offline_data(
+        client=client,
+        source=source,
+        symbols=["000001.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+    repeated = sync_mootdx_offline_data(
+        client=client,
+        source=source,
+        symbols=["000001.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+
+    assert first["inserted"]["mootdx_xdxr_event_versions"] == 1
+    assert repeated["inserted"]["mootdx_xdxr_event_versions"] == 0
+    assert repeated["inserted"]["mootdx_xdxr_symbol_observations"] == 1
+
+
+def test_missing_prior_event_records_observation_without_withdrawing_current_event() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    class DisappearingEventSource(FakeSource):
+        def __init__(self) -> None:
+            self.include_event = True
+
+        def fetch_xdxr(self, symbol):
+            if self.include_event:
+                return super().fetch_xdxr(symbol)
+            return pd.DataFrame()
+
+    client = XdxrVersionClickHouse()
+    source = DisappearingEventSource()
+    sync_mootdx_offline_data(
+        client=client,
+        source=source,
+        symbols=["000001.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+    source.include_event = False
+    result = sync_mootdx_offline_data(
+        client=client,
+        source=source,
+        symbols=["000001.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+
+    assert result["inserted"]["mootdx_xdxr_event_versions"] == 0
+    observation = next(
+        row
+        for sql, rows in reversed(client.inserts)
+        if "insert into mootdx_xdxr_symbol_observations" in sql.lower()
+        for row in rows
+    )
+    assert observation[3] == "succeeded"
+
+
+def test_changed_xdxr_event_writes_a_new_event_version() -> None:
+    from src.data.mootdx_clickhouse_sync import sync_mootdx_offline_data
+
+    class ChangingEventSource(FakeSource):
+        def __init__(self) -> None:
+            self.fenhong = 1.0
+
+        def fetch_xdxr(self, symbol):
+            return pd.DataFrame([{
+                "year": 2026,
+                "month": 7,
+                "day": 9,
+                "category": 1,
+                "name": "分红",
+                "fenhong": self.fenhong,
+            }])
+
+    client = XdxrVersionClickHouse()
+    source = ChangingEventSource()
+    sync_mootdx_offline_data(
+        client=client,
+        source=source,
+        symbols=["000001.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+    source.fenhong = 1.2
+    result = sync_mootdx_offline_data(
+        client=client,
+        source=source,
+        symbols=["000001.SZ"],
+        tasks=["xdxr"],
+        ensure_tables=False,
+    )
+
+    assert result["inserted"]["mootdx_xdxr_event_versions"] == 1

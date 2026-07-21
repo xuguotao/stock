@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import fcntl
+import json
+from hashlib import sha256
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
@@ -124,6 +125,7 @@ def sync_mootdx_offline_data(
                 trade_date=selected_trade_date,
                 frequencies=selected_frequencies,
                 client=clickhouse,
+                ingest_seq=ingest_seq,
                 diagnostics=diagnostics,
                 progress=progress,
                 recheck_no_data=recheck_no_data,
@@ -192,7 +194,7 @@ def sync_mootdx_offline_data(
         started_at=run_started_at,
         finished_at=_now(),
         status="failed" if failed else "succeeded",
-        row_count=sum(inserted.get(table, 0) for table in ("mootdx_stock_kline", "mootdx_xdxr")),
+        row_count=sum(inserted.get(table, 0) for table in ("mootdx_stock_kline", "mootdx_xdxr_event_versions")),
         error=json.dumps(failed, ensure_ascii=False) if failed else "",
         version=2,
     )
@@ -211,6 +213,7 @@ def _run_task(
     trade_date: date,
     frequencies: list[str],
     client: Any = None,
+    ingest_seq: int = 0,
     diagnostics: dict[str, Any] | None = None,
     progress: ProgressCallback | None = None,
     recheck_no_data: bool = False,
@@ -250,9 +253,21 @@ def _run_task(
         return {"mootdx_index_kline": _index_kline_rows(source, frequencies)}
     if task == "xdxr":
         rows, audit_rows, xdxr_diagnostics = _xdxr_rows(source, symbols, run_id=run_id)
+        version_rows, observation_rows = _xdxr_version_rows(
+            client,
+            rows,
+            audit_rows,
+            ingest_seq=ingest_seq,
+        )
         if diagnostics is not None:
             diagnostics["xdxr"] = xdxr_diagnostics
-        return {"mootdx_xdxr": rows, "mootdx_xdxr_symbol_runs": audit_rows}
+        return {
+            # Kept only until Task 3 replaces this table with the compatible current view.
+            "mootdx_xdxr": rows,
+            "mootdx_xdxr_event_versions": version_rows,
+            "mootdx_xdxr_symbol_observations": observation_rows,
+            "mootdx_xdxr_symbol_runs": audit_rows,
+        }
     if task == "finance_snapshot":
         return {"mootdx_finance_snapshot": _finance_rows(source, symbols)}
     if task == "minutes_probe":
@@ -1148,6 +1163,89 @@ def _xdxr_rows(source: Any, symbols: list[str], *, run_id: str = "") -> tuple[li
     return rows, audit_rows, diagnostics
 
 
+def _xdxr_version_rows(
+    client: Any | None,
+    event_rows: list[tuple],
+    audit_rows: list[tuple],
+    *,
+    ingest_seq: int,
+) -> tuple[list[tuple], list[tuple]]:
+    """Return changed event versions and one immutable observation per attempted symbol."""
+    hashes_by_key = {_xdxr_event_key(row): _xdxr_content_hash(row) for row in event_rows}
+    latest_hashes = _latest_xdxr_content_hashes(
+        client,
+        sorted({str(row[1]) for row in audit_rows}),
+    )
+    observed_at = _now()
+    versions = []
+    for row in event_rows:
+        event_key = _xdxr_event_key(row)
+        content_hash = hashes_by_key[event_key]
+        if latest_hashes.get(event_key) == content_hash:
+            continue
+        versions.append((
+            ingest_seq,
+            *row[:13],
+            content_hash,
+            row[14],
+            observed_at,
+            0,
+        ))
+    hashes_by_symbol: dict[str, list[str]] = {}
+    for (symbol, _, _), content_hash in hashes_by_key.items():
+        hashes_by_symbol.setdefault(symbol, []).append(content_hash)
+    observations = []
+    for _, symbol, _, status, event_count, request_ms, parse_ms, error, _ in audit_rows:
+        succeeded = status in {"success", "empty"}
+        event_set_hash = _event_set_hash(hashes_by_symbol.get(symbol, [])) if succeeded else ""
+        observations.append((
+            ingest_seq,
+            symbol,
+            observed_at,
+            "succeeded" if succeeded else "failed",
+            event_count,
+            event_set_hash,
+            request_ms,
+            parse_ms,
+            error,
+        ))
+    return versions, observations
+
+
+def _latest_xdxr_content_hashes(client: Any | None, symbols: list[str]) -> dict[tuple[str, date, int], str]:
+    if client is None or not symbols:
+        return {}
+    escaped_symbols = ", ".join(f"'{symbol.replace("'", "''")}'" for symbol in symbols)
+    rows = client.execute(
+        "select version.symbol, version.event_date, version.category, "
+        "argMax(version.content_hash, version.ingest_seq) "
+        "from mootdx_xdxr_event_versions as version "
+        "inner join (select ingest_seq from mootdx_ingestion_runs final where status = 'succeeded') as run "
+        "on version.ingest_seq = run.ingest_seq "
+        f"where version.symbol in ({escaped_symbols}) "
+        "group by version.symbol, version.event_date, version.category"
+    )
+    return {
+        (str(row[0]), row[1], int(row[2])): str(row[3])
+        for row in rows
+    }
+
+
+def _xdxr_content_hash(row: tuple) -> str:
+    business_values = [value.isoformat() if isinstance(value, date) else value for value in row[:13]]
+    payload = json.dumps(business_values, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _xdxr_event_key(row: tuple) -> tuple[str, date, int]:
+    return str(row[0]), row[1], int(row[2])
+
+
+def _event_set_hash(content_hashes: list[str]) -> str:
+    payload = json.dumps(sorted(content_hashes), separators=(",", ":"))
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _finance_rows(source: Any, symbols: list[str]) -> list[tuple]:
     captured_at = _now()
     rows = []
@@ -1291,6 +1389,26 @@ def _insert_rows(client: Any, table: str, rows: list[tuple]) -> None:
                 "panqianliutong, panhouliutong, qianzongguben, houzongguben, ingested_at, raw_json, ingest_seq) values",
                 batch,
             )
+        return
+    if table == "mootdx_xdxr_event_versions":
+        batches: dict[tuple[int, int], list[tuple]] = {}
+        for row in rows:
+            event_date = row[2]
+            batches.setdefault((event_date.year, event_date.month), []).append(row)
+        for batch in batches.values():
+            client.execute(
+                "insert into mootdx_xdxr_event_versions "
+                "(ingest_seq, symbol, event_date, category, name, fenhong, peigujia, songzhuangu, peigu, suogu, "
+                "panqianliutong, panhouliutong, qianzongguben, houzongguben, content_hash, raw_json, observed_at, migration_baseline) values",
+                batch,
+            )
+        return
+    if table == "mootdx_xdxr_symbol_observations":
+        client.execute(
+            "insert into mootdx_xdxr_symbol_observations "
+            "(ingest_seq, symbol, observed_at, status, event_count, event_set_hash, request_ms, parse_ms, error) values",
+            rows,
+        )
         return
     if table == "mootdx_xdxr_symbol_runs":
         client.execute(
