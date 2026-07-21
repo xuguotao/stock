@@ -146,7 +146,7 @@ def _build_candidates_from_mootdx(
         client,
         target_symbols,
         input_ingest_seq,
-        include_legacy_baseline=current is None,
+        include_legacy_baseline=True,
     )
     built = _validate_and_factor(daily_bars, _xdxr_events(client, target_symbols, input_ingest_seq))
     _assert_target_factor_coverage(target_symbols, daily_bars, built["factors"])
@@ -304,7 +304,7 @@ def _daily_bars(
     symbols: Sequence[str],
     input_ingest_seq: int,
     *,
-    include_legacy_baseline: bool = False,
+    include_legacy_baseline: bool = True,
 ) -> dict[str, list[tuple[date, float]]]:
     legacy_filter = "or k.ingest_seq = 0" if include_legacy_baseline else ""
     rows = client.execute(

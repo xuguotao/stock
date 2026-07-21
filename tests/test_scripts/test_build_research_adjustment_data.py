@@ -382,6 +382,21 @@ def test_incremental_build_uses_persisted_input_sequence_and_captured_upper_boun
     assert store.calls[-1][1]["base_run_id"] == "prior-run"
 
 
+def test_incremental_rebuild_keeps_legacy_daily_history_for_changed_symbol() -> None:
+    class _LegacyHistoryClient:
+        def execute(self, sql: str, params: object | None = None):
+            assert "k.ingest_seq = 0" in sql.lower()
+            assert params == {"symbols": ("000001.SZ",), "captured_input_ingest_seq": 4}
+            return [
+                ("000001.SZ", date(2023, 7, 24), 10., 10., 10., 10., 1, 10., datetime(2023, 7, 24)),
+                ("000001.SZ", date(2026, 7, 21), 11., 11., 11., 11., 1, 11., datetime(2026, 7, 21)),
+            ]
+
+    bars = build_research_adjustment_data._daily_bars(_LegacyHistoryClient(), ["000001.SZ"], 4)
+
+    assert [item[0] for item in bars["000001.SZ"]] == [date(2023, 7, 24), date(2026, 7, 21)]
+
+
 def test_incremental_symbol_selection_uses_strict_sequence_boundaries() -> None:
     store = _IncrementalStore()
 
