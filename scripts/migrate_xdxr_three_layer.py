@@ -89,13 +89,7 @@ def _baseline_event_count(client: Any, baseline_run_id: str | None) -> int:
         return 0
     return _count(
         client,
-        """
-        select count()
-        from mootdx_xdxr_event_versions as version
-        inner join mootdx_ingestion_runs final as ingestion
-          on version.ingest_seq = ingestion.ingest_seq
-        where ingestion.status = 'succeeded' and ingestion.run_id = %(baseline_run_id)s
-        """,
+        _BASELINE_EVENT_COUNT_SQL,
         {"baseline_run_id": baseline_run_id},
     )
 
@@ -114,23 +108,31 @@ from (
 )
 """
 
+_BASELINE_EVENT_COUNT_SQL = """
+select count()
+from mootdx_xdxr_event_versions as version
+inner join (select * from mootdx_ingestion_runs final) as ingestion
+  on version.ingest_seq = ingestion.ingest_seq
+where ingestion.status = 'succeeded' and ingestion.run_id = %(baseline_run_id)s
+"""
+
 _CONTENT_DIFFERENCE_SQL = """
 select count()
 from (
     select legacy.symbol
-    from mootdx_xdxr final as legacy
-    inner join mootdx_xdxr_current as current
-      on legacy.symbol = current.symbol
-     and legacy.event_date = current.event_date
-     and legacy.category = current.category
+    from (select * from mootdx_xdxr final) as legacy
+    inner join mootdx_xdxr_current as projection
+      on legacy.symbol = projection.symbol
+     and legacy.event_date = projection.event_date
+     and legacy.category = projection.category
     where toJSONString(tuple(
         legacy.name, legacy.fenhong, legacy.peigujia, legacy.songzhuangu,
         legacy.peigu, legacy.suogu, legacy.panqianliutong, legacy.panhouliutong,
         legacy.qianzongguben, legacy.houzongguben
     )) != toJSONString(tuple(
-        current.name, current.fenhong, current.peigujia, current.songzhuangu,
-        current.peigu, current.suogu, current.panqianliutong, current.panhouliutong,
-        current.qianzongguben, current.houzongguben
+        projection.name, projection.fenhong, projection.peigujia, projection.songzhuangu,
+        projection.peigu, projection.suogu, projection.panqianliutong, projection.panhouliutong,
+        projection.qianzongguben, projection.houzongguben
     ))
 )
 """

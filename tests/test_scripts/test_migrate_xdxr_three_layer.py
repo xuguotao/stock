@@ -80,3 +80,12 @@ def test_migration_execute_refuses_any_projection_difference() -> None:
         )
 
     assert not any("rename table" in sql.lower() for sql, _ in client.commands)
+
+
+def test_content_difference_query_avoids_clickhouse_current_keyword_as_alias() -> None:
+    assert "mootdx_xdxr_current as projection" in migrate_xdxr_three_layer._CONTENT_DIFFERENCE_SQL
+    assert "from (select * from mootdx_xdxr final) as legacy" in migrate_xdxr_three_layer._CONTENT_DIFFERENCE_SQL
+
+
+def test_baseline_query_aliases_final_audit_through_subquery() -> None:
+    assert "inner join (select * from mootdx_ingestion_runs final) as ingestion" in migrate_xdxr_three_layer._BASELINE_EVENT_COUNT_SQL
