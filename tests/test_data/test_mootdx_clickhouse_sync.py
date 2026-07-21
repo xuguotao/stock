@@ -210,6 +210,22 @@ def test_ensure_mootdx_tables_migrates_raw_tables_and_creates_ingestion_audit() 
     assert "alter table mootdx_xdxr add column if not exists ingest_seq uint64 default 0" in joined
 
 
+def test_ensure_mootdx_tables_does_not_remove_missing_ingestion_run_ttl() -> None:
+    from src.data.mootdx_clickhouse_sync import ensure_mootdx_tables
+
+    class NoTtlClient(FakeClickHouse):
+        def execute(self, sql: str, params=None):
+            super().execute(sql, params)
+            if "select create_table_query from system.tables" in sql.lower():
+                return [("CREATE TABLE mootdx_ingestion_runs ENGINE = ReplacingMergeTree(version)",)]
+            return []
+
+    client = NoTtlClient()
+    ensure_mootdx_tables(client)
+
+    assert not any("alter table mootdx_ingestion_runs remove ttl" in sql.lower() for sql in client.sql)
+
+
 def test_ensure_mootdx_tables_creates_append_only_xdxr_versions_and_current_view() -> None:
     from src.data.mootdx_clickhouse_sync import ensure_mootdx_tables
 

@@ -1316,7 +1316,16 @@ def _ensure_mootdx_ingest_sequence_columns(client: Any) -> None:
 def _ensure_mootdx_ingestion_runs_retention(client: Any) -> None:
     # The settled boundary is defined from sequence 1, so this compact audit
     # history must not age out while the raw tables remain consumable.
-    client.execute("alter table mootdx_ingestion_runs remove ttl")
+    rows = client.execute(
+        """
+        select create_table_query
+        from system.tables
+        where database = currentDatabase() and name = 'mootdx_ingestion_runs'
+        """
+    )
+    create_table_query = str(rows[0][0]) if rows else ""
+    if " TTL " in create_table_query.upper():
+        client.execute("alter table mootdx_ingestion_runs remove ttl")
 
 
 def _with_ingest_seq(rows: list[tuple], ingest_seq: int) -> list[tuple]:
