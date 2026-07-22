@@ -9,6 +9,8 @@
 ## 当前文档
 
 - `ARCHITECTURE.md`：当前系统架构和模块边界。
+- `codex-usage-playbook.md`：Codex 对话、分支、worktree、交付与运行状态协作规范。
+- `database-data-dictionary-2026-07-22.md`：当前 ClickHouse 数据库对象、用途与字段中文说明。
 - `superpowers/reviews/2026-07-01-stock-vs-daily-count-gap-analysis.md`：股票总数(5207)与日线覆盖数(4960)差异的根因排查(ST 口径 + 06-17 起 ST 日线断流)。
 - `fund_tail_prediction_todo.md`：基金尾盘预测的当前优化待办。
 - `notes/`：不绑定单次实施计划的长期领域笔记。
