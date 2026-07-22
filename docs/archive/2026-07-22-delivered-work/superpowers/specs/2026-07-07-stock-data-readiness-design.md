@@ -54,31 +54,31 @@ CREATE TABLE IF NOT EXISTS stock_data_readiness (
     name String,
     market LowCardinality(String),
     board LowCardinality(String),
-    
+
     -- 日线
     daily_contiguous_days UInt16,
     daily_latest_date Nullable(Date),
     daily_status LowCardinality(String),  -- ready / gap_repairable / gap_unrepairable / no_data
     daily_repair_attempts UInt8,           -- 回补尝试次数
-    
+
     -- 5分钟线
     minute5_contiguous_days UInt16,
     minute5_latest_date Nullable(Date),
     minute5_status LowCardinality(String),
     minute5_repair_attempts UInt8,
-    
+
     -- 行情快照
     snapshot_contiguous_days UInt16,
     snapshot_latest_date Nullable(Date),
     snapshot_status LowCardinality(String),
     snapshot_repair_attempts UInt8,
-    
+
     -- 除权除息
     xdxr_contiguous_days UInt16,
     xdxr_latest_date Nullable(Date),
     xdxr_status LowCardinality(String),
     xdxr_repair_attempts UInt8,
-    
+
     computed_at DateTime
 )
 ENGINE = ReplacingMergeTree(computed_at)
