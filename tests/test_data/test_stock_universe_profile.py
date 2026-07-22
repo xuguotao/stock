@@ -50,20 +50,15 @@ def test_refresh_profiles_writes_complete_snapshot_and_audit() -> None:
 
         def execute(self, query, params=None):
             normalized = " ".join(query.lower().split())
-            if normalized.startswith("create table if not exists"):
+            if normalized.startswith("create table if not exists") or normalized.startswith("create view if not exists"):
                 self.ddl.append(query)
                 return []
-            if normalized.startswith("alter table mootdx_xdxr modify column") or normalized.startswith(
-                "alter table mootdx_stock_catalog add column if not exists"
-            ):
+            if normalized.startswith("alter table"):
                 self.ddl.append(query)
                 return []
+            if "from system.tables" in normalized and "mootdx_ingestion_runs" in normalized:
+                return [("CREATE TABLE mootdx_ingestion_runs ENGINE = ReplacingMergeTree(version)",)]
             if "from system.columns" in normalized and "mootdx_xdxr_symbol_runs" in normalized:
-                return []
-            if normalized.startswith("alter table mootdx_xdxr_symbol_runs add column if not exists") or normalized.startswith(
-                "alter table mootdx_xdxr_symbol_runs modify ttl"
-            ):
-                self.ddl.append(query)
                 return []
             if "from trade_calendar" in normalized:
                 return [(date(2026, 7, 10),)]

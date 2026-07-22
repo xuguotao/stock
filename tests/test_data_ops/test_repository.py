@@ -67,13 +67,14 @@ def test_repository_ensures_tables_and_seeds_defaults() -> None:
         "quote_snapshot_capture",
         "quote_rollup_refresh",
         "quality_snapshot",
-            "stock_readiness_snapshot",
-            "stock_readiness_repair",
-            "mootdx_stock_catalog_sync",
-            "mootdx_daily_kline_sync",
-            "mootdx_daily_kline_reconcile",
-            "mootdx_xdxr_sync",
-            "stock_universe_profile_refresh",
+        "stock_readiness_snapshot",
+        "stock_readiness_repair",
+        "research_adjustment_refresh",
+        "mootdx_stock_catalog_sync",
+        "mootdx_daily_kline_sync",
+        "mootdx_daily_kline_reconcile",
+        "mootdx_xdxr_sync",
+        "stock_universe_profile_refresh",
         }
 
 
