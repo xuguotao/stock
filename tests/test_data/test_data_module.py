@@ -344,9 +344,9 @@ class TestDataAggregator:
         reset_settings()
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("STOCK_CLICKHOUSE_HOST", "<PRIVATE_CLICKHOUSE_HOST>")
+        monkeypatch.setenv("STOCK_CLICKHOUSE_HOST", "clickhouse.test")
         monkeypatch.setenv("STOCK_CLICKHOUSE_USER", "default")
-        monkeypatch.setenv("STOCK_CLICKHOUSE_PASSWORD", "[REDACTED]")
+        monkeypatch.setenv("STOCK_CLICKHOUSE_PASSWORD", "test-password")
         monkeypatch.setenv("STOCK_CLICKHOUSE_DATABASE", "stock")
 
         agg = DataAggregator()
@@ -586,4 +586,3 @@ def test_akshare_source_fetches_intraday_bars(monkeypatch) -> None:
     assert result.iloc[0]["symbol"] == "000001.SZ"
     assert result.iloc[0]["time"] == pd.Timestamp("2026-06-12 14:30").time()
     assert result.iloc[0]["close"] == 10.2
-

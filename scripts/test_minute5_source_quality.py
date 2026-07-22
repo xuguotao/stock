@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import time
 import json
+import os
 import http.client
 import ssl
 from datetime import datetime, date
@@ -36,10 +37,10 @@ TEST_SYMBOLS = [
     'sh601012', 'sz002049', 'sh603501', 'sz300661', 'sh688036',
 ]
 
-CLICKHOUSE_HOST = '<PRIVATE_CLICKHOUSE_HOST>'
-CLICKHOUSE_USER = 'default'
-CLICKHOUSE_PASSWORD = '[REDACTED]'
-CLICKHOUSE_DATABASE = 'stock'
+CLICKHOUSE_HOST = os.getenv("STOCK_CLICKHOUSE_HOST", "127.0.0.1")
+CLICKHOUSE_USER = os.getenv("STOCK_CLICKHOUSE_USER", "default")
+CLICKHOUSE_PASSWORD = os.getenv("STOCK_CLICKHOUSE_PASSWORD", "")
+CLICKHOUSE_DATABASE = os.getenv("STOCK_CLICKHOUSE_DATABASE", "stock")
 
 # ── Sina API ─────────────────────────────────────────────────────────────────
 

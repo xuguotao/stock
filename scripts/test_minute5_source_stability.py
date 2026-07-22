@@ -9,6 +9,7 @@ import sys
 import time
 import uuid
 import json
+import os
 import http.client
 import ssl
 from datetime import datetime
@@ -39,10 +40,10 @@ TEST_SYMBOLS = [
     'sh600887', 'sz300124', 'sh688396', 'sz002352', 'sh601225',
 ]
 
-CLICKHOUSE_HOST = '<PRIVATE_CLICKHOUSE_HOST>'
-CLICKHOUSE_USER = 'default'
-CLICKHOUSE_PASSWORD = '[REDACTED]'
-CLICKHOUSE_DATABASE = 'stock'
+CLICKHOUSE_HOST = os.getenv("STOCK_CLICKHOUSE_HOST", "127.0.0.1")
+CLICKHOUSE_USER = os.getenv("STOCK_CLICKHOUSE_USER", "default")
+CLICKHOUSE_PASSWORD = os.getenv("STOCK_CLICKHOUSE_PASSWORD", "")
+CLICKHOUSE_DATABASE = os.getenv("STOCK_CLICKHOUSE_DATABASE", "stock")
 
 # ── Sina API ─────────────────────────────────────────────────────────────────
 
